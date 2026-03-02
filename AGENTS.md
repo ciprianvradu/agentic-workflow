@@ -1,8 +1,42 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+Agentic Workflow — persistent AI development workflows with quality gates when you need them.
 
+This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 For project context and architecture, see [docs/ai-context/](./docs/ai-context/).
+
+## Project Overview
+
+A multi-agent orchestration framework for AI-augmented software development. Supports Claude Code, GitHub Copilot, Gemini CLI, and OpenCode from a single source of agent definitions.
+
+**Key components:**
+- `agents/` — Agent prompt sources (14 agents, compiled to 4 platforms via `scripts/build-agents.py`)
+- `mcp/agentic-workflow-server/` — MCP server (state, config, orchestration tools)
+- `config/workflow-config.yaml` — Default configuration (4-level cascade: global → project → task → CLI)
+- `.tasks/` — Per-task state persistence (survives session crashes and context compaction)
+
+## Workflow Modes
+
+| Mode | Agents | When to use | Default models |
+|------|--------|-------------|----------------|
+| **standard** | developer → implementer → writer | Routine features, fixes, refactors | Sonnet |
+| **reviewed** | architect → developer → reviewer → implementer → writer | Non-trivial changes needing review | Opus (planning) + Sonnet (execution) |
+| **thorough** | architect → developer → reviewer → skeptic → implementer → feedback → writer | Security, migrations, breaking changes | Opus (planning) + Sonnet (execution) |
+
+Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+
+## Development Setup
+
+```bash
+# Install MCP server dependencies
+cd mcp/agentic-workflow-server && pip install -e .
+
+# Build agents for Claude Code
+python3 scripts/build-agents.py claude --output ~/.claude
+
+# Run tests
+cd mcp/agentic-workflow-server && python3 -m pytest tests/ -v
+```
 
 ## Quick Reference
 

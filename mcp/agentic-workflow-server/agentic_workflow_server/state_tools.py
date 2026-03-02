@@ -15,7 +15,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from filelock import FileLock
+from filelock import FileLock, Timeout
 
 
 # Resolve script paths at import time (immune to Path mocking in tests)
@@ -39,6 +39,9 @@ REQUIRED_PHASES = [
     "implementer",
     "technical_writer"
 ]
+
+# Maximum error patterns to keep in .error_patterns.jsonl (oldest-first eviction)
+MAX_ERROR_PATTERNS = 500
 
 DISCOVERY_CATEGORIES = [
     "decision",
@@ -114,8 +117,19 @@ def get_tasks_dir() -> Path:
     return _cached_tasks_dir
 
 
+def _is_safe_task_id(task_id: str) -> bool:
+    """Reject task IDs that could escape the .tasks/ directory."""
+    if not task_id or ".." in task_id or "/" in task_id or "\\" in task_id:
+        return False
+    if task_id.startswith(".") or "\x00" in task_id:
+        return False
+    return True
+
+
 def find_task_dir(task_id: Optional[str] = None) -> Optional[Path]:
     if task_id:
+        if not _is_safe_task_id(task_id):
+            return None
         task_dir = get_tasks_dir() / task_id
         if task_dir.exists():
             return task_dir
@@ -346,6 +360,116 @@ def _save_state(task_dir: Path, state: dict) -> None:
         _log_state_changes(task_dir, old_state, state)
 
 
+# --- Concurrent workflow guard (AW-bfd) ---
+
+# Default timeout for workflow guard lock (seconds).
+# Set to 0 for non-blocking "fail immediately" behaviour.
+WORKFLOW_GUARD_TIMEOUT = 0
+
+
+def workflow_guard_acquire(task_id: Optional[str] = None) -> dict[str, Any]:
+    """Acquire an exclusive workflow guard lock for a task.
+
+    Prevents two orchestrators from running the same task simultaneously.
+    The lock is a file-level lock at ``TASK_XXX/.workflow.lock``.
+
+    Args:
+        task_id: Optional task ID (uses active task when omitted)
+
+    Returns:
+        success, task_id, message — or error with holder info
+    """
+    task_dir = find_task_dir(task_id)
+    if not task_dir:
+        return {
+            "success": False,
+            "error": "No active task found" if not task_id else f"Task {task_id} not found"
+        }
+
+    lock_file = task_dir / ".workflow.lock"
+    info_file = task_dir / ".workflow.lock.info"
+    try:
+        lock = FileLock(str(lock_file), timeout=WORKFLOW_GUARD_TIMEOUT)
+        lock.acquire()
+
+        # Write holder info so other callers can see who owns the lock
+        info = {
+            "pid": os.getpid(),
+            "acquired_at": datetime.now().isoformat(),
+            "task_id": task_dir.name,
+        }
+        with open(info_file, "w") as f:
+            json.dump(info, f)
+
+        # Stash the lock object on the function so release can find it
+        if not hasattr(workflow_guard_acquire, "_locks"):
+            workflow_guard_acquire._locks = {}
+        workflow_guard_acquire._locks[task_dir.name] = lock
+
+        return {
+            "success": True,
+            "task_id": task_dir.name,
+            "message": f"Workflow guard acquired for {task_dir.name}"
+        }
+    except Timeout:
+        # Another orchestrator holds the lock
+        holder = {}
+        if info_file.exists():
+            try:
+                with open(info_file, "r") as f:
+                    holder = json.load(f)
+            except Exception:
+                pass
+        return {
+            "success": False,
+            "error": f"Workflow already active for {task_dir.name}",
+            "holder": holder,
+            "message": "Another orchestrator is running this task. Wait for it to finish or release the guard."
+        }
+
+
+def workflow_guard_release(task_id: Optional[str] = None) -> dict[str, Any]:
+    """Release the workflow guard lock for a task.
+
+    Args:
+        task_id: Optional task ID (uses active task when omitted)
+
+    Returns:
+        success, task_id, message
+    """
+    task_dir = find_task_dir(task_id)
+    if not task_dir:
+        return {
+            "success": False,
+            "error": "No active task found" if not task_id else f"Task {task_id} not found"
+        }
+
+    resolved_id = task_dir.name
+    lock_obj = None
+    if hasattr(workflow_guard_acquire, "_locks"):
+        lock_obj = workflow_guard_acquire._locks.pop(resolved_id, None)
+
+    if lock_obj is not None:
+        try:
+            lock_obj.release()
+        except Exception:
+            pass
+
+    # Clean up info file
+    info_file = task_dir / ".workflow.lock.info"
+    if info_file.exists():
+        try:
+            info_file.unlink()
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "task_id": resolved_id,
+        "message": f"Workflow guard released for {resolved_id}"
+    }
+
+
 def _get_next_task_id() -> str:
     tasks_dir = get_tasks_dir()
     if not tasks_dir.exists():
@@ -431,6 +555,13 @@ def workflow_initialize(
     if not task_id:
         task_id = _get_next_task_id()
 
+    if not _is_safe_task_id(task_id):
+        return {
+            "success": False,
+            "error": f"Invalid task_id: must not contain path separators or '..'",
+            "task_id": task_id
+        }
+
     task_dir = get_tasks_dir() / task_id
 
     if task_dir.exists():
@@ -443,7 +574,10 @@ def workflow_initialize(
             }
 
     state = _create_default_state(task_id)
-    state["phase"] = "architect"
+    # Don't set phase here — crew_init_task sets it after mode is determined.
+    # This prevents the bug where standard mode (no architect) gets stuck
+    # with phase="architect" that never produces output.
+    state["phase"] = None
     if description:
         state["description"] = description
 
@@ -453,8 +587,8 @@ def workflow_initialize(
         "success": True,
         "task_id": task_id,
         "task_dir": str(task_dir),
-        "phase": "architect",
-        "message": f"Initialized workflow for {task_id}, starting with architect phase"
+        "phase": None,
+        "message": f"Initialized workflow for {task_id}"
     }
 
 
@@ -2039,31 +2173,46 @@ def workflow_clear_model_cooldown(
 # ============================================================================
 
 WORKFLOW_MODES = {
-    "full": {
-        "description": "All 7 agents - complex features, critical changes",
-        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"],
-        "estimated_cost": "$0.50+"
-    },
-    "turbo": {
-        "description": "Developer plans comprehensively in one pass - standard features with Opus 4.6",
+    "standard": {
+        "description": "Developer plans and implements — routine features, fixes, refactors",
         "phases": ["developer", "implementer", "technical_writer"],
-        "estimated_cost": "$0.15"
+        "estimated_cost": "$0.10"
     },
-    "fast": {
-        "description": "Skip Skeptic and Feedback - standard changes",
+    "reviewed": {
+        "description": "Adds architecture analysis and code review — non-trivial changes",
         "phases": ["architect", "developer", "reviewer", "implementer", "technical_writer"],
         "estimated_cost": "$0.25"
     },
-    "minimal": {
-        "description": "Developer, Implementer, and Technical Writer - simple fixes, typos",
-        "phases": ["developer", "implementer", "technical_writer"],
-        "estimated_cost": "$0.10"
+    "thorough": {
+        "description": "Full adversarial pipeline — security, migrations, breaking changes",
+        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"],
+        "estimated_cost": "$0.50+"
     }
+}
+
+# Backward-compatible aliases for old mode names
+MODE_ALIASES = {
+    "turbo": "standard",
+    "minimal": "standard",
+    "fast": "reviewed",
+    "full": "thorough",
 }
 
 # Recommended thinking effort levels per mode and agent
 EFFORT_LEVELS = {
-    "full": {
+    "standard": {
+        "developer": "high",
+        "implementer": "high",
+        "technical_writer": "medium"
+    },
+    "reviewed": {
+        "architect": "high",
+        "developer": "high",
+        "reviewer": "high",
+        "implementer": "high",
+        "technical_writer": "medium"
+    },
+    "thorough": {
         "architect": "max",
         "developer": "max",
         "reviewer": "high",
@@ -2071,44 +2220,40 @@ EFFORT_LEVELS = {
         "implementer": "high",
         "feedback": "high",
         "technical_writer": "medium"
-    },
-    "turbo": {
-        "developer": "max",
-        "implementer": "high",
-        "technical_writer": "medium"
-    },
-    "fast": {
-        "architect": "high",
-        "developer": "high",
-        "reviewer": "high",
-        "implementer": "high",
-        "technical_writer": "medium"
-    },
-    "minimal": {
-        "developer": "medium",
-        "implementer": "medium",
-        "technical_writer": "medium"
     }
 }
 
 # Keywords for auto-detection
 AUTO_DETECT_RULES = {
-    "minimal": {
-        "keywords": ["typo", "fix typo", "simple fix", "rename", "update comment", "fix import"],
-        "max_files": 1
-    },
-    "turbo": {
-        "keywords": ["add feature", "implement", "update", "refactor", "add", "create", "build", "utility"],
+    "standard": {
+        "keywords": ["typo", "fix typo", "simple fix", "rename", "update comment",
+                    "fix import", "add feature", "implement", "update", "refactor",
+                    "add", "create", "build", "utility"],
         "exclude_keywords": ["security", "auth", "database", "migration", "api", "breaking",
                            "authentication", "authorization", "password", "token", "critical"]
     },
-    "fast": {
-        "keywords": ["add feature", "implement", "update", "refactor"],
-        "exclude_keywords": ["security", "auth", "database", "migration", "api", "breaking"]
-    },
-    "full": {
+    "thorough": {
         "keywords": ["security", "authentication", "authorization", "database", "migration",
                     "api", "breaking change", "critical", "auth", "password", "token"]
+    }
+}
+
+# File scope analysis rules for smarter auto-detection (AW-hqi)
+# Patterns that indicate higher risk and warrant thorough review
+SCOPE_ESCALATION_RULES = {
+    "sensitive_paths": [
+        "auth", "security", "crypto", "password", "token", "secret",
+        "migration", "schema", "database", "db/",
+    ],
+    "config_paths": [
+        ".env", "config/", "settings", ".yaml", ".yml", ".toml",
+        "dockerfile", "docker-compose", "ci/", ".github/workflows",
+    ],
+    # Thresholds for escalation based on scope breadth
+    "thresholds": {
+        "many_files": 10,       # > this many files → reviewed
+        "many_dirs": 3,         # > this many top-level dirs → reviewed
+        "cross_module": 5,      # > this many distinct modules → thorough
     }
 }
 
@@ -2120,17 +2265,20 @@ def _resolve_mode(mode_name: str, task_id: Optional[str] = None) -> Optional[dic
     under workflow_modes.modes, which take precedence over the hardcoded WORKFLOW_MODES.
 
     Args:
-        mode_name: The mode name to resolve (e.g., "full", "turbo", or a custom name)
+        mode_name: The mode name to resolve (e.g., "standard", "reviewed", "thorough", or legacy/custom name)
         task_id: Optional task ID for config resolution
 
     Returns:
         Mode config dict with "phases", "description", "estimated_cost", or None if not found
     """
-    # Check hardcoded modes first (fast path for standard modes)
-    if mode_name in WORKFLOW_MODES:
-        return WORKFLOW_MODES[mode_name]
+    # Resolve aliases first (turbo→standard, full→thorough, etc.)
+    resolved_name = MODE_ALIASES.get(mode_name, mode_name)
 
-    # Check config for custom modes
+    # Check hardcoded modes
+    if resolved_name in WORKFLOW_MODES:
+        return WORKFLOW_MODES[resolved_name]
+
+    # Check config for custom modes (try both original and resolved name)
     try:
         from .config_tools import config_get_effective
         effective = config_get_effective(task_id=task_id)
@@ -2145,7 +2293,7 @@ def _resolve_mode(mode_name: str, task_id: Optional[str] = None) -> Optional[dic
 
 
 def _get_all_mode_names(task_id: Optional[str] = None) -> list[str]:
-    """Get all available mode names (hardcoded + config-defined).
+    """Get all available mode names (hardcoded + aliases + config-defined).
 
     Args:
         task_id: Optional task ID for config resolution
@@ -2153,7 +2301,7 @@ def _get_all_mode_names(task_id: Optional[str] = None) -> list[str]:
     Returns:
         List of all known mode names
     """
-    modes = list(WORKFLOW_MODES.keys())
+    modes = list(WORKFLOW_MODES.keys()) + list(MODE_ALIASES.keys())
     try:
         from .config_tools import config_get_effective
         effective = config_get_effective(task_id=task_id)
@@ -2167,103 +2315,171 @@ def _get_all_mode_names(task_id: Optional[str] = None) -> list[str]:
     return modes
 
 
+def _analyze_file_scope(files: list[str]) -> dict[str, Any]:
+    """Analyze a list of affected files for scope-based mode escalation.
+
+    Returns signals about the file scope: sensitive paths hit, directory spread,
+    and whether thresholds for escalation are exceeded.
+
+    Args:
+        files: List of file paths affected by the change
+
+    Returns:
+        Dict with sensitive_hits, config_hits, top_level_dirs, file_count, escalation
+    """
+    rules = SCOPE_ESCALATION_RULES
+    sensitive_hits: list[str] = []
+    config_hits: list[str] = []
+    top_level_dirs: set[str] = set()
+
+    for fpath in files:
+        fpath_lower = fpath.lower().replace("\\", "/")
+
+        for pattern in rules["sensitive_paths"]:
+            if pattern in fpath_lower:
+                sensitive_hits.append(fpath)
+                break
+
+        for pattern in rules["config_paths"]:
+            if pattern in fpath_lower:
+                config_hits.append(fpath)
+                break
+
+        # Determine top-level directory
+        parts = fpath_lower.split("/")
+        if len(parts) > 1:
+            top_level_dirs.add(parts[0])
+
+    thresholds = rules["thresholds"]
+    file_count = len(files)
+    dir_count = len(top_level_dirs)
+
+    # Determine escalation level
+    escalation = None
+    escalation_reasons: list[str] = []
+
+    if sensitive_hits:
+        escalation = "thorough"
+        escalation_reasons.append(f"touches sensitive paths: {', '.join(sensitive_hits[:3])}")
+
+    if dir_count >= thresholds["cross_module"]:
+        escalation = "thorough"
+        escalation_reasons.append(f"cross-module change ({dir_count} top-level dirs)")
+
+    if escalation is None and (
+        file_count > thresholds["many_files"]
+        or dir_count >= thresholds["many_dirs"]
+        or config_hits
+    ):
+        escalation = "reviewed"
+        if file_count > thresholds["many_files"]:
+            escalation_reasons.append(f"many files affected ({file_count})")
+        if dir_count >= thresholds["many_dirs"]:
+            escalation_reasons.append(f"spans {dir_count} top-level dirs")
+        if config_hits:
+            escalation_reasons.append(f"touches config: {', '.join(config_hits[:3])}")
+
+    return {
+        "file_count": file_count,
+        "dir_count": dir_count,
+        "sensitive_hits": sensitive_hits,
+        "config_hits": config_hits,
+        "top_level_dirs": sorted(top_level_dirs),
+        "escalation": escalation,
+        "escalation_reasons": escalation_reasons,
+    }
+
+
 def workflow_detect_mode(
     task_description: str,
     files_affected: Optional[list[str]] = None
 ) -> dict[str, Any]:
-    """Auto-detect the appropriate workflow mode based on task description.
+    """Auto-detect the appropriate workflow mode based on task description and file scope.
 
-    Analyzes the task description and affected files to determine
-    whether to use full, fast, or minimal workflow mode.
+    Three modes: standard (routine), reviewed (non-trivial), thorough (critical).
+
+    Detection uses two signals that are combined (highest wins):
+      1. **Keyword analysis** — matches description against known patterns
+      2. **File scope analysis** — when files_affected is provided, analyzes paths
+         for sensitive areas, config files, and cross-module breadth
 
     Args:
         task_description: Description of the task
         files_affected: Optional list of files that will be affected
 
     Returns:
-        Detected mode with reasoning
+        Detected mode with reasoning, confidence, matched_keywords, and optional scope_analysis
     """
     desc_lower = task_description.lower()
-    file_count = len(files_affected) if files_affected else 0
 
-    # Check for full mode triggers first (highest priority)
-    full_matches = []
-    for keyword in AUTO_DETECT_RULES["full"]["keywords"]:
+    # --- Signal 1: keyword analysis ---
+    keyword_mode = "reviewed"
+    keyword_confidence = 0.5
+    keyword_reason = "No specific pattern detected"
+    matched_keywords: list[str] = []
+
+    # Check for thorough mode triggers first (highest priority)
+    thorough_matches = []
+    for keyword in AUTO_DETECT_RULES["thorough"]["keywords"]:
         if keyword in desc_lower:
-            full_matches.append(keyword)
+            thorough_matches.append(keyword)
 
-    if full_matches:
-        return {
-            "mode": "full",
-            "reason": f"Task mentions critical keywords: {', '.join(full_matches)}",
-            "confidence": 0.9,
-            "matched_keywords": full_matches
-        }
+    if thorough_matches:
+        keyword_mode = "thorough"
+        keyword_confidence = 0.9
+        keyword_reason = f"Task mentions critical keywords: {', '.join(thorough_matches)}"
+        matched_keywords = thorough_matches
+    else:
+        # Check for standard mode (routine tasks without critical keywords)
+        standard_excluded = False
+        for exclude_keyword in AUTO_DETECT_RULES["standard"]["exclude_keywords"]:
+            if exclude_keyword in desc_lower:
+                standard_excluded = True
+                break
 
-    # Check for minimal mode
-    minimal_matches = []
-    for keyword in AUTO_DETECT_RULES["minimal"]["keywords"]:
-        if keyword in desc_lower:
-            minimal_matches.append(keyword)
+        if not standard_excluded:
+            standard_matches = []
+            for keyword in AUTO_DETECT_RULES["standard"]["keywords"]:
+                if keyword in desc_lower:
+                    standard_matches.append(keyword)
 
-    if minimal_matches and file_count <= AUTO_DETECT_RULES["minimal"]["max_files"]:
-        return {
-            "mode": "minimal",
-            "reason": f"Simple task ({', '.join(minimal_matches)}) affecting {file_count} files",
-            "confidence": 0.8,
-            "matched_keywords": minimal_matches
-        }
+            if standard_matches:
+                keyword_mode = "standard"
+                keyword_confidence = 0.8
+                keyword_reason = f"Routine task ({', '.join(standard_matches)}) without critical patterns"
+                matched_keywords = standard_matches
 
-    # Check for turbo mode (Opus 4.6 single-pass planning)
-    turbo_excluded = False
-    for exclude_keyword in AUTO_DETECT_RULES["turbo"]["exclude_keywords"]:
-        if exclude_keyword in desc_lower:
-            turbo_excluded = True
-            break
+    # --- Signal 2: file scope analysis (when files provided) ---
+    scope_analysis = None
+    scope_mode = None
+    if files_affected:
+        scope_analysis = _analyze_file_scope(files_affected)
+        scope_mode = scope_analysis.get("escalation")
 
-    if not turbo_excluded:
-        turbo_matches = []
-        for keyword in AUTO_DETECT_RULES["turbo"]["keywords"]:
-            if keyword in desc_lower:
-                turbo_matches.append(keyword)
+    # --- Combine signals: highest mode wins ---
+    mode_rank = {"standard": 0, "reviewed": 1, "thorough": 2}
+    final_mode = keyword_mode
+    final_reason = keyword_reason
+    final_confidence = keyword_confidence
 
-        if turbo_matches:
-            return {
-                "mode": "turbo",
-                "reason": f"Standard feature task ({', '.join(turbo_matches)}) suitable for single-pass Opus 4.6 planning",
-                "confidence": 0.75,
-                "matched_keywords": turbo_matches
-            }
+    if scope_mode and mode_rank.get(scope_mode, 0) > mode_rank.get(keyword_mode, 0):
+        final_mode = scope_mode
+        scope_reasons = scope_analysis["escalation_reasons"] if scope_analysis else []
+        final_reason = f"File scope escalation: {'; '.join(scope_reasons)}"
+        # Scope-based escalation has slightly lower confidence than direct keyword match
+        final_confidence = 0.85 if scope_mode == "thorough" else 0.7
 
-    # Check for fast mode exclusions
-    fast_excluded = False
-    for exclude_keyword in AUTO_DETECT_RULES["fast"]["exclude_keywords"]:
-        if exclude_keyword in desc_lower:
-            fast_excluded = True
-            break
-
-    if not fast_excluded:
-        # Check for fast mode triggers
-        fast_matches = []
-        for keyword in AUTO_DETECT_RULES["fast"]["keywords"]:
-            if keyword in desc_lower:
-                fast_matches.append(keyword)
-
-        if fast_matches:
-            return {
-                "mode": "fast",
-                "reason": f"Standard task ({', '.join(fast_matches)}) without critical patterns",
-                "confidence": 0.7,
-                "matched_keywords": fast_matches
-            }
-
-    # Default to full for safety
-    return {
-        "mode": "full",
-        "reason": "No specific pattern detected, defaulting to full mode for safety",
-        "confidence": 0.5,
-        "matched_keywords": []
+    result: dict[str, Any] = {
+        "mode": final_mode,
+        "reason": final_reason,
+        "confidence": final_confidence,
+        "matched_keywords": matched_keywords,
     }
+
+    if scope_analysis:
+        result["scope_analysis"] = scope_analysis
+
+    return result
 
 
 def workflow_set_mode(
@@ -2272,8 +2488,8 @@ def workflow_set_mode(
 ) -> dict[str, Any]:
     """Set the workflow mode for a task.
 
-    Supports both built-in modes (full, turbo, fast, minimal) and custom modes
-    defined in workflow-config.yaml under workflow_modes.modes.
+    Supports built-in modes (standard, reviewed, thorough), legacy aliases
+    (full, turbo, fast, minimal), and custom modes defined in workflow-config.yaml.
 
     Args:
         mode: Workflow mode name (built-in or custom) or "auto" for auto-detection
@@ -2312,9 +2528,11 @@ def workflow_set_mode(
                 "success": False,
                 "error": f"Invalid mode '{mode}'. Available modes: {', '.join(available + ['auto'])}"
             }
+        # Store the resolved name (aliases map to canonical names)
+        effective_name = MODE_ALIASES.get(mode, mode)
         state["workflow_mode"] = {
             "requested": mode,
-            "effective": mode,
+            "effective": effective_name,
             "detection_reason": "Explicitly set by user",
             "confidence": 1.0
         }
@@ -2323,7 +2541,7 @@ def workflow_set_mode(
     effective_mode = state["workflow_mode"]["effective"]
     mode_config = _resolve_mode(effective_mode, task_id=resolved_task_id)
     if mode_config is None:
-        mode_config = WORKFLOW_MODES["full"]
+        mode_config = WORKFLOW_MODES["reviewed"]
     state["workflow_mode"]["phases"] = mode_config["phases"]
     state["workflow_mode"]["estimated_cost"] = mode_config.get("estimated_cost", "unknown")
 
@@ -2356,10 +2574,10 @@ def workflow_get_mode(
 
     state = _load_state(task_dir)
     mode = state.get("workflow_mode", {
-        "requested": "full",
-        "effective": "full",
-        "phases": WORKFLOW_MODES["full"]["phases"],
-        "estimated_cost": WORKFLOW_MODES["full"]["estimated_cost"]
+        "requested": "reviewed",
+        "effective": "reviewed",
+        "phases": WORKFLOW_MODES["reviewed"]["phases"],
+        "estimated_cost": WORKFLOW_MODES["reviewed"]["estimated_cost"]
     })
 
     return {
@@ -2386,17 +2604,17 @@ def workflow_is_phase_in_mode(
     if not task_dir:
         return {
             "in_mode": True,  # Default to allowing if no task
-            "error": "No active task found, assuming full mode"
+            "error": "No active task found, assuming thorough mode"
         }
 
     state = _load_state(task_dir)
     mode = state.get("workflow_mode", {})
-    phases = mode.get("phases", WORKFLOW_MODES["full"]["phases"])
+    phases = mode.get("phases", WORKFLOW_MODES["thorough"]["phases"])
 
     return {
         "phase": phase,
         "in_mode": phase in phases,
-        "effective_mode": mode.get("effective", "full"),
+        "effective_mode": mode.get("effective", "reviewed"),
         "task_id": state.get("task_id")
     }
 
@@ -2421,13 +2639,15 @@ def workflow_get_effort_level(
     if not task_dir:
         return {
             "effort": "high",
-            "mode": "full",
+            "mode": "reviewed",
             "reason": "No active task found, using default effort level"
         }
 
     state = _load_state(task_dir)
-    mode = state.get("workflow_mode", {}).get("effective", "full")
-    mode_efforts = EFFORT_LEVELS.get(mode, EFFORT_LEVELS["full"])
+    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    # Resolve any legacy mode names to new names for effort lookup
+    resolved_mode = MODE_ALIASES.get(mode, mode)
+    mode_efforts = EFFORT_LEVELS.get(resolved_mode, EFFORT_LEVELS["reviewed"])
     effort = mode_efforts.get(agent, "high")
 
     return {
@@ -2644,7 +2864,7 @@ def workflow_get_cost_summary(
     })
 
     # Calculate mode comparison if we have mode info
-    mode = state.get("workflow_mode", {}).get("effective", "full")
+    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
     full_mode_estimate = cost_tracking["totals"]["total_cost"]  # Current cost is the baseline
 
     # Generate formatted summary
@@ -3116,8 +3336,19 @@ def workflow_record_error_pattern(
             }
 
     # Add new pattern
-    with open(patterns_file, "a") as f:
-        f.write(json.dumps(pattern) + "\n")
+    existing_patterns.append(pattern)
+
+    # Rotate: cap at MAX_ERROR_PATTERNS entries, evict oldest first
+    if len(existing_patterns) > MAX_ERROR_PATTERNS:
+        # Sort by updated_at so oldest entries are first, then keep the tail
+        existing_patterns.sort(key=lambda p: p.get("updated_at", p.get("created_at", "")))
+        evicted = len(existing_patterns) - MAX_ERROR_PATTERNS
+        existing_patterns = existing_patterns[evicted:]
+
+    # Rewrite the full file to apply rotation
+    with open(patterns_file, "w") as f:
+        for p in existing_patterns:
+            f.write(json.dumps(p) + "\n")
 
     return {
         "success": True,
@@ -3655,10 +3886,10 @@ def workflow_create_worktree(
 
         # Git commands: move worktree dir, switch to base branch, create new branch, delete old
         git_commands = [
-            f"git worktree move {donor_path} {worktree_path}",
-            f"git -C {worktree_path} checkout {base_branch}",
-            f"git -C {worktree_path} checkout -b {branch_name}",
-            f"git branch -d {donor_branch}",
+            f"git worktree move {shlex.quote(donor_path)} {shlex.quote(worktree_path)}",
+            f"git -C {shlex.quote(worktree_path)} checkout {shlex.quote(base_branch)}",
+            f"git -C {shlex.quote(worktree_path)} checkout -b {shlex.quote(branch_name)}",
+            f"git branch -d {shlex.quote(donor_branch)}",
         ]
 
         # Build setup commands (symlink .tasks/ + copy host settings)
@@ -3779,7 +4010,7 @@ def workflow_create_worktree(
         "task_id": resolved_task_id,
         "worktree": worktree_metadata,
         "git_commands": [
-            f"git worktree add -b {branch_name} {worktree_path} {base_branch}"
+            f"git worktree add -b {shlex.quote(branch_name)} {shlex.quote(worktree_path)} {shlex.quote(base_branch)}"
         ],
         "setup_commands": setup_commands,
         "fix_paths_commands": fix_paths_commands,
@@ -3865,7 +4096,7 @@ def workflow_cleanup_worktree(
     if remove_branch:
         script_args.append("--remove-branch")
 
-    script_command = f"python3 {_REPO_ROOT / 'scripts' / 'cleanup-worktree.py'} {' '.join(script_args)}"
+    script_command = f"python3 {_REPO_ROOT / 'scripts' / 'cleanup-worktree.py'} {' '.join(shlex.quote(a) for a in script_args)}"
 
     return {
         "success": True,

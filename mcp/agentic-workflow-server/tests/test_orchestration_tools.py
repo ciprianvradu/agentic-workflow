@@ -34,6 +34,8 @@ from agentic_workflow_server.state_tools import (
     workflow_set_mode,
     workflow_set_implementation_progress,
     workflow_complete_step,
+    workflow_guard_acquire,
+    workflow_guard_release,
     _slugify as state_slugify,
     _generate_branch_name as state_generate_branch_name,
 )
@@ -425,9 +427,10 @@ class TestCrewInitTask:
         )
         assert result["success"] is True
         assert result["task_id"]
-        assert result["mode"] == "minimal"
+        assert result["mode"] == "standard"
 
         # Clean up
+        workflow_guard_release(task_id=result["task_id"])
         task_dir = clean_tasks_dir / result["task_id"]
         if task_dir.exists():
             shutil.rmtree(task_dir)
@@ -441,6 +444,7 @@ class TestCrewInitTask:
         assert result["beads_issue"] == "CACHE-42"
 
         # Clean up
+        workflow_guard_release(task_id=result["task_id"])
         task_dir = clean_tasks_dir / result["task_id"]
         if task_dir.exists():
             shutil.rmtree(task_dir)
@@ -454,6 +458,27 @@ class TestCrewInitTask:
         assert (task_dir / "task.md").exists()
 
         # Clean up
+        workflow_guard_release(task_id=result["task_id"])
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
+    def test_init_acquires_guard(self, clean_tasks_dir):
+        """crew_init_task should acquire workflow guard."""
+        result = crew_init_task(
+            task_description="Test guard acquisition",
+            options={"mode": "standard"}
+        )
+        assert result["success"] is True
+        task_id = result["task_id"]
+
+        # Guard should be held — second acquire should fail
+        guard_result = workflow_guard_acquire(task_id=task_id)
+        assert guard_result["success"] is False
+        assert "already active" in guard_result["error"]
+
+        # Clean up
+        workflow_guard_release(task_id=task_id)
+        task_dir = clean_tasks_dir / task_id
         if task_dir.exists():
             shutil.rmtree(task_dir)
 
@@ -468,31 +493,28 @@ class TestCrewGetNextPhase:
         workflow_set_mode(mode="full", task_id="TASK_ORCH_001")
 
         result = crew_get_next_phase(task_id="TASK_ORCH_001")
-        # Phase is architect (set by initialize), not yet completed
-        # Default config has after_architect checkpoint enabled, so this returns checkpoint
-        assert result.get("action") in ("spawn_agent", "process_output", "checkpoint")
-        # The phase should be architect
-        assert result.get("phase") == "architect" or result.get("agent") == "architect"
+        # Phase is None after initialize — crew_get_next_phase returns spawn_agent for first phase
+        assert result.get("action") == "spawn_agent"
+        assert result.get("agent") == "architect"
 
     def test_next_after_architect(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_001B", description="Test task")
         workflow_set_mode(mode="full", task_id="TASK_ORCH_001B")
+        workflow_transition(to_phase="architect", task_id="TASK_ORCH_001B")
         workflow_complete_phase(task_id="TASK_ORCH_001B")
         workflow_transition(to_phase="developer", task_id="TASK_ORCH_001B")
         workflow_complete_phase(task_id="TASK_ORCH_001B")
 
         result = crew_get_next_phase(task_id="TASK_ORCH_001B")
-        # Should suggest reviewer next in full mode
+        # Should suggest reviewer next in thorough mode
         assert result.get("action") in ("spawn_agent", "process_output", "checkpoint")
 
     def test_complete_when_all_done(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_002", description="Test task")
         workflow_set_mode(mode="full", task_id="TASK_ORCH_002")
 
-        # Complete all full mode phases sequentially
-        # architect is already set by initialize
-        workflow_complete_phase(task_id="TASK_ORCH_002")
-        for phase in ["developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"]:
+        # Complete all thorough mode phases sequentially
+        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_002")
             workflow_complete_phase(task_id="TASK_ORCH_002")
 
@@ -559,7 +581,7 @@ class TestCrewFormatCompletion:
         assert "cost_summary" in result
         assert "commit_message" in result
         assert "caching" in result["commit_message"].lower() or "Add caching layer" in result["commit_message"]
-        assert result["mode"] == "fast"
+        assert result["mode"] == "reviewed"
 
     def test_nonexistent_task(self):
         result = crew_format_completion(task_id="TASK_NONEXISTENT")
@@ -579,19 +601,15 @@ class TestCrewGetResumeState:
         assert result["task_id"] == "TASK_ORCH_007"
         assert "display_summary" in result
         assert "Test task for resume" in result["display_summary"]
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
 
     def test_resume_with_progress(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_ORCH_008", description="Implementation task")
         workflow_set_mode(mode="full", task_id="TASK_ORCH_008")
-        # Complete architect (set by initialize) and transition through to implementer
-        workflow_complete_phase(task_id="TASK_ORCH_008")
-        workflow_transition(to_phase="developer", task_id="TASK_ORCH_008")
-        workflow_complete_phase(task_id="TASK_ORCH_008")
-        workflow_transition(to_phase="reviewer", task_id="TASK_ORCH_008")
-        workflow_complete_phase(task_id="TASK_ORCH_008")
-        workflow_transition(to_phase="skeptic", task_id="TASK_ORCH_008")
-        workflow_complete_phase(task_id="TASK_ORCH_008")
+        # Transition through all planning phases to implementer
+        for phase in ["architect", "developer", "reviewer", "skeptic"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_008")
+            workflow_complete_phase(task_id="TASK_ORCH_008")
         workflow_transition(to_phase="implementer", task_id="TASK_ORCH_008")
         workflow_set_implementation_progress(total_steps=5, current_step=2, task_id="TASK_ORCH_008")
 
@@ -645,3 +663,112 @@ class TestCrewJiraTransition:
     def test_skip_preserves_hook_name(self):
         result = crew_jira_transition(hook_name="on_complete", issue_key="PROJ-42")
         assert result.get("hook_name") == "on_complete"
+
+
+# ============================================================================
+# AW-gwq: KB listing timeout tests
+# ============================================================================
+
+from agentic_workflow_server.orchestration_tools import (
+    _list_kb_files,
+    KB_LISTING_TIMEOUT,
+    KB_LISTING_MAX_FILES,
+    _validate_beads_issue,
+)
+import tempfile
+
+
+class TestKBListingTimeout:
+    def test_normal_listing(self):
+        """Should list files in a small directory without issues."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            (tmppath / "file1.md").write_text("content1")
+            (tmppath / "file2.md").write_text("content2")
+            (tmppath / "sub").mkdir()
+            (tmppath / "sub" / "file3.md").write_text("content3")
+
+            files = _list_kb_files(tmppath)
+            assert len(files) == 3
+            assert "file1.md" in files
+            assert "file2.md" in files
+
+    def test_empty_directory(self):
+        """Empty directory returns empty list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            files = _list_kb_files(Path(tmpdir))
+            assert files == []
+
+    def test_max_files_cap(self):
+        """Should stop at KB_LISTING_MAX_FILES."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            # Create more than max files
+            for i in range(KB_LISTING_MAX_FILES + 10):
+                (tmppath / f"file_{i:04d}.txt").write_text(f"content {i}")
+
+            files = _list_kb_files(tmppath)
+            assert len(files) == KB_LISTING_MAX_FILES
+
+    def test_nonexistent_directory_doesnt_crash(self):
+        """Non-existent path should not raise."""
+        files = _list_kb_files(Path("/nonexistent/path/that/doesnt/exist"))
+        assert files == []
+
+    def test_timeout_constant(self):
+        assert KB_LISTING_TIMEOUT == 10
+
+    def test_max_files_constant(self):
+        assert KB_LISTING_MAX_FILES == 500
+
+
+# ============================================================================
+# AW-0l9: Beads validation tests
+# ============================================================================
+
+class TestValidateBeadsIssue:
+    def test_nonexistent_issue(self):
+        """Validation of a definitely-nonexistent issue should handle gracefully."""
+        valid, warning = _validate_beads_issue("NONEXISTENT-999999")
+        # Either bd is installed and returns not-found, or bd isn't installed and we pass through
+        assert isinstance(valid, bool)
+        assert isinstance(warning, str)
+
+    def test_bd_not_installed_passes_through(self):
+        """If bd is not installed, should return (True, '')."""
+        from unittest.mock import patch
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            valid, warning = _validate_beads_issue("AW-123")
+            assert valid is True
+            assert warning == ""
+
+    def test_bd_timeout_passes_through(self):
+        """If bd times out, should return (True, warning)."""
+        import subprocess
+        from unittest.mock import patch
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("bd", 5)):
+            valid, warning = _validate_beads_issue("AW-123")
+            assert valid is True
+            assert "Timed out" in warning
+
+    def test_crew_format_completion_with_invalid_issue(self, clean_tasks_dir):
+        """crew_format_completion with an invalid linked issue should include warnings."""
+        workflow_initialize(task_id="TASK_ORCH_BEADS_001", description="Test beads validation")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_BEADS_001")
+
+        # Set a linked issue that definitely doesn't exist
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir as _find
+        task_dir = _find("TASK_ORCH_BEADS_001")
+        state = _load_state(task_dir)
+        state["linked_issue"] = "NONEXISTENT-999"
+        _save_state(task_dir, state)
+
+        from agentic_workflow_server.orchestration_tools import crew_format_completion
+        from unittest.mock import patch
+        # Mock config to enable beads
+        mock_config = {"beads": {"enabled": True, "add_comments": False}}
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_format_completion(task_id="TASK_ORCH_BEADS_001")
+            # Should have either beads_commands with a skip comment or beads_warnings
+            assert "beads_commands" in result

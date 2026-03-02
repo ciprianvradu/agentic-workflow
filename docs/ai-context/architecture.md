@@ -84,6 +84,20 @@ This is the largest and most important module. It manages all persistent workflo
 - `workflow_set_mode(mode)` / `workflow_get_mode()` — Manual mode control
 - `workflow_get_effort_level(agent)` — Recommended thinking depth per mode
 
+**Workflow Modes:**
+| Mode | Agents | Use case |
+|------|--------|----------|
+| **standard** | developer → implementer → technical_writer | Routine features, fixes, refactors |
+| **reviewed** | architect → developer → reviewer → implementer → technical_writer | Non-trivial changes needing review |
+| **thorough** | architect → developer → reviewer → skeptic → implementer → feedback → technical_writer | Security, migrations, breaking changes |
+
+Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+
+**Model Routing:** `_build_phase_action()` returns a `model` field resolved from config:
+- Fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
+- Standard mode defaults to Sonnet, reviewed/thorough use Opus for planning agents
+- Override with `models.default: opus` in project config to use Opus everywhere
+
 **Internal helpers (prefixed with `_`):**
 - `_load_state(task_dir)` / `_save_state(task_dir, state)` — JSON I/O with file locking
 - `_build_resume_prompt(task_id, path, ai_host)` — Platform-specific resume prompt

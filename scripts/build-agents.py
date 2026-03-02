@@ -176,6 +176,10 @@ BUNDLED_SCRIPTS = [
     "shared_utils.py",
     "workflow_state.py",
     "context_preparation.py",
+    "crew-config.py",
+    "crew-status.py",
+    "crew-cost-report.py",
+    "crew-stats.py",
 ]
 
 
@@ -307,6 +311,17 @@ def build_claude(output_dir: Path):
             dest.write_text(content, encoding="utf-8")
             print(f"  + commands/{cmd_path.name}")
             cmd_count += 1
+
+    # Bundle scripts to ~/.claude/scripts/
+    scripts_out = output_dir / "scripts"
+    scripts_out.mkdir(parents=True, exist_ok=True)
+    scripts_copied = 0
+    for script_name in BUNDLED_SCRIPTS:
+        src = REPO_ROOT / "scripts" / script_name
+        if src.exists():
+            dest = scripts_out / script_name
+            dest.write_text(read_file(src), encoding="utf-8")
+            scripts_copied += 1
 
     _assert_no_raw_placeholders(output_dir, "claude")
     print(f"\n  {agent_count} agents + {cmd_count} commands written to {output_dir}")
