@@ -421,7 +421,14 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
     if to_phase == "developer" and current in ("reviewer", "skeptic"):
         return True, f"Valid loop-back from {current} to developer"
 
-    return False, f"Cannot skip from {current} to {to_phase}"
+    # Find the next valid phase to suggest
+    if current in ordering:
+        current_idx = ordering.index(current)
+        next_valid = ordering[current_idx + 1] if current_idx + 1 < len(ordering) else None
+        hint = f" Next valid phase: {next_valid}" if next_valid else ""
+    else:
+        hint = ""
+    return False, f"Cannot skip from {current} to {to_phase}.{hint}"
 
 
 def workflow_initialize(
@@ -474,11 +481,23 @@ def workflow_transition(
     can, reason = _can_transition(state, to_phase)
 
     if not can:
+        # Include next_valid_phase so agents know exactly where to go
+        mode_phases = state.get("workflow_mode", {}).get("phases", PHASE_ORDER)
+        current = _normalize_phase(state["phase"]) if state.get("phase") else None
+        next_valid = None
+        if current and current in mode_phases:
+            idx = mode_phases.index(current)
+            completed = [_normalize_phase(p) for p in state.get("phases_completed", [])]
+            for candidate in mode_phases[idx + 1:]:
+                if candidate not in completed:
+                    next_valid = candidate
+                    break
         return {
             "success": False,
             "error": reason,
             "current_phase": state.get("phase"),
-            "phases_completed": state.get("phases_completed", [])
+            "phases_completed": state.get("phases_completed", []),
+            "next_valid_phase": next_valid,
         }
 
     old_phase = state.get("phase")
