@@ -797,14 +797,14 @@ def crew_get_next_phase(
         if checkpoint:
             concerns = state.get("concerns", [])
             unaddressed = [c for c in concerns if not c.get("addressed_by")]
-            return {
-                "action": "checkpoint",
-                "phase": current_phase,
-                "checkpoint_name": checkpoint,
-                "task_id": state.get("task_id"),
-                "unaddressed_concerns": unaddressed,
-                "concerns_count": len(unaddressed),
-            }
+            should_trigger, reason = _should_trigger_checkpoint(
+                checkpoint, unaddressed, config
+            )
+            if should_trigger:
+                return _build_checkpoint_result(
+                    current_phase, checkpoint, state, concerns
+                )
+            # Threshold not met — auto-proceed (skip checkpoint)
         # Phase output not yet processed - orchestrator should process it
         return {
             "action": "process_output",
@@ -1022,6 +1022,110 @@ def _get_checkpoint_for_phase(phase: str, config: dict) -> Optional[str]:
             return "after_technical_writer"
 
     return None
+
+
+# Severity ranking for threshold comparison
+_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+def _should_trigger_checkpoint(
+    checkpoint_name: str,
+    concerns: list[dict],
+    config: dict,
+) -> tuple[bool, str]:
+    """Determine whether a checkpoint should actually fire.
+
+    Uses config thresholds to decide. Returns (should_trigger, reason).
+
+    Config keys (under checkpoints):
+      concern_threshold: int  — min unaddressed concerns to trigger (default: 0 = always)
+      concern_severity_threshold: str  — min severity to count (default: "low")
+
+    When threshold is 0, the checkpoint always fires if configured.
+    When threshold > 0, concerns below the severity threshold are ignored,
+    and the checkpoint only fires if remaining count >= threshold.
+    """
+    checkpoints_config = config.get("checkpoints", {})
+    threshold = checkpoints_config.get("concern_threshold", 0)
+    severity_threshold = checkpoints_config.get("concern_severity_threshold", "low")
+
+    # threshold=0 means always trigger when configured
+    if threshold <= 0:
+        return True, "checkpoint configured (always-on)"
+
+    # Filter by severity
+    min_rank = _SEVERITY_RANK.get(severity_threshold, 1)
+    qualifying = [
+        c for c in concerns
+        if _SEVERITY_RANK.get(c.get("severity", "medium"), 2) >= min_rank
+        and not c.get("addressed_by")
+    ]
+
+    if len(qualifying) >= threshold:
+        return True, f"{len(qualifying)} concerns at or above '{severity_threshold}' severity"
+
+    return False, f"only {len(qualifying)} concerns (threshold: {threshold})"
+
+
+def _build_checkpoint_result(
+    phase: str,
+    checkpoint_name: str,
+    state: dict,
+    concerns: list[dict],
+) -> dict[str, Any]:
+    """Build a structured checkpoint response with pre-built question/options.
+
+    Returns everything the orchestrator needs to present the checkpoint
+    via AskUserQuestion — no LLM interpretation required.
+    """
+    task_id = state.get("task_id", "?")
+    unaddressed = [c for c in concerns if not c.get("addressed_by")]
+
+    # Build concern summary for the question
+    if unaddressed:
+        # Group by severity
+        by_severity: dict[str, list[str]] = {}
+        for c in unaddressed:
+            sev = c.get("severity", "medium")
+            by_severity.setdefault(sev, []).append(c.get("description", "?")[:120])
+
+        summary_parts = []
+        for sev in ["critical", "high", "medium", "low"]:
+            items = by_severity.get(sev, [])
+            if items:
+                summary_parts.append(f"**{sev}** ({len(items)}): {items[0]}")
+                if len(items) > 1:
+                    summary_parts[-1] += f" (+{len(items)-1} more)"
+
+        concern_summary = "; ".join(summary_parts)
+        question = (
+            f"Phase '{phase}' complete for {task_id}. "
+            f"{len(unaddressed)} unaddressed concern(s): {concern_summary}. "
+            f"How should we proceed?"
+        )
+    else:
+        question = (
+            f"Phase '{phase}' complete for {task_id}. "
+            f"No concerns raised. How should we proceed?"
+        )
+
+    return {
+        "action": "checkpoint",
+        "phase": phase,
+        "checkpoint_name": checkpoint_name,
+        "task_id": task_id,
+        "unaddressed_concerns": unaddressed,
+        "concerns_count": len(unaddressed),
+        "question": {
+            "text": question,
+            "header": "Checkpoint",
+            "options": [
+                {"label": "Approve", "description": "Proceed to the next phase"},
+                {"label": "Revise", "description": "Ask the agent to address concerns before continuing"},
+                {"label": "Skip", "description": "Dismiss concerns and continue anyway"},
+            ],
+        },
+    }
 
 
 # ============================================================================

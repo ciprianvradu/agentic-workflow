@@ -26,6 +26,11 @@ checkpoints:
   documentation:
     after_technical_writer: true  # Review documentation updates before applying
 
+  # Concern-based thresholds — when > 0, checkpoints only fire if enough
+  # unaddressed concerns exist at or above the severity threshold
+  concern_threshold: 0             # 0 = always checkpoint when configured; 1+ = require concerns
+  concern_severity_threshold: low  # low | medium | high | critical
+
   feedback:
     on_deviation: true         # Ask when implementation deviates from plan
     on_test_failure: true      # Ask when tests fail unexpectedly

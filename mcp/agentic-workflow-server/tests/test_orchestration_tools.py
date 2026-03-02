@@ -772,3 +772,217 @@ class TestValidateBeadsIssue:
             result = crew_format_completion(task_id="TASK_ORCH_BEADS_001")
             # Should have either beads_commands with a skip comment or beads_warnings
             assert "beads_commands" in result
+
+
+# ============================================================================
+# Deterministic Checkpoint Tests
+# ============================================================================
+
+class TestDeterministicCheckpoints:
+    """Test that checkpoint invocation is deterministic and config-driven."""
+
+    def test_checkpoint_always_fires_at_threshold_zero(self, clean_tasks_dir):
+        """With concern_threshold=0 (default), checkpoint fires even with no concerns."""
+        from unittest.mock import patch
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir as _find
+
+        workflow_initialize(task_id="TASK_ORCH_CP_001", description="Checkpoint test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_001")
+        workflow_transition("architect", task_id="TASK_ORCH_CP_001")
+
+        # Config with after_architect: true and threshold=0
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": True},
+                "concern_threshold": 0,
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_001")
+
+        assert result["action"] == "checkpoint"
+        assert result["concerns_count"] == 0
+        assert "question" in result
+        assert result["question"]["header"] == "Checkpoint"
+
+    def test_checkpoint_skipped_below_threshold(self, clean_tasks_dir):
+        """With concern_threshold > 0 and no concerns, checkpoint is skipped."""
+        from unittest.mock import patch
+
+        workflow_initialize(task_id="TASK_ORCH_CP_002", description="Threshold test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_002")
+        workflow_transition("architect", task_id="TASK_ORCH_CP_002")
+
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": True},
+                "concern_threshold": 1,
+                "concern_severity_threshold": "low",
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_002")
+
+        # Should skip checkpoint and return process_output
+        assert result["action"] == "process_output"
+
+    def test_checkpoint_fires_when_concerns_meet_threshold(self, clean_tasks_dir):
+        """With concerns meeting threshold, checkpoint fires."""
+        from unittest.mock import patch
+        from agentic_workflow_server.state_tools import workflow_add_concern
+
+        workflow_initialize(task_id="TASK_ORCH_CP_003", description="Concern threshold test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_003")
+        workflow_transition("architect", task_id="TASK_ORCH_CP_003")
+
+        # Add a concern
+        workflow_add_concern(
+            source="architect",
+            severity="high",
+            description="Security risk in auth flow",
+            task_id="TASK_ORCH_CP_003"
+        )
+
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": True},
+                "concern_threshold": 1,
+                "concern_severity_threshold": "medium",
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_003")
+
+        assert result["action"] == "checkpoint"
+        assert result["concerns_count"] == 1
+        assert "Security risk" in result["question"]["text"]
+
+    def test_checkpoint_severity_filter(self, clean_tasks_dir):
+        """Concerns below severity threshold are not counted."""
+        from unittest.mock import patch
+        from agentic_workflow_server.state_tools import workflow_add_concern
+
+        workflow_initialize(task_id="TASK_ORCH_CP_004", description="Severity filter test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_004")
+        workflow_transition("architect", task_id="TASK_ORCH_CP_004")
+
+        # Add a low-severity concern
+        workflow_add_concern(
+            source="architect",
+            severity="low",
+            description="Minor style issue",
+            task_id="TASK_ORCH_CP_004"
+        )
+
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": True},
+                "concern_threshold": 1,
+                "concern_severity_threshold": "high",  # Only high+ counts
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_004")
+
+        # Low concern doesn't meet "high" threshold — skipped
+        assert result["action"] == "process_output"
+
+    def test_checkpoint_no_config_means_no_checkpoint(self, clean_tasks_dir):
+        """Phase without checkpoint config should never trigger checkpoint."""
+        from unittest.mock import patch
+
+        workflow_initialize(task_id="TASK_ORCH_CP_005", description="No checkpoint test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_005")
+        # Transition to architect (first phase) — phase is active but not completed
+        workflow_transition("architect", task_id="TASK_ORCH_CP_005")
+
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": False},  # Explicitly off
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_005")
+
+        # Checkpoint is off — should get process_output, not checkpoint
+        assert result["action"] == "process_output"
+
+    def test_checkpoint_result_has_structured_question(self, clean_tasks_dir):
+        """Checkpoint result should contain pre-built question with options."""
+        from unittest.mock import patch
+
+        workflow_initialize(task_id="TASK_ORCH_CP_006", description="Structured question test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_006")
+        workflow_transition("architect", task_id="TASK_ORCH_CP_006")
+
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": True},
+                "concern_threshold": 0,
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_006")
+
+        assert result["action"] == "checkpoint"
+        q = result["question"]
+        assert "text" in q
+        assert "header" in q
+        assert "options" in q
+        assert len(q["options"]) == 3
+        labels = [o["label"] for o in q["options"]]
+        assert "Approve" in labels
+        assert "Revise" in labels
+        assert "Skip" in labels
+
+    def test_checkpoint_concern_summary_in_question(self, clean_tasks_dir):
+        """Checkpoint question should include concern summary when concerns exist."""
+        from unittest.mock import patch
+        from agentic_workflow_server.state_tools import workflow_add_concern
+
+        workflow_initialize(task_id="TASK_ORCH_CP_007", description="Summary test")
+        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_007")
+        workflow_transition("architect", task_id="TASK_ORCH_CP_007")
+
+        workflow_add_concern(
+            source="architect",
+            severity="critical",
+            description="SQL injection vulnerability in user input handler",
+            task_id="TASK_ORCH_CP_007"
+        )
+        workflow_add_concern(
+            source="architect",
+            severity="medium",
+            description="Missing rate limiting",
+            task_id="TASK_ORCH_CP_007"
+        )
+
+        mock_config = {
+            "checkpoints": {
+                "planning": {"after_architect": True},
+                "concern_threshold": 0,
+            },
+            "models": {"default": "opus"},
+        }
+        with patch("agentic_workflow_server.orchestration_tools.config_get_effective",
+                   return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_CP_007")
+
+        assert result["action"] == "checkpoint"
+        assert result["concerns_count"] == 2
+        q_text = result["question"]["text"]
+        assert "2 unaddressed concern" in q_text
+        assert "critical" in q_text
+        assert "SQL injection" in q_text
