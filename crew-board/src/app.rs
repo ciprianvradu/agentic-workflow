@@ -5,7 +5,7 @@ use crate::launcher::{self, AiHost, TerminalEnv};
 use crate::worktree;
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tui_input::Input;
 
 /// Which view/tab is active.
@@ -149,6 +149,25 @@ pub struct SearchPopup {
     pub last_input: std::time::Instant,
 }
 
+/// Pre-built search corpus for a single task.
+#[derive(Clone)]
+pub struct SearchEntry {
+    pub repo_index: usize,
+    pub task_index: usize,
+    pub task_id: String,
+    pub description: String,
+    /// Searchable segments: (lowercased_text, source_label).
+    pub segments: Vec<(String, String)>,
+}
+
+/// Result of a background refresh.
+#[allow(dead_code)]
+pub struct BgRefreshResult {
+    pub repos: Vec<RepoData>,
+    pub changed_task_ids: Vec<String>,
+    pub search_index: Vec<SearchEntry>,
+}
+
 pub struct App {
     pub repos: Vec<RepoData>,
     pub repo_paths: Vec<PathBuf>,
@@ -192,6 +211,87 @@ pub struct App {
 
     // Cleanup worktree popup
     pub cleanup_popup: Option<CleanupPopup>,
+
+    // Search index (built on load, invalidated per-task on mtime change)
+    pub search_index: Vec<SearchEntry>,
+
+    // Background refresh
+    pub bg_refresh_handle: Option<std::thread::JoinHandle<BgRefreshResult>>,
+}
+
+/// Build the full search index from all repos' tasks.
+/// Module-level free function — callable from background threads.
+fn build_search_index(repos: &[RepoData]) -> Vec<SearchEntry> {
+    let mut index = Vec::new();
+    for (repo_index, repo) in repos.iter().enumerate() {
+        for (task_index, loaded) in repo.tasks.iter().enumerate() {
+            index.push(build_search_entry(repo_index, task_index, loaded));
+        }
+    }
+    index
+}
+
+/// Build a search entry for a single task.
+/// Re-reads state.json from disk to capture raw JSON fields not modeled in TaskState.
+fn build_search_entry(
+    repo_index: usize,
+    task_index: usize,
+    loaded: &crate::data::task::LoadedTask,
+) -> SearchEntry {
+    let task = &loaded.state;
+    let mut segments: Vec<(String, String)> = Vec::new();
+
+    // Structured fields
+    segments.push((task.task_id.to_lowercase(), "task_id".to_string()));
+    segments.push((task.description.to_lowercase(), "description".to_string()));
+    if let Some(ref wt) = task.worktree {
+        if !wt.branch.is_empty() {
+            segments.push((wt.branch.to_lowercase(), "branch".to_string()));
+        }
+    }
+    if let Some(ref phase) = task.phase {
+        segments.push((phase.to_lowercase(), "phase".to_string()));
+    }
+
+    // Skip disk reads for archived tasks
+    if !loaded.archived {
+        // Raw state.json (captures fields not in TaskState struct)
+        let state_path = loaded.dir.join("state.json");
+        if let Ok(raw) = std::fs::read_to_string(&state_path) {
+            segments.push((raw.to_lowercase(), "state.json".to_string()));
+        }
+
+        // .md artifacts (first 4KB each)
+        if let Ok(entries) = std::fs::read_dir(&loaded.dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                if let Ok(file) = std::fs::File::open(&path) {
+                    use std::io::Read;
+                    let mut buf = vec![0u8; 4096];
+                    let mut reader = std::io::BufReader::new(file);
+                    let n = reader.read(&mut buf).unwrap_or(0);
+                    let text = String::from_utf8_lossy(&buf[..n]).to_lowercase();
+                    let fname = path
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or("artifact")
+                        .to_string();
+                    segments.push((text, fname));
+                }
+            }
+        }
+    }
+
+    SearchEntry {
+        repo_index,
+        task_index,
+        task_id: task.task_id.clone(),
+        description: task.description.clone(),
+        segments,
+    }
 }
 
 impl App {
@@ -200,6 +300,8 @@ impl App {
 
         // Auto-expand all repos on start
         let expanded: HashSet<usize> = (0..repos.len()).collect();
+
+        let search_index = build_search_index(&repos);
 
         let mut app = App {
             repos,
@@ -226,6 +328,8 @@ impl App {
             create_popup: None,
             search_popup: None,
             cleanup_popup: None,
+            search_index,
+            bg_refresh_handle: None,
         };
         app.rebuild_tree();
         app.ensure_artifacts();
@@ -249,16 +353,77 @@ impl App {
         }
     }
 
-    /// Reload all data from disk.
+    /// Reload all data from disk (non-blocking).
+    /// Launches a background thread; results are applied in `check_bg_refresh()`.
     pub fn refresh(&mut self) {
-        self.repos = self.repo_paths.iter().map(|p| RepoData::load(p)).collect();
-        self.last_refresh = std::time::Instant::now();
-        self.rebuild_tree();
-        self.clamp_issue_selection();
-        // Force artifact reload on next access
-        self.cached_task_dir = None;
-        self.cached_history_task_dir = None;
-        self.ensure_artifacts();
+        self.start_bg_refresh();
+    }
+
+    /// Start a background refresh (non-blocking).
+    /// If a refresh is already in progress, this is a no-op.
+    fn start_bg_refresh(&mut self) {
+        if self.bg_refresh_handle.is_some() {
+            return; // Already refreshing
+        }
+
+        // Clone what the background thread needs
+        let repo_paths = self.repo_paths.clone();
+        let prev_repos = self.repos.clone();
+
+        self.bg_refresh_handle = Some(std::thread::spawn(move || {
+            let mut all_changed_ids = Vec::new();
+            let mut new_repos = Vec::with_capacity(prev_repos.len());
+
+            for (i, repo_path) in repo_paths.iter().enumerate() {
+                if i < prev_repos.len() {
+                    let (repo, changed_ids) =
+                        RepoData::load_incremental(&prev_repos[i], repo_path);
+                    all_changed_ids.extend(changed_ids);
+                    new_repos.push(repo);
+                } else {
+                    new_repos.push(RepoData::load(repo_path));
+                }
+            }
+
+            // Build search index in background too
+            let search_index = build_search_index(&new_repos);
+
+            BgRefreshResult {
+                repos: new_repos,
+                changed_task_ids: all_changed_ids,
+                search_index,
+            }
+        }));
+    }
+
+    /// Poll for background refresh completion. Call each event-loop tick.
+    pub fn check_bg_refresh(&mut self) {
+        let handle = match self.bg_refresh_handle.take() {
+            Some(h) => h,
+            None => return,
+        };
+
+        if handle.is_finished() {
+            match handle.join() {
+                Ok(result) => {
+                    self.repos = result.repos;
+                    self.search_index = result.search_index;
+                    self.rebuild_tree();
+                    self.clamp_issue_selection();
+                    self.cached_task_dir = None;
+                    self.cached_history_task_dir = None;
+                    self.ensure_artifacts();
+                }
+                Err(_) => {
+                    // Thread panicked -- silently skip this refresh cycle
+                }
+            }
+            // Reset timer on completion (not start) to avoid rapid re-refresh
+            self.last_refresh = std::time::Instant::now();
+        } else {
+            // Not done yet, put it back
+            self.bg_refresh_handle = Some(handle);
+        }
     }
 
     /// The currently selected tree row.
@@ -1043,7 +1208,7 @@ impl App {
         }
     }
 
-    /// Run search across all tasks using the current query.
+    /// Run search across all tasks using the in-memory search index.
     fn run_search(&mut self) {
         let query = match &self.search_popup {
             Some(p) => p.input.value().to_lowercase(),
@@ -1061,60 +1226,22 @@ impl App {
         const MAX_RESULTS: usize = 50;
         let mut results = Vec::new();
 
-        for (repo_index, repo) in self.repos.iter().enumerate() {
-            for (task_index, loaded) in repo.tasks.iter().enumerate() {
-                if results.len() >= MAX_RESULTS {
-                    break;
-                }
-
-                let task = &loaded.state;
-                let task_dir = &loaded.dir;
-
-                // Check structured fields first
-                if let Some(source) = Self::match_task_fields(task, &query) {
-                    results.push(SearchResult {
-                        repo_index,
-                        task_index,
-                        task_id: task.task_id.clone(),
-                        description: task.description.clone(),
-                        match_source: source,
-                    });
-                    continue;
-                }
-
-                // Archived tasks have no files on disk to search
-                if loaded.archived {
-                    continue;
-                }
-
-                // Fall back: read raw state.json for extra fields
-                let state_path = task_dir.join("state.json");
-                if let Ok(raw) = std::fs::read_to_string(&state_path) {
-                    if raw.to_lowercase().contains(&query) {
-                        results.push(SearchResult {
-                            repo_index,
-                            task_index,
-                            task_id: task.task_id.clone(),
-                            description: task.description.clone(),
-                            match_source: "state.json".to_string(),
-                        });
-                        continue;
-                    }
-                }
-
-                // Fall back: scan .md artifact files (first 4KB each)
-                if let Some(source) = Self::match_task_artifacts(task_dir, &query) {
-                    results.push(SearchResult {
-                        repo_index,
-                        task_index,
-                        task_id: task.task_id.clone(),
-                        description: task.description.clone(),
-                        match_source: source,
-                    });
-                }
-            }
+        for entry in &self.search_index {
             if results.len() >= MAX_RESULTS {
                 break;
+            }
+            // Search segments in order; first match wins
+            for (text, source) in &entry.segments {
+                if text.contains(&query) {
+                    results.push(SearchResult {
+                        repo_index: entry.repo_index,
+                        task_index: entry.task_index,
+                        task_id: entry.task_id.clone(),
+                        description: entry.description.clone(),
+                        match_source: source.clone(),
+                    });
+                    break; // one hit per task
+                }
             }
         }
 
@@ -1122,57 +1249,6 @@ impl App {
             p.results = results;
             p.cursor = 0;
         }
-    }
-
-    /// Check structured task fields against query. Returns match source if found.
-    fn match_task_fields(
-        task: &crate::data::task::TaskState,
-        query: &str,
-    ) -> Option<String> {
-        if task.task_id.to_lowercase().contains(query) {
-            return Some("task_id".to_string());
-        }
-        if task.description.to_lowercase().contains(query) {
-            return Some("description".to_string());
-        }
-        if let Some(ref wt) = task.worktree {
-            if wt.branch.to_lowercase().contains(query) {
-                return Some("branch".to_string());
-            }
-        }
-        if let Some(ref phase) = task.phase {
-            if phase.to_lowercase().contains(query) {
-                return Some("phase".to_string());
-            }
-        }
-        None
-    }
-
-    /// Scan .md files in task_dir for query match. Returns source filename if found.
-    fn match_task_artifacts(task_dir: &Path, query: &str) -> Option<String> {
-        let entries = std::fs::read_dir(task_dir).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            // Read first 4KB
-            if let Ok(file) = std::fs::File::open(&path) {
-                use std::io::Read;
-                let mut buf = vec![0u8; 4096];
-                let mut reader = std::io::BufReader::new(file);
-                let n = reader.read(&mut buf).unwrap_or(0);
-                let text = String::from_utf8_lossy(&buf[..n]).to_lowercase();
-                if text.contains(query) {
-                    let fname = path
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .unwrap_or("artifact");
-                    return Some(fname.to_string());
-                }
-            }
-        }
-        None
     }
 
     // ── Cleanup Worktree Popup ─────────────────────────────────────────

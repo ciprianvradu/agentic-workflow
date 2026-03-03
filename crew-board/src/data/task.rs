@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// A loaded task that may be live (on disk) or archived (deleted from disk).
 #[derive(Debug, Clone)]
@@ -13,6 +14,8 @@ pub struct LoadedTask {
     pub archived: bool,
     /// Jira key from metadata.json (external setup scripts)
     pub jira_key: Option<String>,
+    /// mtime of state.json at last read (None for archived/fallback tasks).
+    pub state_mtime: Option<SystemTime>,
 }
 
 /// Lightweight metadata written by external setup scripts.
@@ -441,12 +444,16 @@ pub fn load_tasks(tasks_dir: &Path) -> Vec<LoadedTask> {
                             state,
                             archived: true,
                             jira_key,
+                            state_mtime: None,
                         });
                     }
                 }
             }
             continue;
         }
+        let state_mtime = std::fs::metadata(&state_file)
+            .ok()
+            .and_then(|m| m.modified().ok());
         let content = match std::fs::read_to_string(&state_file) {
             Ok(c) => c,
             Err(_) => continue,
@@ -457,6 +464,7 @@ pub fn load_tasks(tasks_dir: &Path) -> Vec<LoadedTask> {
                 state,
                 archived: false,
                 jira_key: None,
+                state_mtime,
             }),
             Err(_) => continue,
         }
@@ -509,12 +517,165 @@ pub fn load_tasks(tasks_dir: &Path) -> Vec<LoadedTask> {
             state,
             archived: true,
             jira_key: None,
+            state_mtime: None,
         });
     }
 
     // 5. Sort all by task_id
     tasks.sort_by(|a, b| a.state.task_id.cmp(&b.state.task_id));
     tasks
+}
+
+/// Incrementally reload tasks: only re-read state.json when mtime changed.
+/// `prev_tasks` is the previous load result. Returns (tasks, changed_task_ids).
+/// `changed_task_ids` lists task IDs whose state.json was actually re-read.
+pub fn load_tasks_incremental(
+    tasks_dir: &Path,
+    prev_tasks: &[LoadedTask],
+) -> (Vec<LoadedTask>, Vec<String>) {
+    let re = regex::Regex::new(r"^TASK_(\d+)$").unwrap();
+    let mut tasks = Vec::new();
+    let mut changed_ids = Vec::new();
+    let mut on_disk_nums: std::collections::HashSet<u32> = std::collections::HashSet::new();
+
+    // Build lookup from previous load: task_id -> &LoadedTask
+    let mut prev_map: HashMap<String, &LoadedTask> = HashMap::new();
+    for lt in prev_tasks {
+        prev_map.insert(lt.state.task_id.clone(), lt);
+    }
+
+    // 1. Scan directories
+    let entries = match std::fs::read_dir(tasks_dir) {
+        Ok(e) => e,
+        Err(_) => return (tasks, changed_ids),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if let Some(caps) = re.captures(name) {
+                if let Ok(num) = caps[1].parse::<u32>() {
+                    on_disk_nums.insert(num);
+                }
+            }
+        }
+
+        let state_file = path.join("state.json");
+        if !state_file.exists() {
+            // Fallback: metadata.json (same as existing logic)
+            let meta_file = path.join("metadata.json");
+            if meta_file.exists() {
+                if let Ok(content) = std::fs::read_to_string(&meta_file) {
+                    if let Ok(meta) = serde_json::from_str::<TaskMetadata>(&content) {
+                        let jira_key = if meta.jira_key.is_empty() {
+                            None
+                        } else {
+                            Some(meta.jira_key.clone())
+                        };
+                        let state = TaskState::from_metadata(&meta);
+                        tasks.push(LoadedTask {
+                            dir: path,
+                            state,
+                            archived: true,
+                            jira_key,
+                            state_mtime: None,
+                        });
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Check mtime against previous
+        let current_mtime = std::fs::metadata(&state_file)
+            .ok()
+            .and_then(|m| m.modified().ok());
+
+        let task_id_guess = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        // If we have a previous version and mtime hasn't changed, reuse it
+        if let Some(prev_lt) = prev_map.get(&task_id_guess) {
+            if prev_lt.state_mtime == current_mtime && current_mtime.is_some() {
+                // Reuse previous -- no disk read
+                let mut reused = (*prev_lt).clone();
+                reused.dir = path;
+                tasks.push(reused);
+                continue;
+            }
+        }
+
+        // mtime changed or new task -- read from disk
+        let content = match std::fs::read_to_string(&state_file) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        match serde_json::from_str::<TaskState>(&content) {
+            Ok(state) => {
+                changed_ids.push(state.task_id.clone());
+                tasks.push(LoadedTask {
+                    dir: path,
+                    state,
+                    archived: false,
+                    jira_key: None,
+                    state_mtime: current_mtime,
+                });
+            }
+            Err(_) => continue,
+        }
+    }
+
+    // 2-5: Registry gap-filling (identical to load_tasks)
+    let registry = load_registry(tasks_dir);
+    let max_from_disk = on_disk_nums.iter().copied().max().unwrap_or(0);
+    let max_from_registry = registry
+        .keys()
+        .filter_map(|id| id.strip_prefix("TASK_"))
+        .filter_map(|s| s.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0);
+    let max_num = max_from_disk.max(max_from_registry);
+
+    let on_disk_task_ids: std::collections::HashSet<String> =
+        tasks.iter().map(|t| t.state.task_id.clone()).collect();
+
+    for num in 1..=max_num {
+        let task_id = format!("TASK_{:03}", num);
+        if on_disk_task_ids.contains(&task_id) {
+            continue;
+        }
+        let mut state = TaskState {
+            task_id: task_id.clone(),
+            ..Default::default()
+        };
+        if let Some(reg) = registry.get(&task_id) {
+            state.description = reg.description.clone();
+            state.created_at = reg.created_at.clone();
+            if !reg.branch.is_empty() {
+                state.worktree = Some(WorktreeInfo {
+                    branch: reg.branch.clone(),
+                    ..Default::default()
+                });
+            }
+        } else {
+            state.description = "(deleted)".to_string();
+        }
+        tasks.push(LoadedTask {
+            dir: tasks_dir.join(&task_id),
+            state,
+            archived: true,
+            jira_key: None,
+            state_mtime: None,
+        });
+    }
+
+    tasks.sort_by(|a, b| a.state.task_id.cmp(&b.state.task_id));
+    (tasks, changed_ids)
 }
 
 impl TaskState {
@@ -648,5 +809,43 @@ mod tests {
         }"#;
         let state: TaskState = serde_json::from_str(json).unwrap();
         assert!((state.phase_progress() - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_load_tasks_incremental_reuses_unchanged() {
+        use std::io::Write;
+        let tmp = std::env::temp_dir().join("crew_board_test_incr");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("TASK_001")).unwrap();
+
+        // Write state.json
+        let state_path = tmp.join("TASK_001/state.json");
+        let mut f = std::fs::File::create(&state_path).unwrap();
+        writeln!(f, r#"{{"task_id":"TASK_001","description":"test"}}"#).unwrap();
+
+        // First load (full)
+        let tasks1 = load_tasks(&tmp);
+        assert_eq!(tasks1.len(), 1);
+        assert_eq!(tasks1[0].state.description, "test");
+        assert!(tasks1[0].state_mtime.is_some(), "load_tasks must capture mtime");
+
+        // Second load (incremental) -- should reuse since mtime unchanged
+        let (tasks2, changed) = load_tasks_incremental(&tmp, &tasks1);
+        assert_eq!(tasks2.len(), 1);
+        assert_eq!(tasks2[0].state.description, "test");
+        assert!(changed.is_empty(), "Nothing should have changed");
+
+        // Modify file (sleep to ensure mtime advances)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let mut f = std::fs::File::create(&state_path).unwrap();
+        writeln!(f, r#"{{"task_id":"TASK_001","description":"updated"}}"#).unwrap();
+
+        // Third load -- should detect change
+        let (tasks3, changed) = load_tasks_incremental(&tmp, &tasks2);
+        assert_eq!(tasks3.len(), 1);
+        assert_eq!(tasks3[0].state.description, "updated");
+        assert_eq!(changed, vec!["TASK_001"]);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

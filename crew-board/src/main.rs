@@ -251,6 +251,9 @@ fn run_app(
         // Check for cleanup worktree completion each tick
         app.cleanup_popup_check_completion();
 
+        // Check for background refresh completion each tick
+        app.check_bg_refresh();
+
         // Auto-refresh on poll interval
         if app.last_refresh.elapsed() >= Duration::from_secs(app.poll_interval_secs) {
             app.refresh();

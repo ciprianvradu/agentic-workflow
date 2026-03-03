@@ -52,6 +52,49 @@ impl RepoData {
         }
     }
 
+    /// Incrementally reload: only re-read tasks whose state.json mtime changed.
+    /// Returns the list of task_ids that were actually re-read from disk.
+    pub fn load_incremental(prev: &RepoData, repo_path: &Path) -> (Self, Vec<String>) {
+        let name = repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let tasks_dir = repo_path.join(".tasks");
+        let beads_dir = repo_path.join(".beads");
+
+        // Resolve symlinks for .tasks/
+        let resolved_tasks = if tasks_dir.is_symlink() {
+            match std::fs::read_link(&tasks_dir) {
+                Ok(target) => {
+                    let resolved = if target.is_absolute() {
+                        target
+                    } else {
+                        repo_path.join(target)
+                    };
+                    resolved.canonicalize().unwrap_or(resolved)
+                }
+                Err(_) => tasks_dir.clone(),
+            }
+        } else {
+            tasks_dir.clone()
+        };
+
+        let (tasks, changed_ids) =
+            task::load_tasks_incremental(&resolved_tasks, &prev.tasks);
+
+        (
+            RepoData {
+                name,
+                path: repo_path.to_path_buf(),
+                tasks,
+                issues: beads::load_issues(&beads_dir),
+                config_cascade: config::load_config_cascade(repo_path),
+            },
+            changed_ids,
+        )
+    }
+
     pub fn open_issue_count(&self) -> usize {
         self.issues.iter().filter(|i| i.status == "open").count()
     }
