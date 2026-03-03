@@ -242,7 +242,7 @@ class TestInitializationEdgeCases:
         state_file = clean_tasks_dir / "TASK_EXT_002" / "state.json"
         with open(state_file) as f:
             state = json.load(f)
-        assert state["phase"] == "architect"
+        assert state["phase"] is None
         assert state["iteration"] == 1
         assert state["phases_completed"] == []
 
@@ -254,6 +254,7 @@ class TestInitializationEdgeCases:
 class TestTransitionEdgeCases:
     def test_rerun_current_phase(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_010")
+        workflow_transition("architect", task_id="TASK_EXT_010")
         result = workflow_transition("architect", task_id="TASK_EXT_010")
         assert result["success"] is True
         assert "Re-running" in result["reason"]
@@ -266,6 +267,7 @@ class TestTransitionEdgeCases:
 
     def test_already_completed_phase_rejected(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_012")
+        workflow_transition("architect", task_id="TASK_EXT_012")
         workflow_transition("developer", task_id="TASK_EXT_012")
         workflow_transition("reviewer", task_id="TASK_EXT_012")
         # Try going back to architect (completed, not developer)
@@ -275,6 +277,7 @@ class TestTransitionEdgeCases:
 
     def test_forward_through_full_chain(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_013")
+        workflow_transition("architect", task_id="TASK_EXT_013")
         for phase in PHASE_ORDER[1:]:
             result = workflow_transition(phase, task_id="TASK_EXT_013")
             assert result["success"] is True, f"Failed transitioning to {phase}"
@@ -286,6 +289,7 @@ class TestTransitionEdgeCases:
 
     def test_loopback_from_skeptic_to_developer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_014")
+        workflow_transition("architect", task_id="TASK_EXT_014")
         workflow_transition("developer", task_id="TASK_EXT_014")
         workflow_transition("reviewer", task_id="TASK_EXT_014")
         workflow_transition("skeptic", task_id="TASK_EXT_014")
@@ -296,6 +300,7 @@ class TestTransitionEdgeCases:
 
     def test_transition_clears_review_issues_on_loopback(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_015")
+        workflow_transition("architect", task_id="TASK_EXT_015")
         workflow_transition("developer", task_id="TASK_EXT_015")
         workflow_transition("reviewer", task_id="TASK_EXT_015")
         workflow_add_review_issue("bug", "Found bug", task_id="TASK_EXT_015")
@@ -404,6 +409,7 @@ class TestCompletePhaseEdgeCases:
 
     def test_complete_already_completed_is_idempotent(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_051")
+        workflow_transition("architect", task_id="TASK_EXT_051")
         workflow_complete_phase(task_id="TASK_EXT_051")
         result = workflow_complete_phase(task_id="TASK_EXT_051")
         assert result["success"] is True
@@ -413,6 +419,7 @@ class TestCompletePhaseEdgeCases:
 
     def test_returns_remaining_phases(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_052")
+        workflow_transition("architect", task_id="TASK_EXT_052")
         result = workflow_complete_phase(task_id="TASK_EXT_052")
         assert "remaining_phases" in result
         assert len(result["remaining_phases"]) > 0
@@ -449,11 +456,13 @@ class TestIsCompleteEdgeCases:
 class TestCanTransitionEdgeCases:
     def test_valid_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_070")
+        workflow_transition("architect", task_id="TASK_EXT_070")
         result = workflow_can_transition("developer", task_id="TASK_EXT_070")
         assert result["can_transition"] is True
 
     def test_invalid_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_071")
+        workflow_transition("architect", task_id="TASK_EXT_071")
         result = workflow_can_transition("implementer", task_id="TASK_EXT_071")
         assert result["can_transition"] is False
 
@@ -493,12 +502,14 @@ class TestCanStopEdgeCases:
 
     def test_incomplete_with_missing_phases(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_082")
+        workflow_transition("architect", task_id="TASK_EXT_082")
         result = workflow_can_stop(task_id="TASK_EXT_082")
         assert result["can_stop"] is False
         assert "missing_phases" in result
 
     def test_worktree_active_no_phases(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_083")
+        workflow_transition("architect", task_id="TASK_EXT_083")
         # Manually set worktree active without completing phases
         task_dir = clean_tasks_dir / "TASK_EXT_083"
         with open(task_dir / "state.json") as f:
@@ -786,25 +797,25 @@ class TestResilienceEdgeCases:
 class TestModeDetectionEdgeCases:
     def test_database_keywords_full(self):
         result = workflow_detect_mode("Add database migration for users table")
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
         assert "database" in result["matched_keywords"]
 
     def test_api_breaking_full(self):
         result = workflow_detect_mode("Breaking API change for v2")
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
 
     def test_unknown_description_defaults_to_full(self):
         result = workflow_detect_mode("Do something completely generic with no keywords")
-        assert result["mode"] == "full"
+        assert result["mode"] == "reviewed"
         assert result["confidence"] == 0.5
 
     def test_turbo_blocked_by_database(self):
         result = workflow_detect_mode("Implement database connection pooling")
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
 
     def test_case_insensitive(self):
         result = workflow_detect_mode("FIX TYPO in README")
-        assert result["mode"] == "minimal"
+        assert result["mode"] == "standard"
 
 
 # ============================================================================

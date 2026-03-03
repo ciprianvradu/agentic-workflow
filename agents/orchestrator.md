@@ -45,7 +45,7 @@ For each checkbox in TASK_XXX.md:
 3. [checkpoint: documentation?] if configured
 ```
 
-The Technical Writer runs in **every workflow mode** (full, turbo, fast, minimal). It must complete BEFORE committing. The `crew_get_next_phase()` routing ensures this automatically — after implementer (and feedback if in full mode), the next `spawn_agent` action is for `technical_writer`.
+The Technical Writer runs in **every workflow mode** (standard, reviewed, thorough). It must complete BEFORE committing. The `crew_get_next_phase()` routing ensures this automatically — after implementer (and feedback if in thorough mode), the next `spawn_agent` action is for `technical_writer`.
 
 ### Phase 4: Completion
 ```
@@ -91,11 +91,11 @@ Before spawning each agent, query the recommended thinking effort level:
 
 ```
 workflow_get_effort_level(agent: "architect")
-→ { "effort": "max", "mode": "full" }
+→ { "effort": "max", "mode": "thorough" }
 ```
 
 Include the effort level in the agent's prompt context so it can calibrate its analysis depth. The effort levels map workflow modes to appropriate thinking depth:
-- **max**: Deep analysis with edge cases — planning agents in full mode
+- **max**: Deep analysis with edge cases — planning agents in thorough mode
 - **high**: Thorough but focused — most implementation agents
 - **medium**: Standard analysis — documentation and simple tasks
 - **low**: Quick pass — unused in current modes
@@ -108,17 +108,18 @@ When using the Messages API, map effort levels to API parameters:
 
 ## Spawning Agents
 
-Use the Task tool to spawn specialized agents. Always set `max_turns` from config to prevent runaway discovery loops:
+Use the Task tool to spawn specialized agents. Always use the `model` returned by `crew_get_next_phase()` and set `max_turns` from config to prevent runaway discovery loops:
 
 ```
+next = crew_get_next_phase()
 Task(
   subagent_type: "general-purpose",
-  prompt: "[Load agent prompt from .claude/agents/architect.md]
+  prompt: "[Load agent prompt from next.agent_prompt_path]
            [Include current context]
            [Include knowledge base]
            [Include task description]",
-  model: "opus",
-  max_turns: 30   // from subagent_limits.max_turns.planning_agents
+  model: next.model,           // from crew_get_next_phase() — routes per mode+agent
+  max_turns: next.max_turns    // from subagent_limits config
 )
 ```
 
@@ -234,7 +235,7 @@ $TASK_DESCRIPTION
 
 Provide your {agent type} analysis.
 ",
-  model: "opus"
+  model: next.model              // from crew_get_next_phase()
 )
 ```
 

@@ -83,7 +83,7 @@ class TestInitCommand:
         result = run_orchestrator("init", "--args", '"Fix typo in README" --mode minimal')
         assert result["action"] == "start"
         assert result["task_id"]
-        assert result["mode"] == "minimal"
+        assert result["mode"] == "standard"
         assert "next" in result
 
         # Clean up

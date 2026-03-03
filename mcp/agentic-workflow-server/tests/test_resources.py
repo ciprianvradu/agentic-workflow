@@ -103,7 +103,7 @@ class TestGetTaskState:
         workflow_initialize(task_id="TASK_RES_010")
         result = get_task_state("TASK_RES_010")
         assert result["task_id"] == "TASK_RES_010"
-        assert result["phase"] == "architect"
+        assert result["phase"] is None  # Phase is None until mode is set and transition happens
 
     def test_nonexistent_task_returns_error(self, clean_tasks_dir):
         result = get_task_state("TASK_NONEXISTENT_RES")

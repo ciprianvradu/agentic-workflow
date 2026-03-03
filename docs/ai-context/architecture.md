@@ -29,7 +29,7 @@ Detailed architecture reference for AI agents working on the agentic-workflow co
 
 ## MCP Server Internals
 
-### state_tools.py — The Core (~3800 lines)
+### state_tools.py — The Core (~4200 lines)
 
 This is the largest and most important module. It manages all persistent workflow state.
 
@@ -71,9 +71,16 @@ This is the largest and most important module. It manages all persistent workflo
 - `workflow_complete_parallel_phase(phase_name, output)` — Record parallel output
 - `workflow_merge_parallel_results(phase_names)` — Deduplicate and merge
 
+#### Concurrent Access
+- `workflow_guard_acquire(task_id)` — Acquire task-level FileLock (`.workflow.lock`), prevents two orchestrators on same task
+- `workflow_guard_release(task_id)` — Release the task guard
+
 #### Quality & Error Patterns
 - `workflow_add_assertion(name, check)` / `workflow_verify_assertion(name)` — Quality gates
-- `workflow_record_error_pattern(error, solution)` / `workflow_match_error(error)` — Error learning
+- `workflow_record_error_pattern(error, solution)` / `workflow_match_error(error)` — Error learning (capped at 500 entries with oldest-first rotation)
+
+#### Security
+- `_is_safe_task_id(task_id)` — Validates task IDs (rejects `../`, `/`, `\`, null bytes, hidden files)
 
 #### Cost Tracking
 - `workflow_record_cost(agent, model, input_tokens, output_tokens)` — Per-agent cost
@@ -83,6 +90,20 @@ This is the largest and most important module. It manages all persistent workflo
 - `workflow_detect_mode(description)` — Auto-detect workflow mode from task text
 - `workflow_set_mode(mode)` / `workflow_get_mode()` — Manual mode control
 - `workflow_get_effort_level(agent)` — Recommended thinking depth per mode
+
+**Workflow Modes:**
+| Mode | Agents | Use case |
+|------|--------|----------|
+| **standard** | developer → implementer → technical_writer | Routine features, fixes, refactors |
+| **reviewed** | architect → developer → reviewer → implementer → technical_writer | Non-trivial changes needing review |
+| **thorough** | architect → developer → reviewer → skeptic → implementer → feedback → technical_writer | Security, migrations, breaking changes |
+
+Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+
+**Model Routing:** `_build_phase_action()` returns a `model` field resolved from config:
+- Fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
+- Standard mode defaults to Sonnet, reviewed/thorough use Opus for planning agents
+- Override with `models.default: opus` in project config to use Opus everywhere
 
 **Internal helpers (prefixed with `_`):**
 - `_load_state(task_dir)` / `_save_state(task_dir, state)` — JSON I/O with file locking
@@ -106,13 +127,13 @@ Key config sections:
 
 **Multi-platform config paths** — The server searches for config files in Claude, Copilot, Gemini, and OpenCode config directories (in that preference order).
 
-### orchestration_tools.py — Crew Helpers (~1400 lines)
+### orchestration_tools.py — Crew Helpers (~1500 lines)
 
 High-level functions called by the `/crew` command and `scripts/crew_orchestrator.py`:
 
 - `crew_parse_args(raw_args)` — Parse command arguments (action, task description, options)
 - `crew_init_task(description, options)` — Full task initialization (config, state, mode, KB inventory)
-- `crew_get_next_phase(task_id)` — Returns next action: spawn_agent, checkpoint, complete
+- `crew_get_next_phase(task_id)` — Returns next action: spawn_agent, checkpoint (with structured question/options), complete
 - `crew_parse_agent_output(agent, output_text)` — Extract issues and recommendations
 - `crew_get_implementation_action(task_id, verification_passed?, error_output?)` — Implementation loop logic
 - `crew_format_completion(task_id, files_changed)` — Final summary, commit message, cleanup
@@ -509,9 +530,11 @@ tests/
 ├── test_state_tools_extended.py # Additional state tests (assertions, errors, etc.)
 ├── test_config_tools.py         # Config loading, cascade, platform paths
 ├── test_config_tools_extended.py # Additional config edge cases
-├── test_orchestration_tools.py  # Crew helpers (arg parsing, phase routing, Jira transition)
+├── test_orchestration_tools.py  # Crew helpers (arg parsing, phase routing, checkpoints, Jira transition)
 ├── test_crew_orchestrator.py    # CLI orchestrator script (subprocess tests)
 ├── test_resources.py            # MCP resource tests
+├── test_scripts.py              # Deterministic CLI scripts (crew-config, crew-status, crew-cost-report, crew-stats)
+├── test_security.py             # Security tests (path traversal, shell injection, oversized inputs, symlinks)
 └── conftest.py                  # Shared fixtures
 ```
 

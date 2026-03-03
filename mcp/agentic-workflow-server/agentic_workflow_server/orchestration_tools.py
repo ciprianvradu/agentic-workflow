@@ -16,6 +16,7 @@ from typing import Any, Optional
 from .state_tools import (
     find_task_dir,
     workflow_initialize,
+    workflow_transition,
     workflow_detect_mode,
     workflow_set_mode,
     workflow_set_kb_inventory,
@@ -29,6 +30,8 @@ from .state_tools import (
     workflow_add_review_issue,
     workflow_add_concern,
     workflow_log_interaction,
+    workflow_guard_acquire,
+    workflow_guard_release,
     _load_state,
     _save_state,
     _REPO_ROOT,
@@ -43,8 +46,93 @@ from .config_tools import (
 )
 
 # ============================================================================
+# Constants
+# ============================================================================
+
+# Max seconds to spend listing KB files before returning partial results
+KB_LISTING_TIMEOUT = 10
+
+# Max KB files to list (prevents huge inventories)
+KB_LISTING_MAX_FILES = 500
+
+
+# ============================================================================
 # Helpers
 # ============================================================================
+
+def _list_kb_files(kb_path: Path, timeout_seconds: int = KB_LISTING_TIMEOUT) -> list[str]:
+    """List files in the knowledge base directory with a timeout.
+
+    Prevents init stalling on huge directory trees. Returns partial results
+    if the timeout is reached.
+
+    Args:
+        kb_path: Path to the knowledge base directory
+        timeout_seconds: Max seconds before aborting (default: KB_LISTING_TIMEOUT)
+
+    Returns:
+        List of relative file paths (may be partial if timeout hit)
+    """
+    import time
+    files: list[str] = []
+    start = time.monotonic()
+    try:
+        for f in kb_path.rglob("*"):
+            if time.monotonic() - start > timeout_seconds:
+                break
+            if f.is_file():
+                files.append(str(f.relative_to(kb_path)))
+                if len(files) >= KB_LISTING_MAX_FILES:
+                    break
+    except Exception:
+        pass  # Permission errors, broken symlinks, etc.
+    return files
+
+
+def _validate_beads_issue(issue_key: str) -> tuple[bool, str]:
+    """Validate that a beads issue exists and can be closed.
+
+    Runs ``bd show <issue_key>`` and checks the output. Returns (valid, warning).
+    If the issue doesn't exist or is already closed, returns (False, reason).
+    If bd is not installed, returns (True, "") to avoid blocking.
+
+    Args:
+        issue_key: The beads issue key (e.g., "AW-123")
+
+    Returns:
+        Tuple of (is_valid, warning_message)
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["bd", "show", issue_key],
+            capture_output=True, text=True, timeout=5
+        )
+        output = result.stdout + result.stderr
+
+        if result.returncode != 0:
+            if "not found" in output.lower() or "no such" in output.lower():
+                return False, f"Issue {issue_key} not found — cannot close"
+            # bd returned error for another reason — allow but warn
+            return True, f"Could not verify issue {issue_key}: {output.strip()[:100]}"
+
+        # Check if already closed
+        output_lower = output.lower()
+        if "closed" in output_lower and "status" in output_lower:
+            # Simple heuristic: if the status line shows closed
+            for line in output.splitlines():
+                if "closed" in line.lower() and ("status" in line.lower() or "CLOSED" in line):
+                    return False, f"Issue {issue_key} is already closed"
+
+        return True, ""
+    except FileNotFoundError:
+        # bd not installed — don't block
+        return True, ""
+    except subprocess.TimeoutExpired:
+        return True, f"Timed out checking issue {issue_key}"
+    except Exception:
+        return True, ""
+
 
 def _slugify(text: str) -> str:
     """Convert text to git-branch-safe slug."""
@@ -194,10 +282,10 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
 
         if token == "--mode" and i + 1 < len(tokens):
             mode_val = tokens[i + 1]
-            if mode_val in ("full", "turbo", "fast", "minimal", "auto"):
+            if mode_val in ("standard", "reviewed", "thorough", "full", "turbo", "fast", "minimal", "auto"):
                 options["mode"] = mode_val
             else:
-                errors.append(f"Invalid mode '{mode_val}'. Must be: full, turbo, fast, minimal, auto")
+                errors.append(f"Invalid mode '{mode_val}'. Must be: standard, reviewed, thorough, auto (legacy: full, turbo, fast, minimal)")
             i += 2
         elif token == "--loop-mode":
             options["loop_mode"] = True
@@ -383,6 +471,11 @@ def crew_init_task(
         return init_result
 
     task_id = init_result["task_id"]
+
+    # Step 3.1: Acquire workflow guard (prevents concurrent orchestrators)
+    guard_result = workflow_guard_acquire(task_id=task_id)
+    if not guard_result.get("success"):
+        return guard_result
     task_dir_str = init_result["task_dir"]
 
     # Step 3.5: Store linked_issue if beads option provided
@@ -396,16 +489,23 @@ def crew_init_task(
     # Step 4: Determine and set mode
     mode_to_set = options.get("mode", "auto")
     mode_result = workflow_set_mode(mode=mode_to_set, task_id=task_id)
-    effective_mode = "full"
+    effective_mode = "reviewed"
     if mode_result.get("success"):
         effective_mode = mode_result["workflow_mode"]["effective"]
 
-    # Step 5: Inventory knowledge base
+    # Step 4.5: Transition to the correct first phase for this mode
+    # workflow_initialize sets phase=None; we now set it to the mode's first phase.
+    # This fixes the bug where standard mode (developer-first) got stuck on architect.
+    mode_phases = mode_result.get("workflow_mode", {}).get("phases", [])
+    first_phase = mode_phases[0] if mode_phases else "architect"
+    workflow_transition(to_phase=first_phase, task_id=task_id)
+
+    # Step 5: Inventory knowledge base (with timeout to prevent stalling)
     kb_path = config.get("knowledge_base", "docs/ai-context/")
     kb_files = []
     kb_full_path = Path(project_dir) / kb_path if project_dir else Path.cwd() / kb_path
     if kb_full_path.exists() and kb_full_path.is_dir():
-        kb_files = [str(f.relative_to(kb_full_path)) for f in kb_full_path.rglob("*") if f.is_file()]
+        kb_files = _list_kb_files(kb_full_path, timeout_seconds=KB_LISTING_TIMEOUT)
     workflow_set_kb_inventory(path=str(kb_path), files=kb_files, task_id=task_id)
 
     # Step 6: Detect optional agents
@@ -676,8 +776,8 @@ def crew_get_next_phase(
     current_phase = state.get("phase")
     phases_completed = [p.lower().replace("-", "_") for p in state.get("phases_completed", [])]
     mode_config = state.get("workflow_mode", {})
-    effective_mode = mode_config.get("effective", "full")
-    mode_phases = mode_config.get("phases", WORKFLOW_MODES.get(effective_mode, WORKFLOW_MODES["full"])["phases"])
+    effective_mode = mode_config.get("effective", "reviewed")
+    mode_phases = mode_config.get("phases", WORKFLOW_MODES.get(effective_mode, WORKFLOW_MODES["reviewed"])["phases"])
     optional_phases = state.get("optional_phases", [])
 
     # Get effective config for checkpoint/parallel settings
@@ -697,14 +797,14 @@ def crew_get_next_phase(
         if checkpoint:
             concerns = state.get("concerns", [])
             unaddressed = [c for c in concerns if not c.get("addressed_by")]
-            return {
-                "action": "checkpoint",
-                "phase": current_phase,
-                "checkpoint_name": checkpoint,
-                "task_id": state.get("task_id"),
-                "unaddressed_concerns": unaddressed,
-                "concerns_count": len(unaddressed),
-            }
+            should_trigger, reason = _should_trigger_checkpoint(
+                checkpoint, unaddressed, config
+            )
+            if should_trigger:
+                return _build_checkpoint_result(
+                    current_phase, checkpoint, state, concerns
+                )
+            # Threshold not met — auto-proceed (skip checkpoint)
         # Phase output not yet processed - orchestrator should process it
         return {
             "action": "process_output",
@@ -784,6 +884,14 @@ def _build_phase_action(
     effort_result = workflow_get_effort_level(agent=agent, task_id=task_id)
     effort = effort_result.get("effort", "high")
 
+    # Get model for this agent (mode-specific → agent-specific flat → default)
+    models_config = config.get("models", {})
+    default_model = models_config.get("default", "opus")
+    effective_mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    mode_models = models_config.get(effective_mode, {})
+    # Fallback chain: mode-specific → flat agent-specific → default
+    model = mode_models.get(agent) or models_config.get(agent) or default_model
+
     # Get max turns from config first, then hardcoded defaults
     subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
     category = AGENT_LIMIT_CATEGORY.get(agent, "planning_agents")
@@ -818,6 +926,7 @@ def _build_phase_action(
         "agent_prompt_path": agent_prompt_path,
         "context_files": context_files,
         "effort_level": effort,
+        "model": model,
         "max_turns": max_turns,
         "checkpoint_after": checkpoint_after,
         "variables": variables,
@@ -913,6 +1022,110 @@ def _get_checkpoint_for_phase(phase: str, config: dict) -> Optional[str]:
             return "after_technical_writer"
 
     return None
+
+
+# Severity ranking for threshold comparison
+_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+
+def _should_trigger_checkpoint(
+    checkpoint_name: str,
+    concerns: list[dict],
+    config: dict,
+) -> tuple[bool, str]:
+    """Determine whether a checkpoint should actually fire.
+
+    Uses config thresholds to decide. Returns (should_trigger, reason).
+
+    Config keys (under checkpoints):
+      concern_threshold: int  — min unaddressed concerns to trigger (default: 0 = always)
+      concern_severity_threshold: str  — min severity to count (default: "low")
+
+    When threshold is 0, the checkpoint always fires if configured.
+    When threshold > 0, concerns below the severity threshold are ignored,
+    and the checkpoint only fires if remaining count >= threshold.
+    """
+    checkpoints_config = config.get("checkpoints", {})
+    threshold = checkpoints_config.get("concern_threshold", 0)
+    severity_threshold = checkpoints_config.get("concern_severity_threshold", "low")
+
+    # threshold=0 means always trigger when configured
+    if threshold <= 0:
+        return True, "checkpoint configured (always-on)"
+
+    # Filter by severity
+    min_rank = _SEVERITY_RANK.get(severity_threshold, 1)
+    qualifying = [
+        c for c in concerns
+        if _SEVERITY_RANK.get(c.get("severity", "medium"), 2) >= min_rank
+        and not c.get("addressed_by")
+    ]
+
+    if len(qualifying) >= threshold:
+        return True, f"{len(qualifying)} concerns at or above '{severity_threshold}' severity"
+
+    return False, f"only {len(qualifying)} concerns (threshold: {threshold})"
+
+
+def _build_checkpoint_result(
+    phase: str,
+    checkpoint_name: str,
+    state: dict,
+    concerns: list[dict],
+) -> dict[str, Any]:
+    """Build a structured checkpoint response with pre-built question/options.
+
+    Returns everything the orchestrator needs to present the checkpoint
+    via AskUserQuestion — no LLM interpretation required.
+    """
+    task_id = state.get("task_id", "?")
+    unaddressed = [c for c in concerns if not c.get("addressed_by")]
+
+    # Build concern summary for the question
+    if unaddressed:
+        # Group by severity
+        by_severity: dict[str, list[str]] = {}
+        for c in unaddressed:
+            sev = c.get("severity", "medium")
+            by_severity.setdefault(sev, []).append(c.get("description", "?")[:120])
+
+        summary_parts = []
+        for sev in ["critical", "high", "medium", "low"]:
+            items = by_severity.get(sev, [])
+            if items:
+                summary_parts.append(f"**{sev}** ({len(items)}): {items[0]}")
+                if len(items) > 1:
+                    summary_parts[-1] += f" (+{len(items)-1} more)"
+
+        concern_summary = "; ".join(summary_parts)
+        question = (
+            f"Phase '{phase}' complete for {task_id}. "
+            f"{len(unaddressed)} unaddressed concern(s): {concern_summary}. "
+            f"How should we proceed?"
+        )
+    else:
+        question = (
+            f"Phase '{phase}' complete for {task_id}. "
+            f"No concerns raised. How should we proceed?"
+        )
+
+    return {
+        "action": "checkpoint",
+        "phase": phase,
+        "checkpoint_name": checkpoint_name,
+        "task_id": task_id,
+        "unaddressed_concerns": unaddressed,
+        "concerns_count": len(unaddressed),
+        "question": {
+            "text": question,
+            "header": "Checkpoint",
+            "options": [
+                {"label": "Approve", "description": "Proceed to the next phase"},
+                {"label": "Revise", "description": "Ask the agent to address concerns before continuing"},
+                {"label": "Skip", "description": "Dismiss concerns and continue anyway"},
+            ],
+        },
+    }
 
 
 # ============================================================================
@@ -1229,7 +1442,7 @@ def crew_format_completion(
 
     # Generate commit message
     description = state.get("description", "workflow task")
-    mode = state.get("workflow_mode", {}).get("effective", "full")
+    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
     file_summary = f"{len(files_changed)} files changed" if files_changed else "files changed"
     commit_message = f"{description}\n\nCompleted via /crew ({mode} mode), {file_summary}"
 
@@ -1253,18 +1466,30 @@ def crew_format_completion(
             f"python3 {_REPO_ROOT / 'scripts' / 'cleanup-worktree.py'} {resolved_task_id} --remove-branch",
         ]
 
-    # Beads commands
+    # Beads commands (with pre-validation)
     beads_commands = []
+    beads_warnings = []
     beads_config = config.get("beads", {})
     linked_issue = state.get("linked_issue")
 
     if beads_config.get("enabled") and linked_issue:
-        beads_commands.append(f"bd close {linked_issue}")
-        if beads_config.get("add_comments"):
-            beads_commands.append(f"bd comments add {linked_issue} 'Completed via /crew workflow {resolved_task_id}'")
-        beads_commands.append("bd sync")
+        # Validate that the issue exists and is in a closable state
+        issue_valid, issue_warning = _validate_beads_issue(linked_issue)
+        if issue_warning:
+            beads_warnings.append(issue_warning)
 
-    return {
+        if issue_valid:
+            beads_commands.append(f"bd close {linked_issue}")
+            if beads_config.get("add_comments"):
+                beads_commands.append(f"bd comments add {linked_issue} 'Completed via /crew workflow {resolved_task_id}'")
+            beads_commands.append("bd sync")
+        else:
+            beads_commands.append(f"# Skipped: {issue_warning}")
+
+    # Release workflow guard so task can be re-run if needed
+    workflow_guard_release(task_id=resolved_task_id)
+
+    result = {
         "task_id": resolved_task_id,
         "cost_summary": cost_result,
         "commit_message": commit_message,
@@ -1274,6 +1499,9 @@ def crew_format_completion(
         "files_changed": files_changed,
         "mode": mode
     }
+    if beads_warnings:
+        result["beads_warnings"] = beads_warnings
+    return result
 
 
 # ============================================================================
@@ -1300,7 +1528,7 @@ def crew_get_resume_state(
     state = _load_state(task_dir)
     current_phase = state.get("phase")
     phases_completed = state.get("phases_completed", [])
-    mode = state.get("workflow_mode", {}).get("effective", "full")
+    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
     progress = state.get("implementation_progress", {})
 
     # Determine resume point

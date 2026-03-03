@@ -79,6 +79,9 @@ from .state_tools import (
     # Error patterns
     workflow_record_error_pattern,
     workflow_match_error,
+    # Concurrent workflow guard
+    workflow_guard_acquire,
+    workflow_guard_release,
     # Agent performance
     workflow_record_concern_outcome,
     workflow_get_agent_performance,
@@ -744,7 +747,7 @@ TOOLS = [
     # Workflow Modes
     Tool(
         name="workflow_detect_mode",
-        description="Auto-detect the appropriate workflow mode based on task description. Analyzes keywords and patterns to suggest full, fast, or minimal mode.",
+        description="Auto-detect the appropriate workflow mode based on task description. Analyzes keywords and patterns to suggest standard, reviewed, or thorough mode.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -763,14 +766,14 @@ TOOLS = [
     ),
     Tool(
         name="workflow_set_mode",
-        description="Set the workflow mode for a task. Mode determines which agents run (full=all 7, turbo=dev+impl+tw with single-pass planning, fast=skip skeptic/feedback, minimal=dev+impl only).",
+        description="Set the workflow mode for a task. standard=dev+impl+writer (routine), reviewed=adds architect+reviewer (non-trivial), thorough=full 7-agent pipeline (critical). Legacy aliases: full→thorough, turbo/minimal→standard, fast→reviewed.",
         inputSchema={
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
-                    "description": "Workflow mode",
-                    "enum": ["full", "turbo", "fast", "minimal", "auto"]
+                    "description": "Workflow mode (standard, reviewed, thorough) or legacy alias (full, turbo, fast, minimal)",
+                    "enum": ["standard", "reviewed", "thorough", "full", "turbo", "fast", "minimal", "auto"]
                 },
                 "task_id": {
                     "type": "string",
@@ -1097,6 +1100,33 @@ TOOLS = [
                 }
             },
             "required": ["error_output"]
+        }
+    ),
+    # Concurrent Workflow Guard
+    Tool(
+        name="workflow_guard_acquire",
+        description="Acquire an exclusive workflow guard for a task. Prevents two orchestrators from running the same task simultaneously.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to guard (uses active task if omitted)"
+                }
+            }
+        }
+    ),
+    Tool(
+        name="workflow_guard_release",
+        description="Release the workflow guard for a task, allowing other orchestrators to run it.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID to release (uses active task if omitted)"
+                }
+            }
         }
     ),
     # Agent Performance
@@ -1592,6 +1622,8 @@ TOOL_DISPATCH_TABLE = {
     "workflow_get_assertions": workflow_get_assertions,
     "workflow_record_error_pattern": workflow_record_error_pattern,
     "workflow_match_error": workflow_match_error,
+    "workflow_guard_acquire": workflow_guard_acquire,
+    "workflow_guard_release": workflow_guard_release,
     "workflow_record_concern_outcome": workflow_record_concern_outcome,
     "workflow_get_agent_performance": workflow_get_agent_performance,
     "workflow_enable_optional_phase": workflow_enable_optional_phase,

@@ -60,6 +60,16 @@ Report:
 - Test results
 - Any deviations or concerns
 
+## Self-Correction via Hooks
+
+When hooks are configured in the project (e.g., PostToolUse, Stop hooks), use them as your primary feedback loop:
+
+- **After writing code**: If a PostToolUse hook runs linting/formatting, check its output and fix issues immediately — don't wait for the Reviewer agent.
+- **After running tests**: If tests fail, analyze failures and fix before moving to the next step.
+- **Build errors**: Treat hook feedback as authoritative. Fix issues inline rather than flagging for later review.
+
+Hooks replace the need for a separate Reviewer pass on routine tasks. The Reviewer agent in "reviewed" and "thorough" modes catches architectural issues that hooks cannot — but for formatting, linting, and type errors, hooks are faster and more reliable.
+
 ## When to STOP and Report
 
 **Stop immediately if:**

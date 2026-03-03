@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-03-02
+
+### Added
+- **Workflow mode consolidation** — 4 modes (full/turbo/fast/minimal) consolidated to 3 (standard/reviewed/thorough) with backward-compatible aliases
+- **Functional model routing** — per-mode, per-agent model config in `workflow-config.yaml` with fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
+- **Deterministic checkpoint invocation** — `_should_trigger_checkpoint()` evaluates `concern_threshold` + `concern_severity_threshold` from config; `_build_checkpoint_result()` returns pre-built question/options for `AskUserQuestion`
+- **Path traversal guard** — `_is_safe_task_id()` validates task IDs, rejecting `../`, `/`, `\`, null bytes
+- **Shell injection protection** — `shlex.quote()` applied to all git command variables in `workflow_create_worktree()` and `workflow_cleanup_worktree()`
+- **Concurrent workflow guard** — `workflow_guard_acquire()`/`workflow_guard_release()` with FileLock prevents two orchestrators on the same task
+- **Error pattern JSONL rotation** — `MAX_ERROR_PATTERNS=500` with oldest-first eviction in `workflow_record_error_pattern()`
+- **File scope analysis** — `_analyze_file_scope()` with `SCOPE_ESCALATION_RULES` enhances `workflow_detect_mode()` combining keyword + scope signals
+- **KB listing timeout** — `_list_kb_files()` with 10s timeout and 500-file cap prevents init stalling on large trees
+- **Beads validation** — `_validate_beads_issue()` checks issue exists before emitting `bd close` commands
+- **Deterministic CLI scripts** — 4 Python scripts replace LLM-driven commands, saving ~5K tokens per invocation:
+  - `scripts/crew-config.py` — formatted config table from YAML cascade
+  - `scripts/crew-status.py` — task status table from state.json files
+  - `scripts/crew-cost-report.py` — cost breakdown per agent/model
+  - `scripts/crew-stats.py` — mode distribution, iteration stats, error patterns
+- **Script bundling in build system** — `BUNDLED_SCRIPTS` in `build-agents.py`, Claude build copies scripts to `~/.claude/scripts/`
+- **Task templates** — 5 example templates in `examples/` (bug-fix, new-feature, migration, refactor, new-endpoint)
+- **Security test suite** — 43 tests covering path traversal, shell injection, oversized inputs, symlink escape, input validation, error pattern integrity, concurrent access
+- **Checkpoint test suite** — 7 tests for deterministic checkpoint triggering with threshold and severity filtering
+- Checkpoint config: `concern_threshold` (default: 0 = always) and `concern_severity_threshold` (default: low)
+- 618 tests total (up from 509)
+
+### Changed
+- `agents/crew-status.md` and `agents/crew-stats.md` — reduced to thin wrappers calling Python scripts
+- `commands/crew-config.md` and `commands/crew-cost-report.md` — reduced to thin wrappers calling Python scripts
+- `crew_get_next_phase()` — checkpoint path now uses `_should_trigger_checkpoint()` + `_build_checkpoint_result()` instead of raw dict construction
+
+### Fixed
+- **Phase init bug** — standard mode (no architect) no longer gets stuck with `phase="architect"` that never produces output; `workflow_initialize()` sets `phase=None`, `crew_init_task()` sets it after mode is determined
+- **Path traversal in `find_task_dir()`** — task IDs with `../` could escape `.tasks/` directory
+- **Shell injection in worktree commands** — branch names with metacharacters (`; rm -rf /`, backticks, `$()`) were interpolated unquoted into git commands
+- **Unquoted cleanup script args** — `workflow_cleanup_worktree()` now quotes all script arguments
+
 ## [0.6.1] - 2026-02-23
 
 ### Added

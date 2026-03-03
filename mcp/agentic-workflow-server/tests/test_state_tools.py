@@ -80,6 +80,9 @@ from agentic_workflow_server.state_tools import (
     # Error patterns
     workflow_record_error_pattern,
     workflow_match_error,
+    # Concurrent workflow guard
+    workflow_guard_acquire,
+    workflow_guard_release,
     # Agent performance
     workflow_record_concern_outcome,
     workflow_get_agent_performance,
@@ -107,6 +110,9 @@ from agentic_workflow_server.state_tools import (
     INTERACTION_ROLES,
     INTERACTION_TYPES,
     PHASE_ORDER,
+    MAX_ERROR_PATTERNS,
+    SCOPE_ESCALATION_RULES,
+    _analyze_file_scope,
 )
 
 
@@ -183,7 +189,7 @@ class TestWorkflowInitialization:
 
         assert result["success"] is True
         assert result["task_id"] == "TASK_TEST_001"
-        assert result["phase"] == "architect"
+        assert result["phase"] is None  # Phase is None until mode set + transition
         assert (clean_tasks_dir / "TASK_TEST_001" / "state.json").exists()
 
     def test_initialize_with_description(self, clean_tasks_dir):
@@ -209,6 +215,7 @@ class TestWorkflowTransitions:
 
     def test_valid_forward_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_010")
+        workflow_transition("architect", task_id="TASK_TEST_010")
 
         result = workflow_transition("developer", task_id="TASK_TEST_010")
 
@@ -218,6 +225,7 @@ class TestWorkflowTransitions:
 
     def test_invalid_skip_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_011")
+        workflow_transition("architect", task_id="TASK_TEST_011")
 
         # Try to skip from architect to implementer
         result = workflow_transition("implementer", task_id="TASK_TEST_011")
@@ -227,6 +235,7 @@ class TestWorkflowTransitions:
 
     def test_loopback_to_developer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_012")
+        workflow_transition("architect", task_id="TASK_TEST_012")
         workflow_transition("developer", task_id="TASK_TEST_012")
         workflow_transition("reviewer", task_id="TASK_TEST_012")
 
@@ -577,22 +586,22 @@ class TestWorkflowModes:
     def test_detect_mode_minimal_typo(self, clean_tasks_dir):
         result = workflow_detect_mode("Fix typo in README")
 
-        assert result["mode"] == "minimal"
+        assert result["mode"] == "standard"
         assert result["confidence"] >= 0.7
         assert "typo" in result["matched_keywords"]
 
     def test_detect_mode_full_security(self, clean_tasks_dir):
         result = workflow_detect_mode("Implement user authentication with JWT")
 
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
         assert result["confidence"] >= 0.8
         assert "authentication" in result["matched_keywords"]
 
     def test_detect_mode_fast_feature(self, clean_tasks_dir):
-        # "Refactor" now detects as turbo (Opus 4.6 single-pass) since it matches turbo keywords
+        # "Refactor" now detects as standard mode
         result = workflow_detect_mode("Refactor the user profile component")
 
-        assert result["mode"] == "turbo"
+        assert result["mode"] == "standard"
         assert "refactor" in [k.lower() for k in result["matched_keywords"]]
 
     def test_set_mode_explicit(self, clean_tasks_dir):
@@ -601,7 +610,7 @@ class TestWorkflowModes:
         result = workflow_set_mode("minimal", task_id="TASK_TEST_100")
 
         assert result["success"] is True
-        assert result["workflow_mode"]["effective"] == "minimal"
+        assert result["workflow_mode"]["effective"] == "standard"
         assert "developer" in result["workflow_mode"]["phases"]
         assert "architect" not in result["workflow_mode"]["phases"]
 
@@ -612,7 +621,7 @@ class TestWorkflowModes:
 
         assert result["success"] is True
         assert result["workflow_mode"]["requested"] == "auto"
-        assert result["workflow_mode"]["effective"] == "minimal"
+        assert result["workflow_mode"]["effective"] == "standard"
 
     def test_get_mode(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_102")
@@ -620,7 +629,7 @@ class TestWorkflowModes:
 
         result = workflow_get_mode(task_id="TASK_TEST_102")
 
-        assert result["workflow_mode"]["effective"] == "fast"
+        assert result["workflow_mode"]["effective"] == "reviewed"
         assert "available_modes" in result
 
     def test_is_phase_in_mode(self, clean_tasks_dir):
@@ -636,7 +645,7 @@ class TestWorkflowModes:
         assert result2["in_mode"] is False
 
     def test_technical_writer_in_all_modes(self, clean_tasks_dir):
-        for mode in ["full", "turbo", "fast", "minimal"]:
+        for mode in ["standard", "reviewed", "thorough"]:
             task_id = f"TASK_TEST_TW_{mode}"
             workflow_initialize(task_id=task_id)
             workflow_set_mode(mode, task_id=task_id)
@@ -1199,18 +1208,18 @@ class TestOptionalPhases:
 
 
 class TestTurboMode:
-    """Test turbo workflow mode detection and management."""
+    """Test standard (formerly turbo) workflow mode detection and management."""
 
     def test_detect_mode_turbo(self, clean_tasks_dir):
         result = workflow_detect_mode("Implement a utility for date formatting")
 
-        assert result["mode"] == "turbo"
+        assert result["mode"] == "standard"
         assert result["confidence"] >= 0.7
 
     def test_detect_mode_turbo_blocked_by_security(self, clean_tasks_dir):
         result = workflow_detect_mode("Implement authentication token refresh")
 
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
         assert result["confidence"] >= 0.8
 
     def test_set_mode_turbo(self, clean_tasks_dir):
@@ -1219,7 +1228,7 @@ class TestTurboMode:
         result = workflow_set_mode("turbo", task_id="TASK_TEST_200")
 
         assert result["success"] is True
-        assert result["workflow_mode"]["effective"] == "turbo"
+        assert result["workflow_mode"]["effective"] == "standard"
         assert "developer" in result["workflow_mode"]["phases"]
         assert "implementer" in result["workflow_mode"]["phases"]
         assert "technical_writer" in result["workflow_mode"]["phases"]
@@ -1277,7 +1286,7 @@ class TestEffortLevels:
         result = workflow_get_effort_level("architect", task_id="TASK_TEST_220")
 
         assert result["effort"] == "max"
-        assert result["mode"] == "full"
+        assert result["mode"] == "thorough"
 
     def test_effort_turbo_mode_developer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_221")
@@ -1285,8 +1294,8 @@ class TestEffortLevels:
 
         result = workflow_get_effort_level("developer", task_id="TASK_TEST_221")
 
-        assert result["effort"] == "max"
-        assert result["mode"] == "turbo"
+        assert result["effort"] == "high"  # turbo→standard, developer effort is high
+        assert result["mode"] == "standard"
 
     def test_effort_minimal_mode_developer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_222")
@@ -1294,8 +1303,8 @@ class TestEffortLevels:
 
         result = workflow_get_effort_level("developer", task_id="TASK_TEST_222")
 
-        assert result["effort"] == "medium"
-        assert result["mode"] == "minimal"
+        assert result["effort"] == "high"  # minimal→standard, developer effort is high
+        assert result["mode"] == "standard"
 
     def test_effort_fast_mode_technical_writer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_223")
@@ -1304,7 +1313,7 @@ class TestEffortLevels:
         result = workflow_get_effort_level("technical_writer", task_id="TASK_TEST_223")
 
         assert result["effort"] == "medium"
-        assert result["mode"] == "fast"
+        assert result["mode"] == "reviewed"
 
     def test_effort_default_no_task(self, clean_tasks_dir):
         result = workflow_get_effort_level("architect", task_id="NONEXISTENT")
@@ -2558,6 +2567,340 @@ class TestInteractionLogging:
                 task_id="TASK_TEST_INT_008",
             )
             assert result["success"] is True, f"Failed for role {role}"
+
+
+# ============================================================================
+# AW-el3: Error pattern JSONL rotation
+# ============================================================================
+
+class TestErrorPatternRotation:
+    """Test error pattern file rotation (cap at MAX_ERROR_PATTERNS)."""
+
+    def test_rotation_constant_defined(self):
+        assert MAX_ERROR_PATTERNS == 500
+
+    def test_new_patterns_within_limit(self, clean_tasks_dir):
+        """Adding patterns under the limit should keep them all."""
+        for i in range(5):
+            result = workflow_record_error_pattern(
+                error_signature=f"rotation_test_error_{i}",
+                error_type="test",
+                solution=f"Fix #{i}"
+            )
+            assert result["success"] is True
+            assert result["action"] == "created"
+
+        # All 5 should be present
+        from agentic_workflow_server.state_tools import _get_error_patterns_file
+        patterns_file = _get_error_patterns_file()
+        with open(patterns_file) as f:
+            lines = [l for l in f if l.strip()]
+        rot_lines = [l for l in lines if "rotation_test_error_" in l]
+        assert len(rot_lines) == 5
+
+    def test_rotation_evicts_oldest(self, clean_tasks_dir):
+        """When exceeding MAX_ERROR_PATTERNS, oldest entries are evicted."""
+        from agentic_workflow_server.state_tools import _get_error_patterns_file
+        import json as _json
+
+        patterns_file = _get_error_patterns_file()
+        patterns_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Pre-seed the file with MAX_ERROR_PATTERNS entries
+        with open(patterns_file, "w") as f:
+            for i in range(MAX_ERROR_PATTERNS):
+                entry = {
+                    "signature": f"prefill_{i:04d}",
+                    "type": "test",
+                    "solution": f"fix {i}",
+                    "tags": [],
+                    "times_seen": 1,
+                    "created_at": f"2025-01-01T00:{i // 60:02d}:{i % 60:02d}",
+                    "updated_at": f"2025-01-01T00:{i // 60:02d}:{i % 60:02d}",
+                }
+                f.write(_json.dumps(entry) + "\n")
+
+        # Now add one more — should trigger rotation
+        result = workflow_record_error_pattern(
+            error_signature="new_after_rotation",
+            error_type="test",
+            solution="brand new fix"
+        )
+        assert result["success"] is True
+        assert result["action"] == "created"
+
+        # Verify file has exactly MAX_ERROR_PATTERNS entries
+        with open(patterns_file) as f:
+            lines = [l.strip() for l in f if l.strip()]
+        assert len(lines) == MAX_ERROR_PATTERNS
+
+        # The newest entry should be present
+        last = _json.loads(lines[-1])
+        assert last["signature"] == "new_after_rotation"
+
+        # The oldest entry (prefill_0000) should be evicted
+        all_sigs = [_json.loads(l)["signature"] for l in lines]
+        assert "prefill_0000" not in all_sigs
+
+    def test_update_existing_does_not_grow_file(self, clean_tasks_dir):
+        """Updating an existing pattern should not increase line count."""
+        workflow_record_error_pattern(
+            error_signature="stable_pattern",
+            error_type="test",
+            solution="original fix"
+        )
+
+        # Update the same pattern
+        result = workflow_record_error_pattern(
+            error_signature="stable_pattern",
+            error_type="test",
+            solution="updated fix",
+            tags=["extra"]
+        )
+        assert result["action"] == "updated"
+        assert result["pattern"]["times_seen"] == 2
+
+        from agentic_workflow_server.state_tools import _get_error_patterns_file
+        patterns_file = _get_error_patterns_file()
+        with open(patterns_file) as f:
+            lines = [l for l in f if l.strip()]
+        stable_lines = [l for l in lines if "stable_pattern" in l]
+        assert len(stable_lines) == 1
+
+
+# ============================================================================
+# AW-bfd: Concurrent workflow guard
+# ============================================================================
+
+class TestWorkflowGuard:
+    """Test concurrent workflow guard (task-level lockfile)."""
+
+    def test_acquire_and_release(self, clean_tasks_dir):
+        """Acquire then release should succeed."""
+        workflow_initialize(task_id="TASK_TEST_GUARD_001")
+        workflow_transition("architect", task_id="TASK_TEST_GUARD_001")
+
+        result = workflow_guard_acquire(task_id="TASK_TEST_GUARD_001")
+        assert result["success"] is True
+        assert result["task_id"] == "TASK_TEST_GUARD_001"
+
+        result = workflow_guard_release(task_id="TASK_TEST_GUARD_001")
+        assert result["success"] is True
+
+    def test_double_acquire_fails(self, clean_tasks_dir):
+        """Second acquire on same task should fail."""
+        workflow_initialize(task_id="TASK_TEST_GUARD_002")
+        workflow_transition("architect", task_id="TASK_TEST_GUARD_002")
+
+        result1 = workflow_guard_acquire(task_id="TASK_TEST_GUARD_002")
+        assert result1["success"] is True
+
+        result2 = workflow_guard_acquire(task_id="TASK_TEST_GUARD_002")
+        assert result2["success"] is False
+        assert "already active" in result2["error"]
+
+        # Clean up
+        workflow_guard_release(task_id="TASK_TEST_GUARD_002")
+
+    def test_release_allows_reacquire(self, clean_tasks_dir):
+        """After release, a new acquire should succeed."""
+        workflow_initialize(task_id="TASK_TEST_GUARD_003")
+        workflow_transition("architect", task_id="TASK_TEST_GUARD_003")
+
+        workflow_guard_acquire(task_id="TASK_TEST_GUARD_003")
+        workflow_guard_release(task_id="TASK_TEST_GUARD_003")
+
+        result = workflow_guard_acquire(task_id="TASK_TEST_GUARD_003")
+        assert result["success"] is True
+
+        # Clean up
+        workflow_guard_release(task_id="TASK_TEST_GUARD_003")
+
+    def test_acquire_nonexistent_task_fails(self, clean_tasks_dir):
+        """Acquiring guard for nonexistent task should fail."""
+        result = workflow_guard_acquire(task_id="TASK_NONEXISTENT_GUARD")
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+    def test_release_nonexistent_task_fails(self, clean_tasks_dir):
+        """Releasing guard for nonexistent task should fail."""
+        result = workflow_guard_release(task_id="TASK_NONEXISTENT_GUARD")
+        assert result["success"] is False
+
+    def test_holder_info_written(self, clean_tasks_dir):
+        """Acquiring guard should write holder info."""
+        import os as _os
+        workflow_initialize(task_id="TASK_TEST_GUARD_004")
+        workflow_transition("architect", task_id="TASK_TEST_GUARD_004")
+
+        workflow_guard_acquire(task_id="TASK_TEST_GUARD_004")
+
+        task_dir = find_task_dir("TASK_TEST_GUARD_004")
+        info_file = task_dir / ".workflow.lock.info"
+        assert info_file.exists()
+
+        import json as _json
+        with open(info_file) as f:
+            info = _json.load(f)
+        assert info["pid"] == _os.getpid()
+        assert info["task_id"] == "TASK_TEST_GUARD_004"
+
+        # Clean up
+        workflow_guard_release(task_id="TASK_TEST_GUARD_004")
+
+    def test_release_cleans_info_file(self, clean_tasks_dir):
+        """Releasing guard should remove the info file."""
+        workflow_initialize(task_id="TASK_TEST_GUARD_005")
+        workflow_transition("architect", task_id="TASK_TEST_GUARD_005")
+
+        workflow_guard_acquire(task_id="TASK_TEST_GUARD_005")
+        workflow_guard_release(task_id="TASK_TEST_GUARD_005")
+
+        task_dir = find_task_dir("TASK_TEST_GUARD_005")
+        info_file = task_dir / ".workflow.lock.info"
+        assert not info_file.exists()
+
+
+# ============================================================================
+# AW-hqi: File scope analysis for smarter auto-detection
+# ============================================================================
+
+class TestFileScopeAnalysis:
+    """Test _analyze_file_scope helper for scope-based mode escalation."""
+
+    def test_empty_files(self):
+        result = _analyze_file_scope([])
+        assert result["file_count"] == 0
+        assert result["dir_count"] == 0
+        assert result["escalation"] is None
+
+    def test_single_safe_file(self):
+        result = _analyze_file_scope(["src/utils.py"])
+        assert result["file_count"] == 1
+        assert result["escalation"] is None
+
+    def test_sensitive_auth_path(self):
+        result = _analyze_file_scope(["src/auth/login.py"])
+        assert result["escalation"] == "thorough"
+        assert len(result["sensitive_hits"]) == 1
+        assert "sensitive paths" in result["escalation_reasons"][0]
+
+    def test_sensitive_migration_path(self):
+        result = _analyze_file_scope(["db/migration/001_init.sql"])
+        assert result["escalation"] == "thorough"
+
+    def test_sensitive_security_path(self):
+        result = _analyze_file_scope(["lib/security/csrf.py"])
+        assert result["escalation"] == "thorough"
+
+    def test_config_path_triggers_reviewed(self):
+        result = _analyze_file_scope(["config/settings.yaml"])
+        assert result["escalation"] == "reviewed"
+        assert len(result["config_hits"]) >= 1
+
+    def test_dockerfile_triggers_reviewed(self):
+        result = _analyze_file_scope(["Dockerfile"])
+        assert result["escalation"] == "reviewed"
+
+    def test_github_workflows_triggers_reviewed(self):
+        result = _analyze_file_scope([".github/workflows/ci.yml"])
+        assert result["escalation"] == "reviewed"
+
+    def test_many_files_triggers_reviewed(self):
+        files = [f"src/file_{i}.py" for i in range(12)]
+        result = _analyze_file_scope(files)
+        assert result["escalation"] == "reviewed"
+        assert "many files" in result["escalation_reasons"][0]
+
+    def test_many_dirs_triggers_reviewed(self):
+        files = ["a/f1.py", "b/f2.py", "c/f3.py"]
+        result = _analyze_file_scope(files)
+        assert result["escalation"] == "reviewed"
+
+    def test_cross_module_triggers_thorough(self):
+        files = [f"mod{i}/f.py" for i in range(6)]
+        result = _analyze_file_scope(files)
+        assert result["escalation"] == "thorough"
+        assert "cross-module" in result["escalation_reasons"][0]
+
+    def test_windows_paths_normalized(self):
+        result = _analyze_file_scope(["src\\auth\\handler.py"])
+        assert result["escalation"] == "thorough"
+        assert len(result["sensitive_hits"]) == 1
+
+
+class TestDetectModeWithFiles:
+    """Test workflow_detect_mode with files_affected for scope escalation."""
+
+    def test_standard_escalated_to_reviewed_by_file_scope(self):
+        """A routine task touching config should escalate to reviewed."""
+        result = workflow_detect_mode(
+            "Fix typo in settings",
+            files_affected=["config/settings.yaml"]
+        )
+        assert result["mode"] == "reviewed"
+        assert "scope_analysis" in result
+
+    def test_standard_escalated_to_thorough_by_sensitive_files(self):
+        """A routine task touching auth files should escalate to thorough."""
+        result = workflow_detect_mode(
+            "Fix typo in auth handler",
+            files_affected=["src/auth/handler.py"]
+        )
+        # Keywords have "auth" → already thorough, but scope confirms
+        assert result["mode"] == "thorough"
+
+    def test_standard_not_escalated_for_safe_files(self):
+        """A routine task touching only safe files stays standard."""
+        result = workflow_detect_mode(
+            "Fix typo in utils",
+            files_affected=["src/utils.py"]
+        )
+        assert result["mode"] == "standard"
+        assert result.get("scope_analysis") is not None
+        assert result["scope_analysis"]["escalation"] is None
+
+    def test_keyword_thorough_not_downgraded_by_scope(self):
+        """Keyword-detected thorough should not be downgraded by safe scope."""
+        result = workflow_detect_mode(
+            "Add database migration",
+            files_affected=["src/utils.py"]
+        )
+        assert result["mode"] == "thorough"
+
+    def test_cross_module_escalates_reviewed_to_thorough(self):
+        """A generic task spanning many modules escalates to thorough."""
+        files = [f"pkg{i}/main.py" for i in range(6)]
+        result = workflow_detect_mode(
+            "Refactor import paths across the project",
+            files_affected=files
+        )
+        assert result["mode"] == "thorough"
+        assert result["scope_analysis"]["dir_count"] >= 5
+
+    def test_scope_analysis_included_in_result(self):
+        """When files_affected is provided, scope_analysis is in result."""
+        result = workflow_detect_mode(
+            "Add new feature",
+            files_affected=["src/feature.py"]
+        )
+        assert "scope_analysis" in result
+        assert "file_count" in result["scope_analysis"]
+
+    def test_no_scope_analysis_without_files(self):
+        """When files_affected is not provided, no scope_analysis in result."""
+        result = workflow_detect_mode("Add new feature")
+        assert "scope_analysis" not in result
+
+    def test_many_files_escalate_standard_to_reviewed(self):
+        """A simple task touching 12+ files should escalate to reviewed."""
+        files = [f"src/component_{i}.tsx" for i in range(12)]
+        result = workflow_detect_mode(
+            "Rename CSS class across components",
+            files_affected=files
+        )
+        # "rename" is standard keyword, but 12 files escalates to reviewed
+        assert result["mode"] == "reviewed"
 
 
 if __name__ == "__main__":

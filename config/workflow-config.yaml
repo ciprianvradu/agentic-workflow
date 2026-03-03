@@ -26,6 +26,11 @@ checkpoints:
   documentation:
     after_technical_writer: true  # Review documentation updates before applying
 
+  # Concern-based thresholds — when > 0, checkpoints only fire if enough
+  # unaddressed concerns exist at or above the severity threshold
+  concern_threshold: 0             # 0 = always checkpoint when configured; 1+ = require concerns
+  concern_severity_threshold: low  # low | medium | high | critical
+
   feedback:
     on_deviation: true         # Ask when implementation deviates from plan
     on_test_failure: true      # Ask when tests fail unexpectedly
@@ -43,20 +48,38 @@ max_iterations:
   implementation: 5            # Retries per major step
   feedback: 2                  # Adjustment attempts before suggesting restart
 
-# Agent model configuration (all opus for maximum quality)
-# Model configuration
+# Model configuration per workflow mode
 # Claude: opus, sonnet, haiku  |  Gemini: gemini-2.0-flash  |  Copilot: uses provider default  |  OpenCode: uses configured provider
-# Note: Research agents (architect, developer, reviewer, skeptic) receive Gemini-analyzed context
-# Implementation agents (implementer, feedback) receive focused file context
+#
+# Fallback chain: mode-specific → flat agent-specific → default
+# To use Opus everywhere, just set: default: opus (overrides all mode-specific settings)
 models:
-  orchestrator: opus
-  architect: opus              # Receives Gemini analysis via ARCHITECTURAL_CONTEXT section
-  developer: opus              # Receives Gemini analysis via IMPLEMENTATION_PATTERNS section
-  reviewer: opus               # Receives Gemini analysis via REVIEW_CHECKLIST section
-  skeptic: opus                # Receives Gemini analysis via FAILURE_MODES section
-  implementer: opus            # Receives focused files from current implementation step
-  feedback: opus               # Receives focused files for comparison
-  technical-writer: opus       # Documents findings and validates ai-context docs
+  default: opus                  # Fallback for any agent not configured below
+  orchestrator: opus             # Orchestrator always uses the best model
+
+  # Standard mode: routine tasks — Sonnet for cost efficiency
+  standard:
+    developer: sonnet
+    implementer: sonnet
+    technical_writer: sonnet
+
+  # Reviewed mode: non-trivial changes — Opus for planning, Sonnet for execution
+  reviewed:
+    architect: opus
+    developer: opus
+    reviewer: sonnet
+    implementer: sonnet
+    technical_writer: sonnet
+
+  # Thorough mode: critical changes — Opus for deep analysis, Sonnet for execution
+  thorough:
+    architect: opus
+    developer: opus
+    reviewer: sonnet
+    skeptic: opus
+    implementer: sonnet
+    feedback: sonnet
+    technical_writer: sonnet
 
 # Subagent Limits
 # Prevents runaway discovery loops where agents spawn subagents that loop for hours

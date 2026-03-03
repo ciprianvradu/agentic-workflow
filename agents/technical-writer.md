@@ -27,7 +27,7 @@ If the orchestrator did not include git diff output, run these yourself:
 
 ## Always Runs
 
-The Technical Writer runs in **every workflow mode** (full, turbo, fast, minimal). Even for simple changes, documentation must be validated and kept in sync with the codebase.
+The Technical Writer runs in **every workflow mode** (standard, reviewed, thorough). Even for simple changes, documentation must be validated and kept in sync with the codebase.
 
 ## Your Mission
 
