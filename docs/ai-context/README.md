@@ -83,6 +83,7 @@ agentic-workflow/
 │   ├── install-wt-colorschemes.py  # Windows Terminal color scheme installer
 │   ├── context_preparation.py  # Gemini research prep
 │   ├── validate-transition.py  # Workflow transition validator
+│   ├── check-bash-safety.py    # Bash safety gate (destructive command warnings)
 │   ├── check-workflow-complete.py  # Completion checker
 │   └── workflow_state.py       # State utilities
 ├── docs/
@@ -126,10 +127,11 @@ Not all tasks need all agents:
 
 | Mode | Agents | Use For |
 |------|--------|---------|
-| **full** | All 7 + optional specialists | Security, DB migrations, critical systems |
-| **fast** | Architect → Developer → Reviewer → Implementer → Writer | Multi-module changes |
-| **turbo** | Developer → Implementer → Writer | Standard features |
-| **minimal** | Developer → Implementer → Writer (fewer checkpoints) | Typo fixes, renames |
+| **standard** | Developer → Implementer → Writer | Routine features, fixes, refactors |
+| **reviewed** | Architect → Developer → Reviewer → Implementer → Writer | Non-trivial changes needing review |
+| **thorough** | All 7 + optional specialists | Security, DB migrations, breaking changes |
+
+Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
 
 Mode is auto-detected from the task description or set explicitly.
 

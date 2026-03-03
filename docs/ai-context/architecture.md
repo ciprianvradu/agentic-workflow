@@ -366,7 +366,7 @@ Claude Code supports lifecycle hooks that run scripts at specific trigger points
 **Session isolation**: All hooks use `_find_session_task()` which checks `.active_task` file and worktree detection. Non-crew sessions are never affected.
 
 **Hook response format**:
-- `{"decision": "warn", "reason": "..."}` — Inform the user, do not block
+- `{"decision": "approve", "reason": "..."}` — Allow the action, display reason as informational message
 - `{"decision": "block", "reason": "..."}` — Prevent the action (used by Stop hook for incomplete workflows)
 - Exit code 0 with no output — Allow without comment
 

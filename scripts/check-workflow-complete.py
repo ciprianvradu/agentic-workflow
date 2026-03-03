@@ -115,7 +115,7 @@ def _check_session_close_protocol(task_dir: str):
 
     if reminders:
         response = {
-            "decision": "warn",
+            "decision": "approve",
             "reason": (
                 "Session-close reminders:\n"
                 + "\n".join(f"  - {r}" for r in reminders)

@@ -180,6 +180,9 @@ BUNDLED_SCRIPTS = [
     "crew-status.py",
     "crew-cost-report.py",
     "crew-stats.py",
+    "check-workflow-complete.py",
+    "check-bash-safety.py",
+    "validate-transition.py",
 ]
 
 

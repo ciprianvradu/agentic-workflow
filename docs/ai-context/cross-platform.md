@@ -512,7 +512,7 @@ Session-isolated: only activates when a crew workflow is active (via `.active_ta
 - `git push` during active workflow (work should be merged locally, not pushed)
 - `git commit` during planning phases (before implementer has run)
 
-All warnings use `"decision": "warn"` — they inform but do not block.
+All warnings use `"decision": "approve"` with a `"reason"` — they inform but do not block.
 
 ### Enhanced Stop Hook Details (`check-workflow-complete.py`)
 
@@ -520,7 +520,7 @@ When the workflow IS complete, the stop hook checks for session-close protocol r
 - **Uncommitted changes**: Runs `git status --porcelain` and warns if files are modified
 - **Open beads issues**: Runs `bd list --status=in_progress` and warns if issues remain open
 
-These reminders use `"decision": "warn"` (non-blocking). Incomplete workflows use `"decision": "block"` to prevent premature exit.
+These reminders use `"decision": "approve"` (non-blocking). Incomplete workflows use `"decision": "block"` to prevent premature exit.
 
 ### Hook Availability by Platform
 

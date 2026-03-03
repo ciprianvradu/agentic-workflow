@@ -134,7 +134,7 @@ def main():
     if should_warn:
         # Emit a warning (not a block) — let the user decide
         response = {
-            "decision": "warn",
+            "decision": "approve",
             "reason": f"Safety check: {reason}"
         }
         print(json.dumps(response))
