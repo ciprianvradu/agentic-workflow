@@ -78,6 +78,101 @@ CREW_COLOR_SCHEMES = [
 
 _cached_tasks_dir: Optional[Path] = None
 
+# Pattern matching Windows drive letter paths (e.g., C:/, D:\)
+_WINDOWS_DRIVE_RE = re.compile(r'^([A-Za-z]):[/\\]')
+
+
+def _is_wsl() -> bool:
+    """Detect if running inside WSL."""
+    try:
+        with open("/proc/version") as f:
+            return "microsoft" in f.read().lower()
+    except (FileNotFoundError, PermissionError):
+        return False
+
+
+def _win_path_to_wsl(win_path: str) -> str:
+    """Convert a Windows-style path (C:/foo) to WSL (/mnt/c/foo)."""
+    m = _WINDOWS_DRIVE_RE.match(win_path)
+    if not m:
+        return win_path
+    drive = m.group(1).lower()
+    rest = win_path[len(m.group(0)):].replace('\\', '/')
+    return f"/mnt/{drive}/{rest}"
+
+
+def _auto_fix_worktree_git_file(worktree_dir: Optional[Path] = None) -> bool:
+    """Detect and fix broken Windows paths in a worktree's .git file.
+
+    When a worktree is created by Windows git but accessed from WSL, the .git
+    file may contain a Windows absolute path (e.g., C:/git/repo/.git/worktrees/X).
+    WSL git interprets this as a relative path, causing 'not a git repository'
+    errors like:
+        fatal: not a git repository: /mnt/c/repo-worktrees/TASK/C:/git/repo/.git/worktrees/TASK
+
+    This function detects the situation and converts both the .git file and the
+    reverse gitdir pointer to relative paths with LF line endings.
+
+    Returns True if a fix was applied, False otherwise.
+    """
+    if worktree_dir is None:
+        worktree_dir = Path.cwd()
+
+    git_path = worktree_dir / ".git"
+
+    # Only fix if .git is a file (worktree indicator), not a directory (main repo)
+    if not git_path.is_file():
+        return False
+
+    try:
+        content = git_path.read_text().strip()
+    except OSError:
+        return False
+
+    if not content.startswith("gitdir: "):
+        return False
+
+    gitdir_value = content[len("gitdir: "):]
+
+    # Only act on Windows drive letter paths
+    if not _WINDOWS_DRIVE_RE.match(gitdir_value):
+        return False
+
+    # Convert to WSL absolute path
+    wsl_gitdir = _win_path_to_wsl(gitdir_value)
+
+    # Verify the converted path exists
+    if not os.path.isdir(wsl_gitdir):
+        return False
+
+    # Compute relative path from worktree dir to the gitdir
+    worktree_abs = str(worktree_dir.resolve())
+    rel_gitdir = os.path.relpath(wsl_gitdir, worktree_abs)
+
+    # Write fixed .git file with LF endings
+    try:
+        with open(git_path, "w", newline="\n") as f:
+            f.write(f"gitdir: {rel_gitdir}\n")
+    except OSError:
+        return False
+
+    # Also fix reverse pointer: gitdir file in the main repo's worktrees entry
+    gitdir_file = os.path.join(wsl_gitdir, "gitdir")
+    if os.path.isfile(gitdir_file):
+        try:
+            reverse_content = open(gitdir_file).read().strip()
+            if _WINDOWS_DRIVE_RE.match(reverse_content):
+                # Compute relative path from gitdir entry to worktree/.git
+                rel_reverse = os.path.relpath(
+                    os.path.join(worktree_abs, ".git"), wsl_gitdir
+                )
+                with open(gitdir_file, "w", newline="\n") as f:
+                    f.write(f"{rel_reverse}\n")
+        except OSError:
+            pass  # Non-critical: the forward pointer is the important one
+
+    return True
+
 
 def _resolve_main_repo_tasks_dir() -> Optional[Path]:
     """Resolve .tasks/ dir to the main repo when running in a git worktree.
@@ -86,6 +181,9 @@ def _resolve_main_repo_tasks_dir() -> Optional[Path]:
     - Normal repo: returns `.git` (relative) → cwd/.tasks/
     - Worktree: returns absolute path to main .git → main_repo/.tasks/
     - Not in git: returns None → fall back to cwd/.tasks/
+
+    On WSL, if git fails because the .git file contains a Windows-style path,
+    auto-repairs the path and retries.
     """
     try:
         result = subprocess.run(
@@ -93,7 +191,16 @@ def _resolve_main_repo_tasks_dir() -> Optional[Path]:
             capture_output=True, text=True, timeout=5
         )
         if result.returncode != 0:
-            return None
+            # On WSL, try auto-fixing broken worktree paths before giving up
+            if _is_wsl() and _auto_fix_worktree_git_file():
+                result = subprocess.run(
+                    ["git", "rev-parse", "--git-common-dir"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.returncode != 0:
+                    return None
+            else:
+                return None
 
         git_common_dir = Path(result.stdout.strip())
 
@@ -3700,15 +3807,6 @@ def workflow_get_optional_phases(
 # ============================================================================
 # Git Worktree Support
 # ============================================================================
-
-def _is_wsl() -> bool:
-    """Detect if running inside WSL."""
-    try:
-        with open("/proc/version") as f:
-            return "microsoft" in f.read().lower()
-    except (FileNotFoundError, PermissionError):
-        return False
-
 
 def _slugify(text: str) -> str:
     """Convert text to git-branch-safe slug."""
