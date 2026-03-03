@@ -37,7 +37,11 @@ checkpoints:
     on_major_change: true      # Ask when scope seems to be creeping
 
 # Knowledge base location (relative to project root)
-knowledge_base: docs/ai-context/
+# Can be a single path, list of paths, or include glob patterns
+# Use "**/ai-context/" to auto-discover distributed docs across the project
+knowledge_base:
+  - docs/ai-context/          # Primary knowledge base
+  - "**/ai-context/"           # Auto-discover distributed docs (e.g., frontend/ai-context/)
 
 # Task file location (relative to project root)
 task_directory: .tasks/

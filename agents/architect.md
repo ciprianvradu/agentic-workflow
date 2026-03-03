@@ -16,7 +16,8 @@ Read existing docs to understand the project without touching source code:
 
 1. **Repository instructions** — `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md` (AI-specific patterns and constraints)
 2. **Knowledge base** — `{knowledge_base}` directory (default: `docs/ai-context/`). List files, read relevant ones.
-3. **Standard docs** — `README.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `docs/`
+3. **Distributed documentation** — Search for additional `ai-context/` directories throughout the project (e.g., `frontend/ai-context/`, `backend/ai-context/`, `packages/*/ai-context/`). These contain domain-specific guidelines that MUST be included in your Repository Knowledge Summary.
+4. **Standard docs** — `README.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`, `docs/`
 
 **Inventory what exists** — don't assume filenames. Note what's available and what's missing.
 
@@ -143,16 +144,18 @@ Produce a structured analysis covering:
 
 ## Repository Knowledge Summary
 
-[Summarize relevant info found in repository instructions, {knowledge_base}, or other repo docs:]
+**IMPORTANT**: This section is the single source of truth for all downstream agents. The Developer, Reviewer, and Implementer rely on this — if you omit a convention here, it will not be followed. Do not rationalize omissions; if a convention exists, include it.
 
 ### Documentation Inventory
-[List what documentation files exist in `{knowledge_base}` and other locations - agents need this to know what's available]
+[List ALL documentation files found — both in `{knowledge_base}` and in distributed `ai-context/` directories. Include full paths so downstream agents can reference them.]
 
-### Applicable Information
-- **Patterns to follow**: [List applicable patterns, if documented]
-- **Conventions**: [Naming, file organization, etc., if documented]
-- **Constraints**: [Security requirements, architectural boundaries, etc., if documented]
-- **Relevant base classes/interfaces**: [If the task involves extending existing code]
+### Applicable Conventions (MUST FOLLOW)
+- **Patterns**: [List ALL applicable patterns with source file references]
+- **Naming**: [File naming, variable naming, etc.]
+- **File organization**: [Where new files go, directory structure rules]
+- **Error handling**: [Required patterns]
+- **Testing**: [Required patterns, frameworks]
+- **Absolute rules**: [Any NEVER/ALWAYS rules from the knowledge base — these are non-negotiable]
 
 ## Documentation Gaps
 

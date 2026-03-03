@@ -501,12 +501,29 @@ def crew_init_task(
     workflow_transition(to_phase=first_phase, task_id=task_id)
 
     # Step 5: Inventory knowledge base (with timeout to prevent stalling)
-    kb_path = config.get("knowledge_base", "docs/ai-context/")
+    # knowledge_base can be a string (single path) or list of paths/globs
+    kb_config = config.get("knowledge_base", "docs/ai-context/")
+    kb_paths = [kb_config] if isinstance(kb_config, str) else (kb_config if isinstance(kb_config, list) else ["docs/ai-context/"])
     kb_files = []
-    kb_full_path = Path(project_dir) / kb_path if project_dir else Path.cwd() / kb_path
-    if kb_full_path.exists() and kb_full_path.is_dir():
-        kb_files = _list_kb_files(kb_full_path, timeout_seconds=KB_LISTING_TIMEOUT)
-    workflow_set_kb_inventory(path=str(kb_path), files=kb_files, task_id=task_id)
+    kb_primary = kb_paths[0] if kb_paths else "docs/ai-context/"
+    base = Path(project_dir) if project_dir else Path.cwd()
+    for kb_path in kb_paths:
+        if "*" in kb_path:
+            # Glob pattern — discover directories matching the pattern
+            for match in sorted(base.glob(kb_path)):
+                if match.is_dir():
+                    found = _list_kb_files(match, timeout_seconds=KB_LISTING_TIMEOUT)
+                    # Prefix with relative path so agents know which dir they came from
+                    kb_files.extend(f"{match.relative_to(base)}/{f}" if "/" not in f else f for f in found)
+        else:
+            kb_full_path = base / kb_path
+            if kb_full_path.exists() and kb_full_path.is_dir():
+                found = _list_kb_files(kb_full_path, timeout_seconds=KB_LISTING_TIMEOUT)
+                kb_files.extend(f"{kb_path}{f}" if not f.startswith(kb_path) else f for f in found)
+    # Deduplicate while preserving order
+    seen = set()
+    kb_files = [f for f in kb_files if f not in seen and not seen.add(f)]
+    workflow_set_kb_inventory(path=str(kb_primary), files=kb_files, task_id=task_id)
 
     # Step 6: Detect optional agents
     optional_result = crew_detect_optional_agents(
@@ -905,8 +922,11 @@ def _build_phase_action(
 
     # Variable substitution values
     kb_inv = state.get("knowledge_base_inventory", {})
+    # Normalize knowledge_base to primary path string for template substitution
+    kb_config = config.get("knowledge_base", "docs/ai-context/")
+    kb_primary_path = kb_config[0] if isinstance(kb_config, list) and kb_config else (kb_config if isinstance(kb_config, str) else "docs/ai-context/")
     variables = {
-        "knowledge_base": config.get("knowledge_base", "docs/ai-context/"),
+        "knowledge_base": kb_primary_path,
         "task_directory": config.get("task_directory", ".tasks/"),
         "task_id": task_id,
         "task_dir": str(task_dir),

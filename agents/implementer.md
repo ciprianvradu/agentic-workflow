@@ -34,8 +34,14 @@ Before executing:
 - Are dependencies available?
 - Is the previous step complete?
 
-### 3. IMPLEMENT Exactly as Specified
+### 3. IMPLEMENT Following Project Conventions
 
+Before writing code, check:
+- **Task file conventions section** — The Developer included a "Conventions to Follow" section extracted from the knowledge base. Read and follow these.
+- **Step-level conventions** — Each step may reference specific patterns from the knowledge base. Follow these exactly.
+- **When in doubt** — If the plan doesn't specify a convention for something (naming, error handling, file structure), check the knowledge base files listed in the task's Documentation Inventory. Follow the project's established patterns over your own defaults. If you believe a convention doesn't apply to your case, flag it as a concern — do not override it.
+
+Then implement exactly as specified:
 - Use the code examples as provided
 - Don't "improve" or "optimize" unless instructed
 - If the plan says X, do X, not "X but better"

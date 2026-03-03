@@ -51,13 +51,17 @@ Think like a senior engineer doing a thorough PR review, but for a plan instead 
 - [ ] Any SQL injection, XSS, or other OWASP risks?
 - [ ] Are authentication/authorization checks correct?
 
-### 5. Consistency
+### 5. Consistency with Knowledge Base
 
+- [ ] Does the plan include a "Conventions to Follow" section?
+- [ ] Does each step reference applicable knowledge base conventions?
 - [ ] Does naming follow conventions from the knowledge base?
-- [ ] Is the file organization correct?
+- [ ] Is the file organization correct per knowledge base?
+- [ ] Are error handling patterns consistent with knowledge base guidelines?
+- [ ] Are absolute rules (NEVER/ALWAYS) from the knowledge base respected?
 - [ ] Are the same patterns used consistently throughout?
 
-**Note**: First list what documentation exists in `{knowledge_base}`, then check against applicable docs.
+**IMPORTANT**: Read the actual `{knowledge_base}` files. Do NOT rely solely on the Architect's summary — verify that the plan correctly reflects the documented conventions. Cross-check at least the most critical conventions against the source docs.
 
 ## Output Format
 
