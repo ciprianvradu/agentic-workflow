@@ -8,7 +8,7 @@ Rust TUI dashboard for cross-project agentic-workflow task monitoring. Built wit
 cd crew-board
 cargo build                  # Dev build
 cargo build --release        # Optimized binary (strip + LTO)
-cargo test                   # All 16 unit tests
+cargo test                   # All 17 unit tests
 cargo clippy                 # Lint (fix all warnings before committing)
 ```
 
@@ -18,16 +18,16 @@ The release binary lands at `target/release/crew-board` (~1.6MB).
 
 ```
 src/
-├── main.rs          # CLI parsing (clap), terminal setup, event loop
-├── app.rs           # Application state: tree nav, views, popups, doc viewer
+├── main.rs          # CLI parsing (clap), terminal setup, event loop, bg refresh polling
+├── app.rs           # Application state: tree nav, views, popups, search index, bg refresh
 ├── settings.rs      # Loads ~/.config/crew-board.toml (TOML)
 ├── discovery.rs     # Repo discovery: --repo paths + --scan directories
 ├── launcher.rs      # Terminal launch: detect env, spawn wt.exe/tmux/osascript, color schemes
 ├── worktree.rs      # Native worktree creation: task ID, git ops, state.json, symlink
 ├── cleanup.rs       # Worktree cleanup: candidate discovery, dry-run preview, execute via script
 ├── data/
-│   ├── mod.rs       # RepoData: aggregates tasks + issues + config per repo
-│   ├── task.rs      # Parses .tasks/*/state.json, discovers *.md artifacts
+│   ├── mod.rs       # RepoData: load + load_incremental, aggregates tasks + issues + config
+│   ├── task.rs      # Parses .tasks/*/state.json, incremental mtime reload, *.md artifacts
 │   ├── beads.rs     # Parses .beads/issues.jsonl (stream, skip malformed)
 │   └── config.rs    # Config cascade: global → project → task levels
 └── ui/
@@ -53,6 +53,8 @@ src/
 - `.tasks/` symlinks in worktrees are resolved via `canonicalize()`
 - Artifacts (architect.md, developer.md, etc.) are discovered at runtime from the task directory
 - **metadata.json fallback**: When a task dir has no `state.json`, `load_tasks()` tries `metadata.json` (written by external setup scripts with a different schema). `TaskMetadata` struct deserializes it, `TaskState::from_metadata()` maps fields to a minimal TaskState, and the task is marked `archived: true`. The `jira_key` field lives on `LoadedTask` (not `TaskState`) since it's external metadata.
+- **Incremental refresh**: `load_tasks_incremental()` compares `state.json` mtime against the stored `state_mtime` on each `LoadedTask`. Only tasks whose mtime changed are re-read from disk. `RepoData::load_incremental()` wraps this for the full repo. First load in `App::new()` is always a full `load_tasks()`.
+- **`state_mtime` field**: `LoadedTask` carries `state_mtime: Option<SystemTime>` — the mtime of `state.json` at last read. `None` for archived/fallback tasks. This field powers the incremental refresh comparison.
 
 ### Navigation Model
 - Tree view: flattened `Vec<TreeRow>` where `TreeRow` is either `Repo(idx)` or `Task(repo_idx, task_idx)`
@@ -86,6 +88,23 @@ Keys are routed in priority order:
 7. Default → tree nav, view switching, shortcuts
 
 **Esc behavior:** Esc never quits the application. It only closes popups, backs out of detail views, or switches focus from right pane to left pane. Use `q` or `F10` to quit.
+
+### Refresh & Background Threading
+All data refresh is **non-blocking**. `refresh()` spawns a background thread via `start_bg_refresh()`. Each event-loop tick calls `check_bg_refresh()` which polls `JoinHandle::is_finished()` and swaps in the new data on completion.
+
+- **Incremental**: Background thread uses `RepoData::load_incremental()` — only re-reads `state.json` files whose mtime changed. Issues and config are still fully reloaded (single files, cheap).
+- **Search index**: Built in the background thread alongside the refresh. The `Vec<SearchEntry>` is swapped in atomically with the new repos.
+- **Timer reset**: `last_refresh` is reset on **completion** (not start), preventing rapid re-refresh if the background thread takes longer than `poll_interval_secs`.
+- **Coalescing**: If a refresh is already in progress, `start_bg_refresh()` is a no-op. Multiple F5 presses or auto-refresh triggers are safely coalesced.
+- **Callers affected**: `refresh()` is also called from `close_create_popup()` and `close_cleanup_popup()`. After the change these get non-blocking behavior — data appears after the next tick rather than synchronously.
+
+### In-Memory Search Index
+F3 search uses a pre-built `Vec<SearchEntry>` instead of scanning disk on every keystroke.
+
+- **`SearchEntry`**: Holds `(repo_index, task_index)` plus pre-lowercased text segments (task_id, description, branch, phase, raw state.json, first 4KB of each .md artifact).
+- **`build_search_index()` / `build_search_entry()`**: Module-level free functions (not `impl App` methods) so they can be called from both `App` methods and the background thread closure.
+- **Index build**: Happens once on startup and again in each background refresh. Disk I/O (reading state.json + artifacts) only occurs during index build, never during search.
+- **`run_search()`**: Iterates `self.search_index` in memory. First matching segment per task wins. Capped at 50 results.
 
 ### Worktree Creation (`F4` key)
 Native Rust reimplementation of the core steps from `scripts/setup-worktree.py`. Press `F4` on a repo row to:
@@ -179,7 +198,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 
 1. Create parser in `src/data/new_source.rs`
 2. Add field to `RepoData` in `data/mod.rs`
-3. Load in `RepoData::load()`
+3. Load in `RepoData::load()` **and** `RepoData::load_incremental()`
 4. Use `#[serde(default)]` on all fields for resilience
 
 ## Common Gotchas
@@ -190,5 +209,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Tree rebuild**: Forgetting `rebuild_tree()` after changing `expanded_repos` causes stale cursor state.
 - **Detail mode reset**: Must reset `detail_mode` to `Overview` when tree cursor changes.
 - **Popup priority**: Help overlay > search popup > create popup > cleanup popup > launch popup > detail nav > default. All must be checked before default key handling.
-- **Background threads**: `create_worktree()` runs on `std::thread::spawn`. Poll `JoinHandle::is_finished()` each tick (250ms). No async runtime needed.
+- **Background threads**: `create_worktree()`, `cleanup_worktree()`, and `refresh()` all run on `std::thread::spawn`. Poll `JoinHandle::is_finished()` each tick (250ms). No async runtime needed.
 - **`F4`/`F6` key scope**: Only works on Repo rows — `open_create_popup()` and `open_cleanup_popup()` return early on Task rows.
+- **Search index free functions**: `build_search_index()` and `build_search_entry()` are module-level free functions, not `impl App` methods. This is required because they are called from the background thread closure (which cannot capture `&self`).
+- **`LoadedTask` construction sites**: When adding fields to `LoadedTask`, update all construction sites: 3 in `load_tasks()` (metadata fallback, normal state.json, gap-fill), plus the corresponding sites in `load_tasks_incremental()`. The `state_mtime` field must be `Some(mtime)` for normal tasks and `None` for archived/fallback tasks.
