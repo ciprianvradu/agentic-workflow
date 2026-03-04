@@ -25,6 +25,14 @@ permission:
   webfetch: deny
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `/crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -73,6 +81,16 @@ Create a task file with this structure:
 ## Architectural Context
 [Summary of key points from Architect's analysis]
 
+## Conventions to Follow (from Knowledge Base)
+
+[Extract from Architect's Repository Knowledge Summary. The Implementer MUST
+follow these conventions. Include specific references to knowledge base files.]
+
+- **Pattern**: [Pattern name] — See `{knowledge_base}/[file].md`
+- **Naming**: [Convention] — See `{knowledge_base}/[file].md`
+- **Error handling**: [Convention] — See `{knowledge_base}/[file].md`
+- **Absolute rules**: [Any NEVER/ALWAYS rules — these are non-negotiable]
+
 ## Prerequisites
 - [ ] [Prerequisite 1]
 - [ ] [Prerequisite 2]
@@ -82,6 +100,7 @@ Create a task file with this structure:
 ### Step 1.1: [Step Description]
 - **Why**: [Reason this step matters - context for the implementer]
 - **File**: `/exact/path/to/file.ts`
+- **Conventions**: [Which conventions from the knowledge base apply to this step]
 - **Reference**: [relevant doc from knowledge base, if exists]
 - **Implementation**:
   ```typescript

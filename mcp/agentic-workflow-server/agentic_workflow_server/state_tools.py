@@ -601,10 +601,18 @@ def _normalize_phase(phase: str) -> str:
 def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
     to_phase = _normalize_phase(to_phase)
 
-    # Build the valid phase list: PHASE_ORDER + any custom phases from the mode
+    # Build the valid phase list: PHASE_ORDER + mode phases + optional + custom phases
     mode_phases = state.get("workflow_mode", {}).get("phases", [])
     valid_phases = list(PHASE_ORDER)
     for p in mode_phases:
+        if p not in valid_phases:
+            valid_phases.append(p)
+    # Accept optional agent phases (security_auditor, etc.)
+    for p in state.get("optional_phases", []):
+        if p not in valid_phases:
+            valid_phases.append(p)
+    # Accept custom phase names (user-defined lifecycle hooks)
+    for p in state.get("custom_phases_in_sequence", []):
         if p not in valid_phases:
             valid_phases.append(p)
 

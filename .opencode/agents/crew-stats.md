@@ -1,7 +1,6 @@
 ---
-description: "Workflow Status — read-only overview of all tasks, worktrees, and model health"
-agent: read
-subtask: true
+description: "Crew agent: crew-stats"
+mode: subagent
 ---
 
 ## Worktree Auto-Resume
@@ -30,14 +29,10 @@ When working in a shared repository:
 - If you notice untracked or modified files outside your scope, ignore them
 - Never run `git checkout .` or `git restore .` — this would discard others' work-in-progress
 
-# Workflow Status
+# Workflow Statistics Dashboard
 
 **THIS COMMAND IS READ-ONLY. Do NOT modify any state.**
 
-## Command: /crew-status
+## Command: /crew-stats
 
-Run `python3 /mnt/c/git/agentic-workflow/scripts/crew-status.py` and display the output to the user.
-
-For more detailed info on a specific task, read `.tasks/TASK_XXX/state.json` directly.
-
-Now, scan `.tasks/` directory and **display** (read-only) the status of all workflows with worktree state, context, and model health. Do NOT transition, complete, or advance any workflow. ONLY read and print.
+Run `python3 /mnt/c/git/agentic-workflow/scripts/crew-stats.py` and display the output to the user.

@@ -705,3 +705,53 @@ worktree:
   # Commands to run after worktree is fully set up (after deps installed), CWD = worktree dir
   # Supports placeholders: {worktree_path}, {task_id}, {branch_name}, {main_repo_path}, {jira_issue}
   post_setup_commands: []
+
+# Custom Phases (lifecycle hooks)
+# Inject custom steps at key lifecycle moments without modifying crew.md
+# Each phase slots into the sequence via after/before positioning
+#
+# Execution types:
+#   skill   — Invoke a Claude Code skill. Orchestrator runs the skill.
+#   script  — Run a shell command. Exit 0 = continue, non-zero = block.
+#   agent   — Spawn a subagent with a user-defined prompt file.
+#
+# Conditions (all optional, omit for always-run):
+#   task_has: "keyword"            — task description contains keyword (case-insensitive)
+#   mode_in: [fast, full]          — only in certain workflow modes
+#   file_patterns: ["**/*.cpp"]    — file glob matching
+#   always: true                   — unconditional (explicit)
+#
+# Options:
+#   writes_to_state: true          — store output in state.json under custom_phase_results
+#   blocking: true                 — non-zero exit / failure blocks workflow (default: true)
+#   timeout: 120                   — max seconds for script execution (default: 120)
+#
+# Positioning:
+#   after: init          — run before first agent phase (post-init)
+#   after: architect     — run after architect completes
+#   before: implementer  — run before implementer starts
+#   before: complete     — run after all agents, before workflow completion
+#
+# Example:
+# custom_phases:
+#   triage:
+#     after: init
+#     type: skill
+#     skill: "evaluate-jira"
+#     condition:
+#       task_has: "jira_key"
+#     writes_to_state: true
+#     blocking: true
+#   encoding_check:
+#     before: complete
+#     type: script
+#     command: "python3 scripts/check-encodings.py {task_id}"
+#     timeout: 60
+#   security_scan:
+#     after: reviewer
+#     type: agent
+#     prompt_file: "agents/security-scan.md"
+#     condition:
+#       file_patterns: ["**/auth/**", "**/security/**"]
+#     writes_to_state: true
+custom_phases: {}

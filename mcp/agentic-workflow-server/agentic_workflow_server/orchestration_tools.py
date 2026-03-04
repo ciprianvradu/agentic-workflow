@@ -200,6 +200,305 @@ OPTIONAL_AGENT_TRIGGERS = {
 
 
 # ============================================================================
+# Custom Phase Helpers
+# ============================================================================
+
+def _evaluate_custom_phase_condition(
+    condition: dict,
+    task_description: str,
+    effective_mode: str,
+    files_affected: Optional[list[str]] = None,
+) -> bool:
+    """Evaluate whether a custom phase condition is met.
+
+    Reuses the matching logic from crew_detect_optional_agents().
+
+    Condition types:
+      always: true             — unconditional
+      task_has: "keyword"      — task description contains keyword (case-insensitive)
+      mode_in: [mode1, mode2]  — current mode is in the list
+      file_patterns: ["glob"]  — any affected file matches a pattern
+
+    If condition is empty or None, the phase always runs.
+
+    Args:
+        condition: Condition dict from config
+        task_description: Task description text
+        effective_mode: Current workflow mode name
+        files_affected: Optional list of affected file paths
+
+    Returns:
+        True if condition is met (phase should run)
+    """
+    if not condition:
+        return True
+
+    # always: true
+    if condition.get("always"):
+        return True
+
+    # task_has: "keyword"
+    task_has = condition.get("task_has")
+    if task_has:
+        if task_has.lower() not in task_description.lower():
+            return False
+
+    # mode_in: [mode1, mode2]
+    mode_in = condition.get("mode_in")
+    if mode_in:
+        from .state_tools import MODE_ALIASES
+        resolved_mode = MODE_ALIASES.get(effective_mode, effective_mode)
+        resolved_list = [MODE_ALIASES.get(m, m) for m in mode_in]
+        if resolved_mode not in resolved_list and effective_mode not in mode_in:
+            return False
+
+    # file_patterns: ["**/auth/**"]
+    file_patterns = condition.get("file_patterns")
+    if file_patterns:
+        files_affected = files_affected or []
+        files_str = " ".join(files_affected).lower()
+        matched = False
+        for pattern in file_patterns:
+            # Reuse same simplified glob logic as crew_detect_optional_agents
+            simplified = pattern.replace("**/", "").replace("/**", "").replace("*", "")
+            if simplified and simplified.lower() in files_str:
+                matched = True
+                break
+        if not matched:
+            return False
+
+    return True
+
+
+def _load_custom_phases(config: dict) -> dict[str, dict]:
+    """Load and validate custom_phases from effective config.
+
+    Args:
+        config: Effective config dict
+
+    Returns:
+        Dict of phase_name -> phase_config, validated and normalized.
+        Invalid phases are silently dropped.
+    """
+    raw = config.get("custom_phases", {})
+    if not raw or not isinstance(raw, dict):
+        return {}
+
+    valid = {}
+    for name, phase_cfg in raw.items():
+        if not isinstance(phase_cfg, dict):
+            continue
+
+        # Sanitize phase name — must be a safe identifier
+        if not name or "/" in name or "\\" in name or ".." in name or " " in name:
+            continue
+
+        # Validate required fields
+        phase_type = phase_cfg.get("type")
+        if phase_type not in ("skill", "script", "agent"):
+            continue  # Skip invalid type
+
+        # Must have positioning
+        if not phase_cfg.get("after") and not phase_cfg.get("before"):
+            continue  # Skip — no position specified
+
+        # Type-specific validation
+        if phase_type == "skill" and not phase_cfg.get("skill"):
+            continue
+        if phase_type == "script" and not phase_cfg.get("command"):
+            continue
+        if phase_type == "agent" and not phase_cfg.get("prompt_file"):
+            continue
+
+        # Normalize
+        valid[name] = {
+            "type": phase_type,
+            "after": phase_cfg.get("after"),
+            "before": phase_cfg.get("before"),
+            "skill": phase_cfg.get("skill"),
+            "command": phase_cfg.get("command"),
+            "prompt_file": phase_cfg.get("prompt_file"),
+            "condition": phase_cfg.get("condition", {}),
+            "writes_to_state": phase_cfg.get("writes_to_state", False),
+            "blocking": phase_cfg.get("blocking", True),
+            "timeout": phase_cfg.get("timeout", 120),
+        }
+
+    return valid
+
+
+def _insert_custom_phases_into_sequence(
+    base_sequence: list[str],
+    custom_phases: dict[str, dict],
+    task_description: str,
+    effective_mode: str,
+    files_affected: Optional[list[str]] = None,
+) -> list[str]:
+    """Insert evaluated custom phases into the phase sequence.
+
+    Custom phases specify ``after: <phase>`` or ``before: <phase>`` to position
+    themselves. Special anchors: "init" (before first phase), "complete"
+    (after last phase).
+
+    Phases whose conditions are not met are excluded.
+
+    Args:
+        base_sequence: The mode's phase list (e.g., ["architect", "developer", ...])
+        custom_phases: Validated custom phase configs from _load_custom_phases
+        task_description: For condition evaluation
+        effective_mode: For condition evaluation
+        files_affected: For condition evaluation
+
+    Returns:
+        New sequence with custom phases inserted at correct positions.
+    """
+    if not custom_phases:
+        return list(base_sequence)
+
+    result = list(base_sequence)
+
+    # Collect phases to insert, grouped by position
+    after_phases: list[tuple[str, str]] = []   # (anchor, custom_phase_name)
+    before_phases: list[tuple[str, str]] = []  # (anchor, custom_phase_name)
+
+    for name, cfg in custom_phases.items():
+        # Evaluate condition
+        if not _evaluate_custom_phase_condition(
+            condition=cfg.get("condition", {}),
+            task_description=task_description,
+            effective_mode=effective_mode,
+            files_affected=files_affected,
+        ):
+            continue
+
+        if cfg.get("after"):
+            after_phases.append((cfg["after"], name))
+        elif cfg.get("before"):
+            before_phases.append((cfg["before"], name))
+
+    # Insert "after" phases
+    for anchor, phase_name in after_phases:
+        if anchor == "init":
+            # Insert at beginning (after init, before first phase)
+            if phase_name not in result:
+                result.insert(0, phase_name)
+        elif anchor in result:
+            idx = result.index(anchor) + 1
+            if phase_name not in result:
+                result.insert(idx, phase_name)
+
+    # Insert "before" phases
+    for anchor, phase_name in before_phases:
+        if anchor == "complete":
+            # Insert at end (before completion)
+            if phase_name not in result:
+                result.append(phase_name)
+        elif anchor in result:
+            idx = result.index(anchor)
+            if phase_name not in result:
+                result.insert(idx, phase_name)
+
+    return result
+
+
+def _build_custom_phase_action(
+    phase_name: str,
+    phase_config: dict,
+    state: dict,
+    config: dict,
+    task_dir: Path,
+) -> dict[str, Any]:
+    """Build the action dict for a custom phase.
+
+    Returns action: "run_skill", "run_script", or "spawn_agent" depending on type.
+    """
+    task_id = state.get("task_id", "")
+    phase_type = phase_config["type"]
+
+    # Common variable substitution for commands/paths
+    variables = {
+        "task_id": task_id,
+        "task_dir": str(task_dir),
+        "mode": state.get("workflow_mode", {}).get("effective", "reviewed"),
+    }
+
+    if phase_type == "skill":
+        return {
+            "action": "run_skill",
+            "phase": phase_name,
+            "skill": phase_config["skill"],
+            "task_id": task_id,
+            "writes_to_state": phase_config.get("writes_to_state", False),
+            "blocking": phase_config.get("blocking", True),
+            "output_file": str(task_dir / f"{phase_name}.md"),
+            "variables": variables,
+            "is_custom_phase": True,
+        }
+
+    elif phase_type == "script":
+        # Substitute placeholders in command
+        command = phase_config["command"]
+        for key, value in variables.items():
+            command = command.replace(f"{{{key}}}", str(value))
+
+        return {
+            "action": "run_script",
+            "phase": phase_name,
+            "command": command,
+            "task_id": task_id,
+            "timeout": phase_config.get("timeout", 120),
+            "writes_to_state": phase_config.get("writes_to_state", False),
+            "blocking": phase_config.get("blocking", True),
+            "output_file": str(task_dir / f"{phase_name}.md"),
+            "variables": variables,
+            "is_custom_phase": True,
+        }
+
+    elif phase_type == "agent":
+        # Use existing spawn_agent machinery but with custom prompt file
+        prompt_file = phase_config["prompt_file"]
+        prompt_path = str(_REPO_ROOT / prompt_file) if not Path(prompt_file).is_absolute() else prompt_file
+
+        effort_result = workflow_get_effort_level(agent=phase_name, task_id=task_id)
+        effort = effort_result.get("effort", "high")
+
+        models_config = config.get("models", {})
+        default_model = models_config.get("default", "opus")
+        effective_mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+        mode_models = models_config.get(effective_mode, {})
+        model = mode_models.get(phase_name) or models_config.get(phase_name) or default_model
+
+        subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
+        max_turns = subagent_limits.get("planning_agents", SUBAGENT_LIMITS.get("planning_agents", 30))
+
+        context_files = _get_context_files(phase_name, state, task_dir)
+
+        return {
+            "action": "spawn_agent",
+            "agent": phase_name,
+            "agent_prompt_path": prompt_path,
+            "context_files": context_files,
+            "effort_level": effort,
+            "model": model,
+            "max_turns": max_turns,
+            "checkpoint_after": False,
+            "variables": variables,
+            "task_id": task_id,
+            "writes_to_state": phase_config.get("writes_to_state", False),
+            "is_custom_phase": True,
+            "output_file": str(task_dir / f"{phase_name}.md"),
+        }
+
+    else:
+        return {
+            "action": "skip",
+            "phase": phase_name,
+            "reason": f"Unknown custom phase type: {phase_type}",
+            "task_id": task_id,
+        }
+
+
+# ============================================================================
 # Tool 1: crew_parse_args
 # ============================================================================
 
@@ -804,9 +1103,36 @@ def crew_get_next_phase(
     config = effective.get("config", {})
 
     # Determine what phase comes next
-    if current_phase is None:
-        # Workflow not started - begin with first phase in mode
-        next_agent = mode_phases[0] if mode_phases else "architect"
+    # Treat as "not started" if phase is None, OR if phase is the first mode phase
+    # with no completions AND there are custom phases that go before it
+    # (crew_init_task pre-transitions to mode_phases[0] before custom phases are evaluated)
+    is_fresh_start = current_phase is None
+    if not is_fresh_start and not phases_completed and mode_phases and current_phase == mode_phases[0]:
+        # Check if there are custom phases with "after: init" that should run first
+        custom_phases_check = _load_custom_phases(config)
+        if any(cfg.get("after") == "init" for cfg in custom_phases_check.values()):
+            is_fresh_start = True
+    if is_fresh_start:
+        # Workflow not started - build full sequence including custom phases
+        first_sequence = list(mode_phases)
+        custom_phases = _load_custom_phases(config)
+        if custom_phases:
+            task_description = state.get("description", "")
+            task_md = task_dir / "task.md"
+            if task_md.exists():
+                task_description = task_md.read_text()
+            first_sequence = _insert_custom_phases_into_sequence(
+                base_sequence=first_sequence,
+                custom_phases=custom_phases,
+                task_description=task_description,
+                effective_mode=effective_mode,
+            )
+            # Store custom phase names in state so _can_transition accepts them
+            custom_names = [p for p in first_sequence if p in custom_phases]
+            if custom_names:
+                state["custom_phases_in_sequence"] = custom_names
+                _save_state(task_dir, state)
+        next_agent = first_sequence[0] if first_sequence else "architect"
         return _build_phase_action(next_agent, state, config, task_dir)
 
     # Check if current phase is complete
@@ -832,7 +1158,7 @@ def crew_get_next_phase(
         }
 
     # Current phase is complete - find next
-    # Build the full sequence: mode phases + optional phases (after reviewer)
+    # Build the full sequence: mode phases + optional phases (after reviewer) + custom phases
     full_sequence = list(mode_phases)
 
     # Insert optional phases after reviewer (or after developer if no reviewer)
@@ -843,6 +1169,25 @@ def crew_get_next_phase(
             if opt_phase not in full_sequence:
                 full_sequence.insert(insert_idx, opt_phase)
                 insert_idx += 1
+
+    # Insert custom phases from config
+    custom_phases = _load_custom_phases(config)
+    if custom_phases:
+        task_description = state.get("description", "")
+        task_md = task_dir / "task.md"
+        if task_md.exists():
+            task_description = task_md.read_text()
+        full_sequence = _insert_custom_phases_into_sequence(
+            base_sequence=full_sequence,
+            custom_phases=custom_phases,
+            task_description=task_description,
+            effective_mode=effective_mode,
+        )
+        # Store custom phase names in state so _can_transition accepts them
+        custom_names = [p for p in full_sequence if p in custom_phases]
+        if custom_names:
+            state["custom_phases_in_sequence"] = custom_names
+            _save_state(task_dir, state)
 
     # Find current position and get next
     try:
@@ -891,8 +1236,13 @@ def _build_phase_action(
     task_dir: Path,
     parallel_with: Optional[str] = None
 ) -> dict[str, Any]:
-    """Build the action dict for spawning an agent phase."""
+    """Build the action dict for spawning an agent phase or custom phase."""
     task_id = state.get("task_id", "")
+
+    # Check if this is a custom phase
+    custom_phases = _load_custom_phases(config)
+    if agent in custom_phases:
+        return _build_custom_phase_action(agent, custom_phases[agent], state, config, task_dir)
 
     # Get agent prompt path (supports custom agents via {agent}.md fallback)
     prompt_file = AGENT_PROMPT_FILES.get(agent, f"{agent.replace('_', '-')}.md")

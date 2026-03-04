@@ -26,13 +26,22 @@ checkpoints:
   documentation:
     after_technical_writer: true  # Review documentation updates before applying
 
+  # Concern-based thresholds — when > 0, checkpoints only fire if enough
+  # unaddressed concerns exist at or above the severity threshold
+  concern_threshold: 0             # 0 = always checkpoint when configured; 1+ = require concerns
+  concern_severity_threshold: low  # low | medium | high | critical
+
   feedback:
     on_deviation: true         # Ask when implementation deviates from plan
     on_test_failure: true      # Ask when tests fail unexpectedly
     on_major_change: true      # Ask when scope seems to be creeping
 
 # Knowledge base location (relative to project root)
-knowledge_base: docs/ai-context/
+# Can be a single path, list of paths, or include glob patterns
+# Use "**/ai-context/" to auto-discover distributed docs across the project
+knowledge_base:
+  - docs/ai-context/          # Primary knowledge base
+  - "**/ai-context/"           # Auto-discover distributed docs (e.g., frontend/ai-context/)
 
 # Task file location (relative to project root)
 task_directory: .tasks/
@@ -43,20 +52,41 @@ max_iterations:
   implementation: 5            # Retries per major step
   feedback: 2                  # Adjustment attempts before suggesting restart
 
-# Agent model configuration (all opus for maximum quality)
-# Model configuration
+# Model configuration per workflow mode
 # Claude: opus, sonnet, haiku  |  Gemini: gemini-2.0-flash  |  Copilot: uses provider default  |  OpenCode: uses configured provider
-# Note: Research agents (architect, developer, reviewer, skeptic) receive Gemini-analyzed context
-# Implementation agents (implementer, feedback) receive focused file context
+#
+# Fallback chain: mode-specific → flat agent-specific → default
+# To use Opus everywhere, just set: default: opus (overrides all mode-specific settings)
 models:
-  orchestrator: opus
-  architect: opus              # Receives Gemini analysis via ARCHITECTURAL_CONTEXT section
-  developer: opus              # Receives Gemini analysis via IMPLEMENTATION_PATTERNS section
-  reviewer: opus               # Receives Gemini analysis via REVIEW_CHECKLIST section
-  skeptic: opus                # Receives Gemini analysis via FAILURE_MODES section
-  implementer: opus            # Receives focused files from current implementation step
-  feedback: opus               # Receives focused files for comparison
-  technical-writer: opus       # Documents findings and validates ai-context docs
+  default: opus                  # Fallback for any agent not configured below
+  orchestrator: opus             # Orchestrator always uses the best model
+
+  # Standard mode: routine tasks — Sonnet for cost efficiency
+  standard:
+    developer: sonnet
+    implementer: sonnet
+    quality_guard: sonnet
+    technical_writer: sonnet
+
+  # Reviewed mode: non-trivial changes — Opus for planning, Sonnet for execution
+  reviewed:
+    architect: opus
+    developer: opus
+    reviewer: sonnet
+    implementer: sonnet
+    quality_guard: sonnet
+    technical_writer: sonnet
+
+  # Thorough mode: critical changes — Opus for deep analysis, Sonnet for execution
+  thorough:
+    architect: opus
+    developer: opus
+    reviewer: sonnet
+    skeptic: opus
+    implementer: sonnet
+    quality_guard: sonnet
+    feedback: sonnet
+    technical_writer: sonnet
 
 # Subagent Limits
 # Prevents runaway discovery loops where agents spawn subagents that loop for hours
@@ -338,13 +368,14 @@ workflow_modes:
   # Mode definitions - which phases are included
   modes:
     full:
-      description: "All 7 agents - complex features, critical changes"
+      description: "All 8 agents - complex features, critical changes"
       phases:
         - architect
         - developer
         - reviewer
         - skeptic
         - implementer
+        - quality_guard
         - feedback
         - technical_writer
       estimated_cost: "$0.50+"
@@ -354,6 +385,7 @@ workflow_modes:
       phases:
         - developer
         - implementer
+        - quality_guard
         - technical_writer
       estimated_cost: "$0.15"
 
@@ -364,6 +396,7 @@ workflow_modes:
         - developer
         - reviewer
         - implementer
+        - quality_guard
         - technical_writer
       estimated_cost: "$0.25"
 
@@ -372,6 +405,7 @@ workflow_modes:
       phases:
         - developer
         - implementer
+        - quality_guard
         - technical_writer
       estimated_cost: "$0.10"
 
@@ -443,21 +477,25 @@ effort_levels:
     reviewer: high
     skeptic: max
     implementer: high
+    quality_guard: high
     feedback: high
     technical_writer: medium
   turbo:
     developer: max
     implementer: high
+    quality_guard: medium
     technical_writer: medium
   fast:
     architect: high
     developer: high
     reviewer: high
     implementer: high
+    quality_guard: high
     technical_writer: medium
   minimal:
     developer: medium
     implementer: medium
+    quality_guard: medium
     technical_writer: medium
 
 # Parallelization Configuration
@@ -667,3 +705,53 @@ worktree:
   # Commands to run after worktree is fully set up (after deps installed), CWD = worktree dir
   # Supports placeholders: {worktree_path}, {task_id}, {branch_name}, {main_repo_path}, {jira_issue}
   post_setup_commands: []
+
+# Custom Phases (lifecycle hooks)
+# Inject custom steps at key lifecycle moments without modifying crew.md
+# Each phase slots into the sequence via after/before positioning
+#
+# Execution types:
+#   skill   — Invoke a Claude Code skill. Orchestrator runs the skill.
+#   script  — Run a shell command. Exit 0 = continue, non-zero = block.
+#   agent   — Spawn a subagent with a user-defined prompt file.
+#
+# Conditions (all optional, omit for always-run):
+#   task_has: "keyword"            — task description contains keyword (case-insensitive)
+#   mode_in: [fast, full]          — only in certain workflow modes
+#   file_patterns: ["**/*.cpp"]    — file glob matching
+#   always: true                   — unconditional (explicit)
+#
+# Options:
+#   writes_to_state: true          — store output in state.json under custom_phase_results
+#   blocking: true                 — non-zero exit / failure blocks workflow (default: true)
+#   timeout: 120                   — max seconds for script execution (default: 120)
+#
+# Positioning:
+#   after: init          — run before first agent phase (post-init)
+#   after: architect     — run after architect completes
+#   before: implementer  — run before implementer starts
+#   before: complete     — run after all agents, before workflow completion
+#
+# Example:
+# custom_phases:
+#   triage:
+#     after: init
+#     type: skill
+#     skill: "evaluate-jira"
+#     condition:
+#       task_has: "jira_key"
+#     writes_to_state: true
+#     blocking: true
+#   encoding_check:
+#     before: complete
+#     type: script
+#     command: "python3 scripts/check-encodings.py {task_id}"
+#     timeout: 60
+#   security_scan:
+#     after: reviewer
+#     type: agent
+#     prompt_file: "agents/security-scan.md"
+#     condition:
+#       file_patterns: ["**/auth/**", "**/security/**"]
+#     writes_to_state: true
+custom_phases: {}

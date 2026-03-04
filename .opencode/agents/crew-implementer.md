@@ -19,6 +19,14 @@ permission:
     "rm -rf*": deny
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `/crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -73,8 +81,14 @@ Before executing:
 - Are dependencies available?
 - Is the previous step complete?
 
-### 3. IMPLEMENT Exactly as Specified
+### 3. IMPLEMENT Following Project Conventions
 
+Before writing code, check:
+- **Task file conventions section** — The Developer included a "Conventions to Follow" section extracted from the knowledge base. Read and follow these.
+- **Step-level conventions** — Each step may reference specific patterns from the knowledge base. Follow these exactly.
+- **When in doubt** — If the plan doesn't specify a convention for something (naming, error handling, file structure), check the knowledge base files listed in the task's Documentation Inventory. Follow the project's established patterns over your own defaults. If you believe a convention doesn't apply to your case, flag it as a concern — do not override it.
+
+Then implement exactly as specified:
 - Use the code examples as provided
 - Don't "improve" or "optimize" unless instructed
 - If the plan says X, do X, not "X but better"
@@ -98,6 +112,16 @@ Report:
 - What was done
 - Test results
 - Any deviations or concerns
+
+## Self-Correction via Hooks
+
+When hooks are configured in the project (e.g., PostToolUse, Stop hooks), use them as your primary feedback loop:
+
+- **After writing code**: If a PostToolUse hook runs linting/formatting, check its output and fix issues immediately — don't wait for the Reviewer agent.
+- **After running tests**: If tests fail, analyze failures and fix before moving to the next step.
+- **Build errors**: Treat hook feedback as authoritative. Fix issues inline rather than flagging for later review.
+
+Hooks replace the need for a separate Reviewer pass on routine tasks. The Reviewer agent in "reviewed" and "thorough" modes catches architectural issues that hooks cannot — but for formatting, linting, and type errors, hooks are faster and more reliable.
 
 ## When to STOP and Report
 

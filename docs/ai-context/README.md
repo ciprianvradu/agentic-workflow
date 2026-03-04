@@ -9,6 +9,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 | [README.md](./README.md) | Project overview, structure, and getting started (this file) |
 | [architecture.md](./architecture.md) | Detailed architecture, patterns, and conventions |
 | [cross-platform.md](./cross-platform.md) | Cross-platform patterns: 4 AI hosts, Windows/WSL/macOS, fallbacks |
+| [custom-phases.md](./custom-phases.md) | Custom phases (lifecycle hooks): inject skills, scripts, or agents into the workflow |
 | [memory-preservation.md](./memory-preservation.md) | How to save/retrieve discoveries across context compaction |
 
 ---

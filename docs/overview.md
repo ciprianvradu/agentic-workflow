@@ -464,6 +464,16 @@ Teams can run **multiple workflows simultaneously** on different tasks, each in 
 
 For large codebases, the system can use Google's Gemini (which has a massive context window) to pre-analyze the codebase and provide focused context to each agent. This makes the agents smarter about the specific project they are working on.
 
+### Custom Phases (Lifecycle Hooks)
+
+Teams can inject their own steps into the workflow pipeline without modifying the core system. Custom phases support three types:
+
+- **Skills** -- invoke a Claude Code slash command (e.g., a Jira triage step before planning)
+- **Scripts** -- run any shell command (e.g., license checks, static analysis, encoding validation)
+- **Agents** -- spawn a subagent with a custom prompt file (e.g., domain-specific review)
+
+Each custom phase specifies where it runs (`after: init`, `before: complete`, `after: reviewer`, etc.) and optional conditions that control when it activates (by keyword, workflow mode, or file patterns). See [Custom Phases](ai-context/custom-phases.md) for details.
+
 ### Cross-Task Memory
 
 The system **learns across tasks**. Decisions, patterns, gotchas, and blockers discovered during one task are saved and can inform future tasks. This means the AI team gets better at working with your codebase over time.
@@ -566,7 +576,7 @@ A: It complements rather than replaces human review. The AI agents catch many me
 A: Yes. You can consult any individual agent using `/crew ask <agent> "question"` without starting a full workflow. You can also configure Minimal mode for simple tasks that only need planning, implementation, and documentation.
 
 **Q: What if I want to add my own custom agents?**
-A: Agent definitions are markdown files with instructions. Adding a new specialist agent involves creating a new markdown file and configuring its trigger conditions in the workflow configuration.
+A: Agent definitions are markdown files with instructions. Adding a new specialist agent involves creating a new markdown file and configuring its trigger conditions in the workflow configuration. You can also use **Custom Phases** to inject skills, scripts, or agents at any point in the pipeline -- see `custom_phases` in `workflow-config.yaml` for examples.
 
 ---
 

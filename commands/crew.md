@@ -58,6 +58,29 @@ Loop on the returned JSON action from the orchestrator:
 9. If `result.has_blocking_issues` and recommendation is REVISE → inform user, loop continues via `result.next`
 10. Continue loop with `result.next`
 
+#### action: "run_skill"
+
+Custom phase that invokes a Claude Code skill:
+
+1. Log: `python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
+2. Run the skill: `Skill(skill: next.skill)`
+3. Save skill output to `next.output_file`
+4. Run: `python3 {__scripts_dir__}/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> [--writes-to-state] [--exit-code 0]`
+5. If `result.action` is `"custom_phase_failed"` and `blocking` is true, inform the user and ask how to proceed (Retry / Skip / Abort)
+6. Continue loop with `result.next`
+
+#### action: "run_script"
+
+Custom phase that runs a shell command:
+
+1. Log: `python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
+2. Run the command via Bash: `next.command` (with timeout: `next.timeout` seconds)
+3. Capture stdout+stderr and exit code
+4. Save output to `next.output_file`
+5. Run: `python3 {__scripts_dir__}/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> --exit-code <code> [--writes-to-state] [--blocking]`
+6. If `result.action` is `"custom_phase_failed"` and `blocking` is true, inform the user: "Custom phase '<phase>' failed (exit code <code>)." Ask: Retry / Skip / Abort.
+7. Continue loop with `result.next`
+
 #### action: "checkpoint"
 
 Summarize the preceding agent's key findings. If `result.unaddressed_concerns` is non-empty, display each concern:

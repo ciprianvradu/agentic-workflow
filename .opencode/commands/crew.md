@@ -6,7 +6,7 @@ You orchestrate the /crew workflow by running the orchestrator script for routin
 
 ### Initialize
 
-Run: `python3 scripts/crew_orchestrator.py init --host opencode --args "$ARGUMENTS"`
+Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py init --host opencode --args "$ARGUMENTS"`
 
 The script returns JSON with `action` and routing details. Handle by action:
 
@@ -49,24 +49,57 @@ Loop on the returned JSON action from the orchestrator:
    Task(subagent_type: "general-purpose", model: "opus", max_turns: next.max_turns, prompt: "<composed prompt>")
    ```
 6. Save agent output to `.tasks/<task_id>/<agent>.md`
-7. Run: `python3 scripts/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model opus]`
-8. If `result.has_blocking_issues` and recommendation is REVISE → inform user, loop continues via `result.next`
-9. Continue loop with `result.next`
+7. Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model opus]`
+8. If `result.parse_result.unaddressed_concerns` is non-empty, display them to the user:
+   ```
+   **Unaddressed Concerns ({count}):**
+   - [{severity}] ({source}): {description}
+   ```
+9. If `result.has_blocking_issues` and recommendation is REVISE → inform user, loop continues via `result.next`
+10. Continue loop with `result.next`
+
+#### action: "run_skill"
+
+Custom phase that invokes a Claude Code skill:
+
+1. Log: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
+2. Run the skill: `Skill(skill: next.skill)`
+3. Save skill output to `next.output_file`
+4. Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> [--writes-to-state] [--exit-code 0]`
+5. If `result.action` is `"custom_phase_failed"` and `blocking` is true, inform the user and ask how to proceed (Retry / Skip / Abort)
+6. Continue loop with `result.next`
+
+#### action: "run_script"
+
+Custom phase that runs a shell command:
+
+1. Log: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
+2. Run the command via Bash: `next.command` (with timeout: `next.timeout` seconds)
+3. Capture stdout+stderr and exit code
+4. Save output to `next.output_file`
+5. Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> --exit-code <code> [--writes-to-state] [--blocking]`
+6. If `result.action` is `"custom_phase_failed"` and `blocking` is true, inform the user: "Custom phase '<phase>' failed (exit code <code>)." Ask: Retry / Skip / Abort.
+7. Continue loop with `result.next`
 
 #### action: "checkpoint"
 
-Summarize the preceding agent's key findings, then present to user:
+Summarize the preceding agent's key findings. If `result.unaddressed_concerns` is non-empty, display each concern:
 ```
-AskUserQuestion: "Based on [Agent]'s analysis: [summary]. How would you like to proceed?"
+**Unaddressed Concerns ({concerns_count}):**
+- [{severity}] ({source}): {description}
+```
+Then present to user:
+```
+AskUserQuestion: "Based on [Agent]'s analysis: [summary]. [N unaddressed concern(s) require attention.] How would you like to proceed?"
 Options: Approve, Revise, Restart, Skip
 ```
-After user responds, run: `python3 scripts/crew_orchestrator.py checkpoint-done --task-id <id> --decision <decision> [--notes "..."] --question "<checkpoint summary that was presented>"`
+After user responds, run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py checkpoint-done --task-id <id> --decision <decision> [--notes "..."] --question "<checkpoint summary that was presented>"`
 The `--question` flag logs both the checkpoint question and response to `interactions.jsonl`.
 Continue loop with `result.next`.
 
 #### action: "implement_step" / "verify" / "retry" / "next_step" / "escalate"
 
-Run: `python3 scripts/crew_orchestrator.py impl-action --task-id <id> [--verified true/false] [--error "..."]`
+Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py impl-action --task-id <id> [--verified true/false] [--error "..."]`
 - **implement_step**: Spawn implementer for `step_id`. If `loop_mode`, run verification after.
 - **verify**: Run verification command, then call impl-action again with result.
 - **retry**: Re-attempt with `should_try_different_approach` guidance. Use `known_solution` if available.
@@ -74,11 +107,11 @@ Run: `python3 scripts/crew_orchestrator.py impl-action --task-id <id> [--verifie
 - **checkpoint**: Present progress checkpoint to user.
 - **escalate**: Pause and ask user for help. Show `reason`. Log the escalation and response:
   ```
-  python3 scripts/crew_orchestrator.py log-interaction --task-id <id> --role agent --content "<reason>" --type escalation_question --agent implementer --phase implementer
+  python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role agent --content "<reason>" --type escalation_question --agent implementer --phase implementer
   ```
   After user responds:
   ```
-  python3 scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user response>" --type escalation_response --phase implementer
+  python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user response>" --type escalation_response --phase implementer
   ```
 - **complete**: Implementation done, continue to next phase (feedback → technical_writer → complete).
 
@@ -86,7 +119,7 @@ Run: `python3 scripts/crew_orchestrator.py impl-action --task-id <id> [--verifie
 
 #### action: "complete"
 
-Run: `python3 scripts/crew_orchestrator.py complete --task-id <id> [--files <comma-separated>]`
+Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py complete --task-id <id> [--files <comma-separated>]`
 - Display cost summary as formatted table
 - Suggest commit message to user
 - Execute worktree commands based on `worktree_action` (prompt/auto/never)
@@ -122,7 +155,7 @@ If an agent fails or produces invalid output:
 
 When the user provides ad-hoc guidance mid-workflow (outside of checkpoints), log it:
 ```
-python3 scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user input>" --type guidance --phase <current_phase>
+python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user input>" --type guidance --phase <current_phase>
 ```
 
 ## Output to User

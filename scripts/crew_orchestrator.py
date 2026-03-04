@@ -278,8 +278,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     next_action = crew_get_next_phase(task_id=task_id)
 
     # Pre-transition to first phase if it differs from default
-    if next_action.get("action") == "spawn_agent" and next_action.get("agent"):
-        first_phase = next_action["agent"]
+    first_phase = next_action.get("agent") or next_action.get("phase")
+    if first_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
         task_dir_path = find_task_dir(task_id)
         if task_dir_path:
             current_state = _load_state(task_dir_path)
@@ -352,11 +352,12 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
     # 4. Get next action
     next_action = crew_get_next_phase(task_id=task_id)
 
-    # 5. Pre-transition to next phase if spawning an agent
+    # 5. Pre-transition to next phase
     transition_result = None
-    if next_action.get("action") == "spawn_agent" and next_action.get("agent"):
+    next_phase = next_action.get("agent") or next_action.get("phase")
+    if next_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
         transition_result = workflow_transition(
-            to_phase=next_action["agent"],
+            to_phase=next_phase,
             task_id=task_id,
         )
 
@@ -366,6 +367,80 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         "phase_completed": complete_result.get("success", False),
         "cost_recorded": cost_recorded,
         "has_blocking_issues": parse_result.get("has_blocking_issues", False),
+        "transitioned_to": transition_result.get("to_phase") if transition_result else None,
+        "next": next_action,
+    })
+
+
+def cmd_custom_phase_done(args: argparse.Namespace) -> None:
+    """Handle completion of a custom phase (skill or script).
+
+    Batches: save output → optionally write to state → complete phase → get next
+    """
+    task_id = args.task_id
+    phase_name = args.phase
+
+    # Read output if provided
+    output_text = ""
+    if args.output_file:
+        output_path = Path(args.output_file)
+        if output_path.exists():
+            output_text = output_path.read_text()
+
+    # Save output to task dir
+    task_dir = find_task_dir(task_id)
+    if task_dir and output_text:
+        output_file = task_dir / f"{phase_name}.md"
+        output_file.write_text(output_text)
+
+    # Write to state if configured
+    if args.writes_to_state and task_dir:
+        state = _load_state(task_dir)
+        custom_results = state.get("custom_phase_results", {})
+        custom_results[phase_name] = {
+            "output": output_text[:5000],  # Truncate to avoid bloating state
+            "exit_code": args.exit_code or 0,
+            "completed_at": datetime.now().isoformat(),
+        }
+        state["custom_phase_results"] = custom_results
+        _save_state(task_dir, state)
+
+    # Handle failure for blocking phases
+    if args.exit_code and args.exit_code != 0 and args.blocking:
+        _output({
+            "action": "custom_phase_failed",
+            "phase": phase_name,
+            "exit_code": args.exit_code,
+            "blocking": True,
+            "output": output_text[:2000],
+            "task_id": task_id,
+        })
+        return
+
+    # Complete phase — ensure we're on the right phase before completing
+    task_dir_check = find_task_dir(task_id)
+    if task_dir_check:
+        current_state = _load_state(task_dir_check)
+        if current_state.get("phase") != phase_name:
+            workflow_transition(to_phase=phase_name, task_id=task_id)
+    complete_result = workflow_complete_phase(task_id=task_id)
+
+    # Get next action
+    next_action = crew_get_next_phase(task_id=task_id)
+
+    # Pre-transition to next phase
+    transition_result = None
+    next_phase = next_action.get("agent") or next_action.get("phase")
+    if next_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
+        transition_result = workflow_transition(
+            to_phase=next_phase,
+            task_id=task_id,
+        )
+
+    _output({
+        "action": "custom_phase_done",
+        "phase": phase_name,
+        "phase_completed": complete_result.get("success", False),
         "transitioned_to": transition_result.get("to_phase") if transition_result else None,
         "next": next_action,
     })
@@ -434,9 +509,10 @@ def cmd_checkpoint_done(args: argparse.Namespace) -> None:
     # 5. Get next action
     next_action = crew_get_next_phase(task_id=task_id)
 
-    # 6. Pre-transition to next phase if spawning an agent
-    if next_action.get("action") == "spawn_agent" and next_action.get("agent"):
-        workflow_transition(to_phase=next_action["agent"], task_id=task_id)
+    # 6. Pre-transition to next phase
+    next_phase = next_action.get("agent") or next_action.get("phase")
+    if next_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
+        workflow_transition(to_phase=next_phase, task_id=task_id)
 
     _output({
         "action": "checkpoint_done",
@@ -627,6 +703,15 @@ def main():
     p_agent.add_argument("--model", default="opus", help="Model used")
     p_agent.add_argument("--duration", type=float, help="Duration in seconds")
 
+    # custom-phase-done
+    p_custom = subparsers.add_parser("custom-phase-done", help="Complete custom phase, get next")
+    p_custom.add_argument("--task-id", required=True, help="Task identifier")
+    p_custom.add_argument("--phase", required=True, help="Custom phase name")
+    p_custom.add_argument("--output-file", help="Path to output file")
+    p_custom.add_argument("--exit-code", type=int, default=0, help="Exit code (scripts)")
+    p_custom.add_argument("--writes-to-state", action="store_true", help="Store output in state")
+    p_custom.add_argument("--blocking", action=argparse.BooleanOptionalAction, default=True, help="Phase blocks on failure")
+
     # checkpoint-done
     p_ckpt = subparsers.add_parser("checkpoint-done", help="Record decision, get next")
     p_ckpt.add_argument("--task-id", required=True, help="Task identifier")
@@ -668,6 +753,7 @@ def main():
         "init": cmd_init,
         "next": cmd_next,
         "agent-done": cmd_agent_done,
+        "custom-phase-done": cmd_custom_phase_done,
         "checkpoint-done": cmd_checkpoint_done,
         "impl-action": cmd_impl_action,
         "complete": cmd_complete,

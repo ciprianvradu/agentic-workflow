@@ -4,6 +4,14 @@ agent: build
 subtask: true
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `/crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -34,7 +42,7 @@ Arguments: a task description (free text, Jira key, or `--beads ISSUE`).
 
 1. **Read config + resolve prompts**: Call `config_get_effective()` MCP tool to get the `worktree` section. If MCP tools are unavailable (e.g., OpenCode subtasks), read the config by running:
    ```
-   python3 scripts/crew_orchestrator.py config
+   python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py config
    ```
    and parse the JSON output for the `worktree` section.
    For each prompt-mode setting (`sync_before_create`, `recycle`, `auto_launch`):
@@ -43,7 +51,7 @@ Arguments: a task description (free text, Jira key, or `--beads ISSUE`).
 
 2. **Run the setup script**:
    ```
-   python3 scripts/setup-worktree.py "<description>" --ai-host opencode [flags] --json
+   python3 /mnt/c/git/agentic-workflow/scripts/setup-worktree.py "<description>" --ai-host opencode [flags] --json
    ```
    Where `[flags]` are the CLI flags built in step 1 (only for prompt-mode settings where the user was asked).
 

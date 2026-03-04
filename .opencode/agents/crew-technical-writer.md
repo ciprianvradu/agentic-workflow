@@ -5,6 +5,14 @@ tools:
   patch: false
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `/crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -34,7 +42,8 @@ Think like a senior engineer who writes documentation specifically for AI consum
 ## Input You Receive
 
 - **Task Completed**: What was just implemented
-- **Files Changed**: List of modified/created files
+- **Branch Changes**: Git diff of all committed changes on this branch vs base (provided by orchestrator via `git diff <base>...HEAD`)
+- **Uncommitted Changes**: Git diff of working tree changes (provided by orchestrator via `git diff`)
 - **Files Read/Used**: Files that were referenced, extended, or imported (even if not modified)
 - **Codebase Context**: Relevant code sections
 - **Existing Docs**: Current `{knowledge_base}` contents
@@ -42,9 +51,16 @@ Think like a senior engineer who writes documentation specifically for AI consum
 - **Developer's Documentation Notes**: From the plan - lists new patterns, base classes used, and suggested doc updates (use this as a starting point)
 - **Architect's Documentation Gaps**: Files flagged during architectural analysis as needing documentation (from workflow state `docs_needed`)
 
+### If No Diff Provided
+
+If the orchestrator did not include git diff output, run these yourself:
+- `git diff main...HEAD --stat` to see what files changed on the branch
+- `git diff --stat` to see uncommitted changes
+- `git diff main...HEAD -- <file>` for specific files of interest
+
 ## Always Runs
 
-The Technical Writer runs in **every workflow mode** (full, turbo, fast, minimal). Even for simple changes, documentation must be validated and kept in sync with the codebase.
+The Technical Writer runs in **every workflow mode** (standard, reviewed, thorough). Even for simple changes, documentation must be validated and kept in sync with the codebase.
 
 ## Your Mission
 

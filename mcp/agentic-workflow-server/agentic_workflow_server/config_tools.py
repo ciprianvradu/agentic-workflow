@@ -124,7 +124,8 @@ DEFAULT_CONFIG = {
             "custom_command": "",
             "require_all_pass": True
         }
-    }
+    },
+    "custom_phases": {},
 }
 
 
@@ -146,6 +147,9 @@ def _validate_config(config: dict, defaults: dict, prefix: str = "") -> list[str
         full_key = f"{prefix}.{key}" if prefix else key
         if key not in defaults:
             warnings.append(f"Unknown config key: '{full_key}'")
+        elif key == "custom_phases":
+            # Skip deep validation — subkeys are user-defined phase names
+            continue
         elif isinstance(value, dict) and isinstance(defaults.get(key), dict):
             warnings.extend(_validate_config(value, defaults[key], full_key))
         elif value is not None:
