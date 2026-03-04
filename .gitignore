@@ -3,6 +3,7 @@ __pycache__/
 
 # Claude Code local settings (personal overrides)
 .claude/settings.local.json
+.claude/workflow-config.yaml
 
 # Workflow task directories (runtime state)
 .tasks/
@@ -18,3 +19,7 @@ crew-board/target/
 .crew-resume
 ideas.md
 .beads/bd.sock.startlock
+
+# Local experimental agents (not shared)
+agents/product-manager.md
+agents/ba-designer.md
