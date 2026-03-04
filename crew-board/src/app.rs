@@ -672,6 +672,7 @@ impl App {
         }
         self.detail_mode = DetailMode::DocList { cursor: 0 };
         self.detail_scroll = 0;
+        self.focus_pane = FocusPane::Right;
     }
 
     /// Enter history view (press 'h' on a task).
@@ -683,6 +684,7 @@ impl App {
         self.ensure_history_data();
         self.detail_mode = DetailMode::History;
         self.detail_scroll = 0;
+        self.focus_pane = FocusPane::Right;
     }
 
     /// Load interactions and discoveries for the current task (lazy, cached).
@@ -714,6 +716,7 @@ impl App {
             DetailMode::DocList { .. } | DetailMode::History => {
                 self.detail_mode = DetailMode::Overview;
                 self.detail_scroll = 0;
+                self.focus_pane = FocusPane::Left;
             }
             DetailMode::Overview => {}
         }

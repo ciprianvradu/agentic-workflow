@@ -675,11 +675,13 @@ class TestCompletionConsistency:
         """workflow_is_complete uses workflow_mode.phases instead of REQUIRED_PHASES."""
         workflow_initialize(task_id="TASK_TEST_CC_002")
         workflow_set_mode("minimal", task_id="TASK_TEST_CC_002")
-        # Minimal mode: developer, implementer, technical_writer
+        # Minimal mode: developer, implementer, quality_guard, technical_writer
         # Complete all minimal phases
         workflow_transition("developer", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
         workflow_transition("implementer", task_id="TASK_TEST_CC_002")
+        workflow_complete_phase(task_id="TASK_TEST_CC_002")
+        workflow_transition("quality_guard", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
         workflow_transition("technical_writer", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
@@ -706,10 +708,12 @@ class TestCompletionConsistency:
         """workflow_can_stop uses workflow_mode.phases instead of REQUIRED_PHASES."""
         workflow_initialize(task_id="TASK_TEST_CC_004")
         workflow_set_mode("minimal", task_id="TASK_TEST_CC_004")
-        # Complete all minimal phases
+        # Complete all minimal phases (developer, implementer, quality_guard, technical_writer)
         workflow_transition("developer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
         workflow_transition("implementer", task_id="TASK_TEST_CC_004")
+        workflow_complete_phase(task_id="TASK_TEST_CC_004")
+        workflow_transition("quality_guard", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
         workflow_transition("technical_writer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")

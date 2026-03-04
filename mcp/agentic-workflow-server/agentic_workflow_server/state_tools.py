@@ -28,6 +28,7 @@ PHASE_ORDER = [
     "reviewer",
     "skeptic",
     "implementer",
+    "quality_guard",
     "feedback",
     "technical_writer"
 ]
@@ -2301,17 +2302,17 @@ def workflow_clear_model_cooldown(
 WORKFLOW_MODES = {
     "standard": {
         "description": "Developer plans and implements — routine features, fixes, refactors",
-        "phases": ["developer", "implementer", "technical_writer"],
+        "phases": ["developer", "implementer", "quality_guard", "technical_writer"],
         "estimated_cost": "$0.10"
     },
     "reviewed": {
         "description": "Adds architecture analysis and code review — non-trivial changes",
-        "phases": ["architect", "developer", "reviewer", "implementer", "technical_writer"],
+        "phases": ["architect", "developer", "reviewer", "implementer", "quality_guard", "technical_writer"],
         "estimated_cost": "$0.25"
     },
     "thorough": {
         "description": "Full adversarial pipeline — security, migrations, breaking changes",
-        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"],
+        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"],
         "estimated_cost": "$0.50+"
     }
 }
@@ -2329,6 +2330,7 @@ EFFORT_LEVELS = {
     "standard": {
         "developer": "high",
         "implementer": "high",
+        "quality_guard": "medium",
         "technical_writer": "medium"
     },
     "reviewed": {
@@ -2336,6 +2338,7 @@ EFFORT_LEVELS = {
         "developer": "high",
         "reviewer": "high",
         "implementer": "high",
+        "quality_guard": "high",
         "technical_writer": "medium"
     },
     "thorough": {
@@ -2344,6 +2347,7 @@ EFFORT_LEVELS = {
         "reviewer": "high",
         "skeptic": "max",
         "implementer": "high",
+        "quality_guard": "high",
         "feedback": "high",
         "technical_writer": "medium"
     }

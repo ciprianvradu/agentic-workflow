@@ -514,7 +514,7 @@ class TestCrewGetNextPhase:
         workflow_set_mode(mode="full", task_id="TASK_ORCH_002")
 
         # Complete all thorough mode phases sequentially
-        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"]:
+        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_002")
             workflow_complete_phase(task_id="TASK_ORCH_002")
 

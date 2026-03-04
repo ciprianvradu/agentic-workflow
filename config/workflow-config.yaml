@@ -65,6 +65,7 @@ models:
   standard:
     developer: sonnet
     implementer: sonnet
+    quality_guard: sonnet
     technical_writer: sonnet
 
   # Reviewed mode: non-trivial changes — Opus for planning, Sonnet for execution
@@ -73,6 +74,7 @@ models:
     developer: opus
     reviewer: sonnet
     implementer: sonnet
+    quality_guard: sonnet
     technical_writer: sonnet
 
   # Thorough mode: critical changes — Opus for deep analysis, Sonnet for execution
@@ -82,6 +84,7 @@ models:
     reviewer: sonnet
     skeptic: opus
     implementer: sonnet
+    quality_guard: sonnet
     feedback: sonnet
     technical_writer: sonnet
 
@@ -365,13 +368,14 @@ workflow_modes:
   # Mode definitions - which phases are included
   modes:
     full:
-      description: "All 7 agents - complex features, critical changes"
+      description: "All 8 agents - complex features, critical changes"
       phases:
         - architect
         - developer
         - reviewer
         - skeptic
         - implementer
+        - quality_guard
         - feedback
         - technical_writer
       estimated_cost: "$0.50+"
@@ -381,6 +385,7 @@ workflow_modes:
       phases:
         - developer
         - implementer
+        - quality_guard
         - technical_writer
       estimated_cost: "$0.15"
 
@@ -391,6 +396,7 @@ workflow_modes:
         - developer
         - reviewer
         - implementer
+        - quality_guard
         - technical_writer
       estimated_cost: "$0.25"
 
@@ -399,6 +405,7 @@ workflow_modes:
       phases:
         - developer
         - implementer
+        - quality_guard
         - technical_writer
       estimated_cost: "$0.10"
 
@@ -470,21 +477,25 @@ effort_levels:
     reviewer: high
     skeptic: max
     implementer: high
+    quality_guard: high
     feedback: high
     technical_writer: medium
   turbo:
     developer: max
     implementer: high
+    quality_guard: medium
     technical_writer: medium
   fast:
     architect: high
     developer: high
     reviewer: high
     implementer: high
+    quality_guard: high
     technical_writer: medium
   minimal:
     developer: medium
     implementer: medium
+    quality_guard: medium
     technical_writer: medium
 
 # Parallelization Configuration

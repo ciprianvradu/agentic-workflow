@@ -736,6 +736,7 @@ AGENT_PROMPT_FILES = {
     "reviewer": "reviewer.md",
     "skeptic": "skeptic.md",
     "implementer": "implementer.md",
+    "quality_guard": "quality-guard.md",
     "feedback": "feedback.md",
     "technical_writer": "technical-writer.md",
     "security_auditor": "security-auditor.md",
@@ -759,6 +760,7 @@ AGENT_LIMIT_CATEGORY = {
     "reviewer": "planning_agents",
     "skeptic": "planning_agents",
     "implementer": "implementation_agents",
+    "quality_guard": "implementation_agents",
     "feedback": "planning_agents",
     "technical_writer": "documentation_agents",
     "security_auditor": "planning_agents",
@@ -954,7 +956,7 @@ def _build_phase_action(
     }
 
     # Provide git diff commands for agents that need code change context
-    if agent in ("technical_writer", "feedback"):
+    if agent in ("technical_writer", "feedback", "quality_guard"):
         wt = state.get("worktree") or {}
         base_branch = wt.get("base_branch", "main")
         result["git_diff_command"] = f"git diff {base_branch}...HEAD"
@@ -1002,17 +1004,32 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         if review.exists():
             files.append(str(review))
 
+    if agent == "quality_guard":
+        arch_output = task_dir / "architect.md"
+        if arch_output.exists():
+            files.append(str(arch_output))
+        dev_output = task_dir / "developer.md"
+        if dev_output.exists():
+            files.append(str(dev_output))
+        plan = task_dir / "plan.md"
+        if plan.exists():
+            files.append(str(plan))
+
     if agent == "feedback":
         impl_output = task_dir / "implementer.md"
         if impl_output.exists():
             files.append(str(impl_output))
+        qg_output = task_dir / "quality-guard.md"
+        if qg_output.exists():
+            files.append(str(qg_output))
 
     if agent == "technical_writer":
         # Technical writer needs all prior agent outputs to capture
         # documentation gaps, patterns, and findings from every phase
         for name in [
             "task.md", "architect.md", "developer.md",
-            "reviewer.md", "skeptic.md", "implementer.md", "feedback.md",
+            "reviewer.md", "skeptic.md", "implementer.md",
+            "quality-guard.md", "feedback.md",
         ]:
             f = task_dir / name
             if f.exists():
