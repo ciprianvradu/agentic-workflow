@@ -32,7 +32,8 @@ src/
 │   └── config.rs    # Config cascade: global → project → task levels
 ├── terminal/
 │   ├── mod.rs       # TerminalManager, EmbeddedTerminal, TerminalStatus, AttentionReason, LaunchParams
-│   └── pty.rs       # spawn_pty(), PtyHandles, ExitEvent, AttentionEvent, AttentionKind, reader thread
+│   ├── pty.rs       # spawn_pty(), PtyHandles, ExitEvent, AttentionEvent, AttentionKind, reader thread
+│   └── widget.rs    # Terminal rendering (draw_terminal), keyboard encoding (key_to_bytes), SelectionRange
 └── ui/
     ├── mod.rs        # Root layout: main content + status bar + popup overlay
     ├── task_list.rs  # Left pane: tree view with repo/task rows + vertical scrollbar
@@ -40,13 +41,14 @@ src/
     ├── beads_view.rs # View 2: issues list + detail
     ├── config_view.rs# View 3: config cascade display
     ├── cost_view.rs  # View 4: cost summary from workflow state
-    ├── terminal_view.rs # View 5: embedded terminal multiplexer (list panel + PTY output)
+    ├── terminal_view.rs # View 5: embedded terminal multiplexer (list panel + PTY output + mouse hit rects)
     ├── status_bar.rs # Bottom: view tabs + contextual keybinding hints + aggregate stats
     ├── launch_popup.rs # F2 popup: terminal + AI host selection
     ├── permission_popup.rs # F8 popup: permission queue for pending approvals
     ├── create_popup.rs # F4 popup: multi-step worktree creation wizard
     ├── cleanup_popup.rs# F6 popup: multi-select worktree cleanup with dry-run preview
     ├── search_popup.rs # F3 popup: full-text search across tasks + artifacts
+    ├── help_popup.rs  # F1 popup: scrollable help overlay with all key bindings
     └── styles.rs     # 8 crew color schemes, phase styles, selection/border/hint helpers
 ```
 
@@ -84,18 +86,20 @@ Overview ──d──> DocList ──Enter──> DocReader
 
 ### Event Loop
 Keys are routed in priority order:
-1. Modifier-only key events (kitty protocol) → update `modifier_bar_state`, continue
-2. Help overlay open → any key closes it
-3. Terminal view + `PrefixPending` mode → prefix command dispatch
-4. Terminal view + `ScrollBack` mode → scroll navigation keys
-5. Terminal view + `TerminalFocused` mode → `Ctrl+B` enters PrefixPending, all other keys forwarded to PTY
-6. Search popup open → search-specific keys
-7. Create worktree popup open → popup keys (text input, selection, toggles)
-8. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
-9. Permission queue popup open → popup keys (approve/deny/view)
-10. Launch popup open → popup keys only
-11. Right pane focused + non-Overview mode → doc/history navigation
-12. Default → Shift+F-key layer → Ctrl+F-key layer → base F-keys, tree nav, view switching
+1. Resize events → `terminal_resize_all()`
+2. Mouse events → selection (Down/Drag/Up) + scroll (ScrollUp/ScrollDown) in terminal panels
+3. Key release events (kitty protocol) → update `modifier_bar_state` based on remaining modifiers
+4. Modifier-only key press events (kitty protocol) → update `modifier_bar_state`, continue
+5. Help overlay open → any key closes it
+6. Terminal view + `ScrollBack` mode → scroll navigation keys
+7. Terminal view + `TerminalFocused` mode → `F12` exits, Shift+F-keys switch views, Shift+PgUp/PgDn cycle terminals, all other keys forwarded to PTY via `key_to_bytes()`
+8. Search popup open → search-specific keys
+9. Create worktree popup open → popup keys (text input, selection, toggles)
+10. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
+11. Permission queue popup open → popup keys (approve/deny/view)
+12. Launch popup open → popup keys only
+13. Right pane focused + non-Overview mode → doc/history navigation
+14. Default → Shift+F-key layer → Ctrl+F-key layer → base F-keys, tree nav, view switching
 
 **Esc behavior:** Esc never quits the application. It only closes popups, backs out of detail views, or switches focus from right pane to left pane. Use `q` or `F10` to quit.
 
@@ -134,7 +138,7 @@ View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Ke
 | `LaunchParams` | `{ command: String, args: Vec<String>, cwd: PathBuf }` — stored on each terminal for relaunch. |
 | `TerminalStatus` | Enum: `Running`, `NeedsAttention(AttentionReason)`, `Exited(i32)`. |
 | `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt`, `Idle { seconds }`, `Error`. |
-| `TerminalManager` | `Vec<EmbeddedTerminal>` + `focused: usize`. Entry point for all terminal operations. |
+| `TerminalManager` | `Vec<EmbeddedTerminal>` + `focused: usize`. Entry point for all terminal operations. Includes `focus_next_running()` / `focus_prev_running()` which skip exited terminals. |
 
 #### Reader Thread Architecture
 
@@ -193,8 +197,8 @@ The event-loop poll timeout in `main.rs` is reduced to **50ms** when the Termina
 | Mode | Description |
 |------|-------------|
 | `Normal` | Keys navigate the terminal list. Standard crew-board navigation. |
-| `TerminalFocused` | All keys go to the PTY except `Ctrl+B` (prefix key). |
-| `PrefixPending` | `Ctrl+B` was pressed, waiting for next key as a command. |
+| `TerminalFocused` | All keys go to the PTY. `F12` exits back to Normal. Shift+F-keys bypass for global view switching. Shift+PgUp/PgDn cycle terminals. |
+| `PrefixPending` | Legacy (unused). Kept for enum compatibility; no code path enters this state. |
 | `ScrollBack` | Navigate the vt100 scrollback buffer with Up/Down/PgUp/PgDn. |
 
 #### Layout Modes
@@ -208,7 +212,7 @@ The event-loop poll timeout in `main.rs` is reduced to **50ms** when the Termina
 | `Tiled4` | Four terminals in 2x2 grid + 15-col crew list. |
 | `Stacked` | Up to 5 terminals stacked vertically + 20-col crew list. |
 
-Cycle with `l` in Normal mode or `Ctrl+B l` in focused mode. Persists from `terminal_layout` setting.
+Cycle with `l` / `Right` in Normal mode. Layout cannot be cycled while in TerminalFocused mode (all keys go to PTY). Persists from `terminal_layout` setting.
 
 #### Terminal View Key Bindings (View 5)
 
@@ -218,10 +222,11 @@ Cycle with `l` in Normal mode or `Ctrl+B l` in focused mode. Persists from `term
 |-----|--------|
 | `↑` / `k` | Focus previous terminal |
 | `↓` / `j` | Focus next terminal |
-| `Enter` (running) | Enter `TerminalFocused` mode |
+| `F9` / `F12` | Enter `TerminalFocused` mode (running terminal required) |
 | `Enter` (exited) | Relaunch the exited terminal |
 | `d` / `Delete` (exited) | Dismiss (remove) the exited terminal |
 | `l` / `Right` | Cycle layout mode (focused → tiled-2 → tiled-4 → stacked) |
+| `[` | Enter scroll-back mode |
 | `F7` | Jump focus to next terminal needing attention |
 | `F8` | Open Permission Queue popup |
 
@@ -229,23 +234,17 @@ Cycle with `l` in Normal mode or `Ctrl+B l` in focused mode. Persists from `term
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+B` | Enter prefix-pending mode (next key is a command) |
-| All other keys | Sent directly to the PTY |
+| `F12` | Exit focus, return to Normal mode |
+| `Shift+F1` | Exit focus + switch to Tasks view |
+| `Shift+F2` | Exit focus + switch to Issues view |
+| `Shift+F3` | Exit focus + switch to Config view |
+| `Shift+F4` | Exit focus + switch to Cost view |
+| `Shift+F5` | Exit focus (already in Terminals view) |
+| `Shift+PgUp` | Focus previous running terminal (skips exited, wraps) |
+| `Shift+PgDn` | Focus next running terminal (skips exited, wraps) |
+| All other keys | Sent directly to the PTY via `key_to_bytes()` encoding |
 
-**Prefix commands (after `Ctrl+B`):**
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+B` | Send literal Ctrl+B to PTY |
-| `n` | Jump to next terminal needing attention |
-| `p` | Open Permission Queue popup |
-| `[` | Enter scroll-back mode |
-| `l` | Cycle layout mode |
-| `!` | Focus next terminal (wrapping) |
-| `1`-`9` | Focus terminal by index |
-| Other | Return to Normal mode |
-
-**ScrollBack mode (entered via `Ctrl+B [`):**
+**ScrollBack mode (entered via `[` in Normal mode or mouse scroll):**
 
 | Key | Action |
 |-----|--------|
@@ -257,7 +256,7 @@ Cycle with `l` in Normal mode or `Ctrl+B l` in focused mode. Persists from `term
 | `End` | Scroll to live view (bottom) |
 | `q` / `Esc` | Exit scroll-back, return to TerminalFocused |
 
-Scrollback offset is stored per-terminal (`EmbeddedTerminal.scroll_offset`). The border turns magenta in scroll-back mode, with a `[N/total]` indicator at the bottom.
+Scrollback offset is stored per-terminal (`EmbeddedTerminal.scroll_offset`). The border turns magenta in scroll-back mode, with a `[N/total]` indicator at the bottom. Mouse scroll wheel also enters scroll-back mode (see Mouse Support below).
 
 #### Permission Queue Popup (F8)
 
@@ -270,6 +269,53 @@ Shows all terminals with `NeedsAttention(PermissionPrompt)` or `NeedsAttention(E
 | `d` | Deny: send `n\n` to the selected terminal |
 | `v` / `Enter` | View: close popup, switch to Terminals view, focus the terminal |
 | `Esc` | Close popup |
+
+#### Mouse Support (Terminal Panels)
+
+Mouse capture is enabled globally (`EnableMouseCapture` / `DisableMouseCapture` in `main.rs`). Mouse events are handled in the event loop before keyboard events.
+
+**Text Selection:**
+
+| Event | Action |
+|-------|--------|
+| `MouseDown(Left)` | Start selection at clicked terminal panel (hit-tested via `terminal_panel_rects`) |
+| `MouseDrag(Left)` | Extend selection, clamped to the originating panel bounds |
+| `MouseUp(Left)` | Finish selection + auto-copy to clipboard via OSC 52 (if selection spans multiple cells) |
+
+Selection state is tracked in `App.text_selection: Option<TextSelection>`. The `TextSelection` struct stores the terminal index, panel rect (for clamping), start/end coordinates (panel-relative), and an `active` flag. Panel rects are written into `App.terminal_panel_rects: RefCell<Vec<(usize, Rect)>>` during each draw cycle by `terminal_view.rs`.
+
+Selected cells are highlighted with white text on deep blue background (`Color::Indexed(24)`) in `widget::draw_terminal()`.
+
+**Scroll Wheel:**
+
+| Event | Action |
+|-------|--------|
+| `ScrollUp` | Scroll back 3 lines in the terminal under the cursor; enters ScrollBack mode if in Normal or TerminalFocused |
+| `ScrollDown` | Scroll forward 3 lines in the terminal under the cursor |
+
+Mouse scroll also focuses the terminal being scrolled (changes `mgr.focused`).
+
+**Clipboard:** `osc52_copy()` writes `\x1b]52;c;{base64}\x07` to stdout. This works in terminals that support the OSC 52 clipboard protocol (most modern terminals including WezTerm, iTerm2, Windows Terminal).
+
+#### Keyboard Encoding (`widget::key_to_bytes()`)
+
+`key_to_bytes(code, modifiers)` in `widget.rs` converts crossterm key events to the byte sequences expected by programs running inside the PTY. It uses `xterm_mod_param()` to compute the xterm modifier parameter (`1 + shift?1:0 + alt?2:0 + ctrl?4:0`; 0 when no modifiers).
+
+| Key Category | Encoding |
+|-------------|----------|
+| Ctrl+letter | Control code 0x01-0x1a (Ctrl+A=0x01, etc.) |
+| Alt+letter | ESC prefix (`\x1b` + char) |
+| Enter | `\r` plain, `\x1b[13;{mod}u` with modifiers (CSI u) |
+| Backspace | `\x7f` plain, `\x1b[127;{mod}u` with modifiers (CSI u) |
+| Arrow keys | `\x1b[A` plain, `\x1b[1;{mod}A` with modifiers |
+| Home/End | `\x1b[H`/`\x1b[F` plain, `\x1b[1;{mod}H`/`F` with modifiers |
+| Insert/Delete/PgUp/PgDn | `\x1b[N~` plain, `\x1b[N;{mod}~` with modifiers (tilde encoding) |
+| F1-F4 | `\x1bOP` (SS3) plain, `\x1b[1;{mod}P` (CSI) with modifiers |
+| F5-F12 | `\x1b[N~` (tilde encoding), same modifier scheme |
+
+The CSI u encoding for Enter/Backspace is important for programs like Claude Code that distinguish `Ctrl+Enter` from `Enter`.
+
+Helper functions: `csi_final()`, `csi_tilde()`, `fkey_ss3()`.
 
 #### PTY Cleanup
 
@@ -336,13 +382,14 @@ Two-line status bar:
 The bar supports three modifier layers, triggered by holding Shift or Ctrl:
 
 **Base layer (no modifier):**
-`F1Help  F2Launch  F3Search  F4New  F5Rfrsh  F6Clean  F7Attn  F8Perms  F9[Focus]  F10Quit`
+`F1Help  F2Launch  F3Search  F4New  F5Rfrsh  F6Clean  F7Attn  F8Perms  F9Focus  F10Quit`
+(F9 Focus label only shows in Terminals view Normal mode; otherwise dimmed placeholder. F12 also enters focus.)
 
 **Shift layer (view switching + detail):**
 `SHIFT▶ S+F1Tasks  S+F2Issues  S+F3Config  S+F4Cost  S+F5Terms  S+F6Docs  S+F7Hist`
 
-**Ctrl layer (admin, reserved for expansion):**
-`CTRL▶ C+F9Focus` (other slots reserved)
+**Ctrl layer (reserved for expansion):**
+`CTRL▶` (all F-key slots empty/reserved)
 
 **Modifier detection:** At startup, crew-board enables the kitty keyboard protocol via `PushKeyboardEnhancementFlags` if supported. With kitty protocol, modifier-only key presses (Shift alone, Ctrl alone) are detected and the bar updates in real-time. On terminals without kitty support (e.g., Windows Terminal), pressing a Shift+F-key or Ctrl+F-key flashes the corresponding layer for 2 seconds, showing what else is available.
 
@@ -350,9 +397,10 @@ The bar supports three modifier layers, triggered by holding Shift or Ctrl:
 
 In Terminals view, the bar changes based on the input mode:
 
-- **TerminalFocused**: `━━ ALL KEYS → TERMINAL ━━  Ctrl+B: prefix (n:attn  p:perms  [:scroll  l:layout  1-9:crew)`
-- **PrefixPending**: `PREFIX▶  n:Attn  p:Perms  [:Scroll  l:Layout  !:Next  1-9:Crew#  C-b:Literal  Esc Cancel`
-- **ScrollBack**: `SCROLL▶  ↑↓:Line  PgUp/Dn:Page  Home:Top  End:Live  q/Esc:Exit  offset:N`
+- **TerminalFocused**: `━━ INPUT → TERMINAL ━━  F12 exit  S+F1 Tasks  F2 Issues  F3 Cfg  F4 Cost  F5 Terms  S+PgUp/Dn crew`
+- **ScrollBack**: `SCROLL▶  ↑↓/jk:Line  PgUp/Dn:Page  Home:Top  End:Live  q/Esc:Exit  offset:N`
+
+The PrefixPending bar is no longer shown (the prefix system is legacy; F12 is now the sole focus toggle).
 
 #### F-Key Empty Slots
 
@@ -443,18 +491,23 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Search index free functions**: `build_search_index()` and `build_search_entry()` are module-level free functions, not `impl App` methods. This is required because they are called from the background thread closure (which cannot capture `&self`).
 - **`LoadedTask` construction sites**: When adding fields to `LoadedTask`, update all construction sites: 3 in `load_tasks()` (metadata fallback, normal state.json, gap-fill), plus the corresponding sites in `load_tasks_incremental()`. The `state_mtime` field must be `Some(mtime)` for normal tasks and `None` for archived/fallback tasks.
 - **Terminal `d` key conflict**: The `d` key normally opens the doc list (`enter_doc_list()`). In the Terminals view it dismisses an exited terminal instead. The event loop checks `app.active_view == ActiveView::Terminals` before deciding which action to take.
-- **Terminal `Enter` key conflict**: In the Terminals view `Enter` either enters `TerminalFocused` mode (running terminal) or relaunches (exited terminal). Outside the Terminals view it expands/collapses tree rows.
+- **Terminal `Enter` key conflict**: In the Terminals view `Enter` only relaunches exited terminals (not running ones). `F9`/`F12` is the focus toggle. Outside the Terminals view, `Enter` expands/collapses tree rows.
 - **`poll_terminals()` auto-exits focus mode**: If the user is in `TerminalFocused` mode and the terminal exits, `poll_terminals()` automatically resets `terminal_input_mode` to `Normal`. No manual key press is needed.
 - **Attention cleared on input**: `TerminalManager::send_input()` always sets `attention_signal` to `None`. This means typing in a terminal immediately clears any attention badge, even if the screen still shows the prompt.
 - **Idle threshold in `poll_status()`**: Idle detection (120s) is handled in `poll_status()`, not in the reader thread. The reader thread only sets `attention_signal` for screen-content patterns (prompts/errors). Idle is a time-based check against `last_output` done each tick.
 - **Reader thread lifetime**: The reader thread for each PTY runs until the child process exits (EOF on the master reader). It is not killed explicitly — it exits naturally. After EOF it waits for the child exit code via `child.wait()` before writing the exit signal.
 - **Scroll-back via `set_scrollback()`**: The vt100 crate's `Parser::set_scrollback(n)` controls how many scrollback lines appear in the visible view. `draw_terminal()` temporarily sets it during rendering and restores it after. The parser lock is held for the entire render — the reader thread will block during this brief period.
-- **`PrefixPending` timeout**: There is no timeout for the prefix-pending state. If the user presses `Ctrl+B` and waits, the mode stays until the next keypress. Any unrecognized key after `Ctrl+B` drops back to Normal mode (not TerminalFocused).
+- **`PrefixPending` timeout (legacy)**: The prefix-pending state is no longer reachable in the current code. This gotcha is retained for reference only.
 - **Layout mode in tiled views**: `terminal_indices_for_layout()` selects which terminals to show. It always includes the focused terminal and fills remaining slots with neighbors. The focused terminal's border uses `focused_border_style()` to distinguish it from inactive tiles.
 - **Permission popup refreshes entries**: After approve/deny, the popup rebuilds its entries list from scratch. The cursor clamps if the list shrinks.
 - **`last_terminal_size` for relaunch**: `terminal_resize_all()` stores the computed PTY dimensions in `App.last_terminal_size`. `terminal_relaunch_focused()` uses these instead of hardcoded 24x80.
 - **Kitty protocol runtime detection**: `crossterm::terminal::supports_keyboard_enhancement()` queries the terminal at startup. If supported, `PushKeyboardEnhancementFlags` is executed with `DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES | REPORT_ALL_KEYS_AS_ESCAPE_CODES`. Must be popped with `PopKeyboardEnhancementFlags` on exit.
 - **Modifier bar flash fallback**: On terminals without kitty protocol (e.g., Windows Terminal), pressing Shift+F1 both executes the action AND sets `modifier_bar_flash_until` to `Instant::now() + 2s`. The flash timeout is ticked each loop iteration via `tick_modifier_bar()`. The poll timeout drops to 50ms during flash for responsive decay.
 - **Modifier+F-key priority**: Shift+F-key and Ctrl+F-key bindings are checked BEFORE the base `match` in Priority 12. This prevents `Shift+F(1)` from falling through to the plain `F(1)` handler.
-- **Shift+F-keys bypass TerminalFocused mode**: Modified F-keys in TerminalFocused mode are forwarded to the PTY like all other keys. Only the Ctrl+B prefix can escape TerminalFocused mode. The Shift/Ctrl+F-key layers only work in Normal mode.
-- **F9 Focus is contextual**: F9 only shows a label ("Focus") in the Terminals view Normal mode. In other views it renders as a dimmed empty placeholder. The binding is a no-op outside Terminals view.
+- **Shift+F-keys DO bypass TerminalFocused mode**: Unlike regular keys, Shift+F1-F5 in TerminalFocused mode exit focus and switch views. Shift+PgUp/PgDn cycle terminals while staying focused. Other Shift+key combinations are forwarded to the PTY. `F12` is the sole single-key exit from focused mode.
+- **F9/F12 Focus is contextual**: F9 and F12 both enter TerminalFocused mode, but only when in Terminals view with at least one terminal. F9 shows a label ("Focus") in the base F-key bar only in Terminals view Normal mode; otherwise it renders as a dimmed empty placeholder.
+- **Mouse capture scope**: Mouse capture is always enabled (`EnableMouseCapture`). Click/drag/release are handled only when `active_view == Terminals`. Scroll events also only apply in Terminals view. Clicking outside any terminal panel clears the selection.
+- **`terminal_panel_rects` is RefCell**: Because panel rects are written during `draw()` (immutable `&App`) and read during mouse handling (mutable `&mut App`), the rects use `RefCell<Vec<(usize, Rect)>>`. This is the only `RefCell` in `App`.
+- **OSC 52 clipboard**: Text is copied via OSC 52 (`\x1b]52;c;{base64}\x07`). This requires terminal support (WezTerm, iTerm2, modern Windows Terminal). The `base64` crate is a dependency for this feature.
+- **`key_to_bytes()` CSI u encoding**: Modified Enter and Backspace use CSI u encoding (`\x1b[13;{mod}u`, `\x1b[127;{mod}u`) so that programs like Claude Code can distinguish e.g. Ctrl+Enter from plain Enter.
+- **PrefixPending is legacy**: The `PrefixPending` variant of `TerminalInputMode` is kept for enum compatibility but no code path enters this state. The `Ctrl+B` prefix system was replaced by `F12` toggle + `Shift+F-key` view switching.
