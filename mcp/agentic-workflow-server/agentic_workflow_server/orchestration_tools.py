@@ -541,10 +541,18 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
 
     # For non-start actions, handle simply
     if action == "resume":
+        task_ref = text.strip() if text.strip() else None
+        # Extract task ID from full paths like /path/to/.tasks/TASK_003
+        if task_ref and ("/" in task_ref or "\\" in task_ref):
+            from pathlib import PurePosixPath, PureWindowsPath
+            # Try to get the last path component (e.g., "TASK_003")
+            name = PurePosixPath(task_ref.rstrip("/\\")).name
+            if name:
+                task_ref = name
         return {
             "action": "resume",
             "task_description": "",
-            "task_id": text.strip() if text.strip() else None,
+            "task_id": task_ref,
             "options": options,
             "errors": errors
         }
@@ -1547,7 +1555,7 @@ def crew_parse_agent_output(
             docs = json.loads(docs_match.group(1))
             extracted["docs_needed"] = docs
             if task_id:
-                workflow_mark_docs_needed(docs=docs, task_id=task_id)
+                workflow_mark_docs_needed(files=docs, task_id=task_id)
         except json.JSONDecodeError:
             extracted["docs_needed_parse_error"] = docs_match.group(1)
 

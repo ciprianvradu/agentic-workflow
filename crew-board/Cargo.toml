@@ -24,6 +24,13 @@ toml = "0.8"
 anyhow = "1"
 tui-input = "0.11"
 regex = "1"
+portable-pty = "0.9"
+vt100 = "0.15"
+base64 = "0.22"
+
+[[example]]
+name = "terminal_spike"
+path = "examples/terminal_spike.rs"
 
 [profile.release]
 strip = true

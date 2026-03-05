@@ -4,6 +4,56 @@ use std::process::Command;
 
 use crate::launcher::{AiHost, COLOR_SCHEME_HEX};
 
+/// Return the appropriate git command for the given path.
+/// Uses `git.exe` (Windows-native) for paths on `/mnt/c/` etc., which is
+/// dramatically faster than WSL git accessing Windows filesystems via the
+/// 9P protocol.
+fn git_cmd(path: &Path) -> &'static str {
+    let path_str = path.to_string_lossy();
+    if path_str.starts_with("/mnt/") {
+        // Check if git.exe is available
+        static HAS_GIT_EXE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let available = *HAS_GIT_EXE.get_or_init(|| {
+            Command::new("git.exe")
+                .arg("--version")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+        if available {
+            return "git.exe";
+        }
+    }
+    "git"
+}
+
+/// Convert a WSL path like `/mnt/c/git/repo` to a Windows path `C:/git/repo`
+/// for use with `git.exe`. Returns the original path string if not a WSL mount.
+#[cfg(test)]
+fn to_win_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix("/mnt/") {
+        if let Some(idx) = rest.find('/') {
+            let drive = &rest[..idx];
+            let remainder = &rest[idx..];
+            return format!("{}:{}", drive.to_uppercase(), remainder);
+        } else if rest.len() == 1 {
+            return format!("{}:/", rest.to_uppercase());
+        }
+    }
+    s.into_owned()
+}
+
+/// Returns a path suitable for passing to the git command.
+/// When using git.exe, converts WSL paths to Windows paths.
+#[cfg(test)]
+fn git_path(git: &str, path: &Path) -> String {
+    if git == "git.exe" {
+        to_win_path(path)
+    } else {
+        path.to_string_lossy().into_owned()
+    }
+}
+
 /// Preview of what will be created (shown before executing).
 #[derive(Clone)]
 pub struct WorktreePreview {
@@ -85,7 +135,8 @@ fn get_current_branch(repo_path: &Path) -> Result<String, String> {
 
 /// Fetch and pull latest from origin.
 fn fetch_and_pull(repo_path: &Path, branch: &str) -> Result<(), String> {
-    let fetch = Command::new("git")
+    let git = git_cmd(repo_path);
+    let fetch = Command::new(git)
         .args(["fetch", "origin"])
         .current_dir(repo_path)
         .output()
@@ -96,7 +147,7 @@ fn fetch_and_pull(repo_path: &Path, branch: &str) -> Result<(), String> {
             String::from_utf8_lossy(&fetch.stderr)
         ));
     }
-    let pull = Command::new("git")
+    let pull = Command::new(git)
         .args(["pull", "origin", branch])
         .current_dir(repo_path)
         .output()
@@ -289,7 +340,7 @@ pub fn create_worktree(
     std::fs::create_dir_all(&worktree_base)
         .map_err(|e| format!("Failed to create worktrees directory: {}", e))?;
 
-    // Git worktree add
+    // Git worktree add (always use WSL git — git.exe has path issues with worktree paths)
     let worktree_str = worktree_path.to_string_lossy();
     let git_add = Command::new("git")
         .args([
@@ -334,6 +385,7 @@ pub fn create_worktree(
         AiHost::Copilot | AiHost::Gemini => format!("@crew-resume {}", task_id),
         AiHost::OpenCode => format!("/crew-resume {}", task_id),
         AiHost::Claude => format!("/crew resume {}", task_id),
+        AiHost::Shell => String::new(),
     };
     let now = chrono::Utc::now().to_rfc3339();
     let resume_content = format!(
@@ -415,5 +467,13 @@ mod tests {
         assert!(branch.len() <= 55); // "crew/" + 50
         assert!(branch.starts_with("crew/"));
         assert!(!branch.ends_with('-'));
+    }
+
+    #[test]
+    fn test_to_win_path() {
+        assert_eq!(to_win_path(Path::new("/mnt/c/git/repo")), "C:/git/repo");
+        assert_eq!(to_win_path(Path::new("/mnt/d/projects")), "D:/projects");
+        assert_eq!(to_win_path(Path::new("/home/user/repo")), "/home/user/repo");
+        assert_eq!(to_win_path(Path::new("/mnt/c")), "C:/");
     }
 }

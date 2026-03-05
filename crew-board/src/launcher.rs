@@ -4,6 +4,7 @@ use std::process::Command;
 /// Detected terminal environment.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TerminalEnv {
+    Embedded,
     WindowsTerminalWsl,
     Tmux,
     MacOs,
@@ -17,6 +18,7 @@ pub enum AiHost {
     Copilot,
     Gemini,
     OpenCode,
+    Shell,
 }
 
 /// Color scheme with hex strings for terminal commands.
@@ -50,6 +52,7 @@ impl AiHost {
             AiHost::Copilot => "GitHub Copilot",
             AiHost::Gemini => "Gemini CLI",
             AiHost::OpenCode => "OpenCode",
+            AiHost::Shell => "Shell (bash)",
         }
     }
 
@@ -59,6 +62,7 @@ impl AiHost {
             AiHost::Copilot => "gh cs",
             AiHost::Gemini => "gemini",
             AiHost::OpenCode => "opencode",
+            AiHost::Shell => "bash",
         }
     }
 }
@@ -66,6 +70,7 @@ impl AiHost {
 impl TerminalEnv {
     pub fn label(&self) -> &'static str {
         match self {
+            TerminalEnv::Embedded => "Embedded (in crew-board)",
             TerminalEnv::WindowsTerminalWsl => "Windows Terminal (WSL tab)",
             TerminalEnv::Tmux => "tmux (new window)",
             TerminalEnv::MacOs => "macOS Terminal",
@@ -76,9 +81,10 @@ impl TerminalEnv {
 
 /// Detect available terminal environments for the current OS.
 pub fn detect_terminals() -> Vec<TerminalEnv> {
-    let mut terminals = Vec::new();
+    // Embedded is always first — the main differentiator of crew-board
+    let mut terminals = vec![TerminalEnv::Embedded];
 
-    // Check tmux first (available on any platform)
+    // Check tmux (available on any platform)
     if std::env::var("TMUX").is_ok() {
         terminals.push(TerminalEnv::Tmux);
     }
@@ -94,14 +100,7 @@ pub fn detect_terminals() -> Vec<TerminalEnv> {
     }
 
     // Generic Linux fallback
-    if cfg!(target_os = "linux") && !terminals.is_empty() {
-        // Already have better options
-    } else if cfg!(target_os = "linux") {
-        terminals.push(TerminalEnv::LinuxGeneric);
-    }
-
-    // Always have at least one option
-    if terminals.is_empty() {
+    if cfg!(target_os = "linux") && terminals.len() <= 1 {
         terminals.push(TerminalEnv::LinuxGeneric);
     }
 
@@ -130,6 +129,9 @@ pub fn detect_ai_hosts() -> Vec<AiHost> {
     if hosts.is_empty() {
         hosts = vec![AiHost::Claude, AiHost::Copilot, AiHost::Gemini, AiHost::OpenCode];
     }
+
+    // Shell is always available as fallback
+    hosts.push(AiHost::Shell);
 
     hosts
 }
@@ -166,6 +168,10 @@ pub fn launch(
     };
 
     match terminal {
+        TerminalEnv::Embedded => {
+            // Handled by app.rs spawn_terminal — should not reach here
+            return Err("Embedded terminals are spawned via TerminalManager, not launcher".to_string());
+        }
         TerminalEnv::WindowsTerminalWsl => {
             // wt.exe new-tab: open a new WSL tab in Windows Terminal
             // Explicit cd in the bash command since bash -l may reset cwd

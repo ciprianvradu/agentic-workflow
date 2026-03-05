@@ -2,10 +2,12 @@ use crate::cleanup;
 use crate::data::task::{self, Discovery, Interaction, TaskArtifact};
 use crate::data::RepoData;
 use crate::launcher::{self, AiHost, TerminalEnv};
+use crate::terminal::TerminalManager;
 use crate::worktree;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use ratatui::layout::Rect;
 use tui_input::Input;
 
 /// Which view/tab is active.
@@ -15,6 +17,90 @@ pub enum ActiveView {
     BeadsIssues,
     Config,
     CostSummary,
+    Terminals,
+}
+
+/// Input mode for the terminal view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TerminalInputMode {
+    /// Normal mode: keys navigate the terminal list.
+    Normal,
+    /// Terminal focused: all keys go to the PTY (F12 exits back to Normal).
+    TerminalFocused,
+    /// Legacy prefix mode (unused — kept for enum compatibility).
+    PrefixPending,
+    /// Scroll-back mode: navigate the vt100 scrollback buffer.
+    ScrollBack,
+}
+
+/// Layout mode for the Terminals view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TerminalLayout {
+    /// One large terminal + crew list sidebar (default).
+    Focused,
+    /// Two terminals side by side.
+    Tiled2,
+    /// Four terminals in a 2x2 grid.
+    Tiled4,
+    /// Terminals stacked vertically.
+    Stacked,
+}
+
+impl TerminalLayout {
+    /// Cycle to the next layout mode.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Focused => Self::Tiled2,
+            Self::Tiled2 => Self::Tiled4,
+            Self::Tiled4 => Self::Stacked,
+            Self::Stacked => Self::Focused,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Focused => "focused",
+            Self::Tiled2 => "tiled-2",
+            Self::Tiled4 => "tiled-4",
+            Self::Stacked => "stacked",
+        }
+    }
+}
+
+/// Which modifier layer is shown on the F-key bar.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ModifierBarState {
+    /// Base F-key bar (no modifier held).
+    Normal,
+    /// Shift layer: view switching + detail shortcuts.
+    Shift,
+    /// Ctrl layer: reserved for future expansion.
+    Ctrl,
+    /// Alt layer: reserved for future expansion.
+    Alt,
+    /// Shift+Ctrl layer: reserved for future expansion.
+    ShiftCtrl,
+    /// Alt+Shift layer: reserved for future expansion.
+    AltShift,
+    /// Ctrl+Alt layer: reserved for future expansion.
+    CtrlAlt,
+}
+
+/// Mouse text selection state for terminal panels.
+#[derive(Debug, Clone)]
+pub struct TextSelection {
+    /// Index of the terminal this selection belongs to.
+    pub terminal_idx: usize,
+    /// Inner rect of the terminal panel (absolute screen coordinates).
+    pub panel_rect: Rect,
+    /// Start position (col, row) relative to panel_rect origin.
+    pub start_col: u16,
+    pub start_row: u16,
+    /// Current end position (col, row) relative to panel_rect origin.
+    pub end_col: u16,
+    pub end_row: u16,
+    /// Whether the mouse button is still held (selection in progress).
+    pub active: bool,
 }
 
 /// Which pane has focus in dual-pane views.
@@ -217,6 +303,31 @@ pub struct App {
 
     // Background refresh
     pub bg_refresh_handle: Option<std::thread::JoinHandle<BgRefreshResult>>,
+
+    // Permission queue popup
+    pub permission_popup: Option<crate::ui::permission_popup::PermissionPopup>,
+
+    // Embedded terminals
+    pub terminal_manager: Option<TerminalManager>,
+    pub terminal_input_mode: TerminalInputMode,
+    pub terminal_layout: TerminalLayout,
+    /// Last known terminal area dimensions (rows, cols) for proper PTY sizing.
+    pub last_terminal_size: (u16, u16),
+
+    // Modifier F-key bar state
+    /// Which modifier layer is currently shown on the F-key bar.
+    pub modifier_bar_state: ModifierBarState,
+    /// When set, the modifier bar reverts to Normal after this instant (flash fallback).
+    pub modifier_bar_flash_until: Option<std::time::Instant>,
+    /// Whether the kitty keyboard protocol is active (modifier-only detection).
+    pub kitty_protocol_enabled: bool,
+
+    // Mouse text selection
+    /// Current text selection state (if any).
+    pub text_selection: Option<TextSelection>,
+    /// Panel rects for terminal panels, set during draw for mouse hit-testing.
+    /// Vec of (terminal_index, inner_rect).
+    pub terminal_panel_rects: RefCell<Vec<(usize, Rect)>>,
 }
 
 /// Build the full search index from all repos' tasks.
@@ -330,6 +441,16 @@ impl App {
             cleanup_popup: None,
             search_index,
             bg_refresh_handle: None,
+            permission_popup: None,
+            terminal_manager: Some(TerminalManager::new()),
+            terminal_input_mode: TerminalInputMode::Normal,
+            terminal_layout: TerminalLayout::Focused,
+            last_terminal_size: (24, 80),
+            modifier_bar_state: ModifierBarState::Normal,
+            modifier_bar_flash_until: None,
+            kitty_protocol_enabled: false,
+            text_selection: None,
+            terminal_panel_rects: RefCell::new(Vec::new()),
         };
         app.rebuild_tree();
         app.ensure_artifacts();
@@ -595,7 +716,8 @@ impl App {
             ActiveView::Tasks => ActiveView::BeadsIssues,
             ActiveView::BeadsIssues => ActiveView::Config,
             ActiveView::Config => ActiveView::CostSummary,
-            ActiveView::CostSummary => ActiveView::Tasks,
+            ActiveView::CostSummary => ActiveView::Terminals,
+            ActiveView::Terminals => ActiveView::Tasks,
         };
         self.detail_scroll = 0;
     }
@@ -793,7 +915,7 @@ impl App {
                     })
                     .unwrap_or_else(|| repo.path.clone());
                 let color_idx = task.worktree.as_ref().map(|wt| wt.color_scheme_index);
-                (dir, loaded.dir.to_string_lossy().to_string(), task.description.clone(), color_idx)
+                (dir, task.task_id.clone(), task.description.clone(), color_idx)
             }
             Some(TreeRow::Repo(ri)) => {
                 let repo = &self.repos[*ri];
@@ -859,35 +981,110 @@ impl App {
 
     /// Confirm current popup selection.
     pub fn popup_confirm(&mut self) {
-        let popup = match &mut self.launch_popup {
-            Some(p) => p,
-            None => return,
+        // Determine action from popup state, then act — avoids borrow conflicts
+        // when spawning embedded terminals needs &mut self.
+        enum Outcome {
+            None,
+            ClosePopup,
+            SpawnEmbedded {
+                task_id: String,
+                host_label: String,
+                shell_cmd: String,
+                work_dir: PathBuf,
+                color_idx: Option<usize>,
+            },
+        }
+
+        let outcome = {
+            let popup = match &mut self.launch_popup {
+                Some(p) => p,
+                None => return,
+            };
+            match popup.step {
+                LaunchStep::SelectTerminal => {
+                    popup.step = LaunchStep::SelectHost;
+                    Outcome::None
+                }
+                LaunchStep::SelectHost => {
+                    let terminal = popup.terminals[popup.terminal_cursor];
+                    let host = popup.hosts[popup.host_cursor];
+
+                    if terminal == launcher::TerminalEnv::Embedded {
+                        let task_id = popup.task_id.clone();
+                        let work_dir = popup.work_dir.clone();
+                        let color_idx = popup.color_scheme_index;
+                        let host_label = host.label().to_string();
+                        let shell_cmd = match host {
+                            launcher::AiHost::Shell => String::new(),
+                            launcher::AiHost::Copilot | launcher::AiHost::OpenCode => {
+                                host.command().to_string()
+                            }
+                            _ => format!(
+                                "{} \"/crew resume {}\"",
+                                host.command(),
+                                task_id
+                            ),
+                        };
+                        Outcome::SpawnEmbedded {
+                            task_id,
+                            host_label,
+                            shell_cmd,
+                            work_dir,
+                            color_idx,
+                        }
+                    } else {
+                        let cs = popup.color_scheme_index.map(launcher::get_hex_scheme);
+                        let result = launcher::launch(
+                            terminal,
+                            host,
+                            &popup.work_dir,
+                            &popup.task_id,
+                            &popup.task_desc,
+                            cs,
+                        );
+                        popup.result_msg = Some(match result {
+                            Ok(()) => {
+                                format!("Launched {} in {}", host.label(), terminal.label())
+                            }
+                            Err(e) => format!("Error: {}", e),
+                        });
+                        popup.step = LaunchStep::Done;
+                        Outcome::None
+                    }
+                }
+                LaunchStep::Done => Outcome::ClosePopup,
+            }
         };
-        match popup.step {
-            LaunchStep::SelectTerminal => {
-                popup.step = LaunchStep::SelectHost;
-            }
-            LaunchStep::SelectHost => {
-                let terminal = popup.terminals[popup.terminal_cursor];
-                let host = popup.hosts[popup.host_cursor];
-                let cs = popup.color_scheme_index.map(launcher::get_hex_scheme);
-                let result = launcher::launch(
-                    terminal,
-                    host,
-                    &popup.work_dir,
-                    &popup.task_id,
-                    &popup.task_desc,
-                    cs,
-                );
-                popup.result_msg = Some(match result {
-                    Ok(()) => format!("Launched {} in {}", host.label(), terminal.label()),
-                    Err(e) => format!("Error: {}", e),
-                });
-                popup.step = LaunchStep::Done;
-            }
-            LaunchStep::Done => {
+
+        match outcome {
+            Outcome::ClosePopup => {
                 self.launch_popup = None;
             }
+            Outcome::SpawnEmbedded {
+                task_id,
+                host_label,
+                shell_cmd,
+                work_dir,
+                color_idx,
+            } => {
+                if shell_cmd.is_empty() {
+                    self.spawn_terminal(
+                        &task_id, &host_label, "bash", &[], &work_dir, color_idx,
+                    );
+                } else {
+                    self.spawn_terminal(
+                        &task_id,
+                        &host_label,
+                        "bash",
+                        &["-lc".to_string(), shell_cmd],
+                        &work_dir,
+                        color_idx,
+                    );
+                }
+                self.launch_popup = None;
+                self.active_view = ActiveView::Terminals;
+            }
+            Outcome::None => {}
         }
     }
 
@@ -1557,5 +1754,451 @@ impl App {
         self.detail_scroll = 0;
         self.focus_pane = FocusPane::Left;
         self.ensure_artifacts();
+    }
+
+    // ── Permission Queue Popup ──────────────────────────────────────────
+
+    /// Open the permission queue popup (F8).
+    pub fn open_permission_popup(&mut self) {
+        let popup = crate::ui::permission_popup::PermissionPopup::new(self);
+        self.permission_popup = Some(popup);
+    }
+
+    /// Handle key events in the permission queue popup.
+    pub fn permission_popup_handle_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        let popup = match &mut self.permission_popup {
+            Some(p) => p,
+            None => return,
+        };
+
+        match key.code {
+            KeyCode::Esc => {
+                self.permission_popup = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if popup.cursor > 0 {
+                    popup.cursor -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if popup.cursor + 1 < popup.entries.len() {
+                    popup.cursor += 1;
+                }
+            }
+            KeyCode::Char('a') => {
+                // Approve: send 'y\n' to the selected terminal
+                if let Some(&term_idx) = popup.entries.get(popup.cursor) {
+                    if let Some(mgr) = &self.terminal_manager {
+                        if let Some(term) = mgr.terminals.get(term_idx) {
+                            let _ = term.writer.lock().unwrap().write_all(b"y\n");
+                            let _ = term.writer.lock().unwrap().flush();
+                            *term.attention_signal.lock().unwrap() = None;
+                        }
+                    }
+                    // Refresh entries
+                    let new_popup = crate::ui::permission_popup::PermissionPopup::new(self);
+                    self.permission_popup = Some(new_popup);
+                }
+            }
+            KeyCode::Char('d') => {
+                // Deny: send 'n\n' to the selected terminal
+                if let Some(&term_idx) = popup.entries.get(popup.cursor) {
+                    if let Some(mgr) = &self.terminal_manager {
+                        if let Some(term) = mgr.terminals.get(term_idx) {
+                            let _ = term.writer.lock().unwrap().write_all(b"n\n");
+                            let _ = term.writer.lock().unwrap().flush();
+                            *term.attention_signal.lock().unwrap() = None;
+                        }
+                    }
+                    let new_popup = crate::ui::permission_popup::PermissionPopup::new(self);
+                    self.permission_popup = Some(new_popup);
+                }
+            }
+            KeyCode::Char('v') | KeyCode::Enter => {
+                // View terminal: close popup, switch to Terminals view, focus the terminal
+                if let Some(&term_idx) = popup.entries.get(popup.cursor) {
+                    self.permission_popup = None;
+                    self.active_view = ActiveView::Terminals;
+                    if let Some(mgr) = &mut self.terminal_manager {
+                        if term_idx < mgr.terminals.len() {
+                            mgr.focused = term_idx;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ── Modifier Bar ──────────────────────────────────────────────────
+
+    /// Show the modifier bar layer with a brief flash timer.
+    /// On terminals with kitty protocol, the modifier key release event
+    /// reverts the bar instantly; on others the 500ms timer handles it.
+    pub fn flash_modifier_bar(&mut self, state: ModifierBarState) {
+        self.modifier_bar_state = state;
+        self.modifier_bar_flash_until =
+            Some(std::time::Instant::now() + std::time::Duration::from_secs(2));
+    }
+
+    /// Tick the modifier bar flash timeout (non-kitty fallback).
+    pub fn tick_modifier_bar(&mut self) {
+        if let Some(until) = self.modifier_bar_flash_until {
+            if std::time::Instant::now() >= until {
+                self.modifier_bar_state = ModifierBarState::Normal;
+                self.modifier_bar_flash_until = None;
+            }
+        }
+    }
+
+    // ── Embedded Terminals ────────────────────────────────────────────
+
+    /// Spawn a new embedded terminal for a task.
+    pub fn spawn_terminal(
+        &mut self,
+        task_id: &str,
+        label: &str,
+        command: &str,
+        args: &[String],
+        cwd: &std::path::Path,
+        color_scheme_index: Option<usize>,
+    ) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            // Use a default size; will be resized on next draw
+            let _ = mgr.spawn(
+                task_id.to_string(),
+                label.to_string(),
+                command,
+                args,
+                cwd,
+                24,
+                80,
+                color_scheme_index,
+            );
+        }
+    }
+
+    /// Close an embedded terminal by id.
+    #[allow(dead_code)]
+    pub fn close_terminal(&mut self, id: &str) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            mgr.remove(id);
+        }
+    }
+
+    /// Focus the next terminal in the list.
+    pub fn terminal_focus_next(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            mgr.focus_next();
+        }
+    }
+
+    /// Focus the previous terminal in the list.
+    pub fn terminal_focus_prev(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            mgr.focus_prev();
+        }
+    }
+
+    /// Focus the next non-exited terminal (wraps around). For use in focused mode.
+    pub fn terminal_focus_next_running(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            mgr.focus_next_running();
+        }
+    }
+
+    /// Focus the previous non-exited terminal (wraps around). For use in focused mode.
+    pub fn terminal_focus_prev_running(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            mgr.focus_prev_running();
+        }
+    }
+
+    /// Jump to the next terminal needing attention.
+    pub fn terminal_focus_next_attention(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            if mgr.focus_next_attention() {
+                self.active_view = ActiveView::Terminals;
+            }
+        }
+    }
+
+    /// Send input bytes to the focused terminal.
+    pub fn terminal_send_input(&self, bytes: &[u8]) {
+        if let Some(mgr) = &self.terminal_manager {
+            let _ = mgr.send_input(bytes);
+        }
+    }
+
+    /// Store window dimensions for terminal relaunch sizing.
+    /// Actual PTY resize is handled on every draw cycle (resize-on-draw pattern)
+    /// by `widget::resize_if_needed()` which uses exact inner area dimensions.
+    pub fn terminal_resize_all(&mut self, rows: u16, cols: u16) {
+        // Rough estimate for relaunch only (overridden by first draw cycle)
+        let pty_rows = rows.saturating_sub(4);
+        let pty_cols = cols.saturating_sub(22);
+        self.last_terminal_size = (pty_rows, pty_cols);
+    }
+
+    /// Poll all embedded terminals for status changes.
+    /// Call once per event loop tick. Returns true if any status changed.
+    pub fn poll_terminals(&mut self) -> bool {
+        let changed = if let Some(mgr) = &mut self.terminal_manager {
+            mgr.poll_status()
+        } else {
+            false
+        };
+
+        // If the focused terminal exited while we're in TerminalFocused mode,
+        // drop back to Normal mode so the user can interact with the list.
+        if self.terminal_input_mode == TerminalInputMode::TerminalFocused {
+            if let Some(mgr) = &self.terminal_manager {
+                if let Some(term) = mgr.focused_terminal() {
+                    if matches!(term.status, crate::terminal::TerminalStatus::Exited(_)) {
+                        self.terminal_input_mode = TerminalInputMode::Normal;
+                    }
+                }
+            }
+        }
+
+        changed
+    }
+
+    /// Dismiss (remove) the currently focused terminal.
+    pub fn terminal_dismiss_focused(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal() {
+                let id = term.id.clone();
+                mgr.remove(&id);
+            }
+        }
+    }
+
+    /// Relaunch the currently focused terminal (if exited).
+    pub fn terminal_relaunch_focused(&mut self) {
+        let (rows, cols) = self.last_terminal_size;
+        if let Some(mgr) = &mut self.terminal_manager {
+            let id = mgr.focused_terminal().map(|t| t.id.clone()).unwrap_or_default();
+            if !id.is_empty() {
+                let _ = mgr.relaunch(&id, rows, cols);
+            }
+        }
+    }
+
+    // ── Scroll-Back ──────────────────────────────────────────────────
+
+    /// Scroll the focused terminal up by N lines.
+    pub fn terminal_scroll_up(&mut self, lines: usize) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal_mut() {
+                let max_scrollback =
+                    crate::terminal::widget::scrollback_available(&term.parser);
+                term.scroll_offset = (term.scroll_offset + lines).min(max_scrollback);
+            }
+        }
+    }
+
+    /// Scroll the focused terminal down by N lines.
+    pub fn terminal_scroll_down(&mut self, lines: usize) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal_mut() {
+                term.scroll_offset = term.scroll_offset.saturating_sub(lines);
+            }
+        }
+    }
+
+    /// Reset scroll position to live view (bottom).
+    pub fn terminal_scroll_reset(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal_mut() {
+                term.scroll_offset = 0;
+            }
+        }
+    }
+
+    /// Scroll to the top of the scrollback buffer.
+    pub fn terminal_scroll_to_top(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal_mut() {
+                let max_scrollback =
+                    crate::terminal::widget::scrollback_available(&term.parser);
+                term.scroll_offset = max_scrollback;
+            }
+        }
+    }
+
+    // ── Mouse handling for terminal text selection ────────────────
+
+    /// Start a text selection at the given screen coordinates.
+    pub fn mouse_start_selection(&mut self, col: u16, row: u16) {
+        if self.active_view != ActiveView::Terminals {
+            self.text_selection = None;
+            return;
+        }
+        let rects = self.terminal_panel_rects.borrow();
+        for &(term_idx, rect) in rects.iter() {
+            if col >= rect.x
+                && col < rect.x + rect.width
+                && row >= rect.y
+                && row < rect.y + rect.height
+            {
+                let local_col = col - rect.x;
+                let local_row = row - rect.y;
+                self.text_selection = Some(TextSelection {
+                    terminal_idx: term_idx,
+                    panel_rect: rect,
+                    start_col: local_col,
+                    start_row: local_row,
+                    end_col: local_col,
+                    end_row: local_row,
+                    active: true,
+                });
+                return;
+            }
+        }
+        // Click outside any terminal panel — clear selection
+        self.text_selection = None;
+    }
+
+    /// Extend the text selection to the given screen coordinates, clamped to panel bounds.
+    pub fn mouse_extend_selection(&mut self, col: u16, row: u16) {
+        if let Some(sel) = &mut self.text_selection {
+            if !sel.active {
+                return;
+            }
+            let r = sel.panel_rect;
+            let clamped_col =
+                col.max(r.x).min(r.x + r.width.saturating_sub(1)) - r.x;
+            let clamped_row =
+                row.max(r.y).min(r.y + r.height.saturating_sub(1)) - r.y;
+            sel.end_col = clamped_col;
+            sel.end_row = clamped_row;
+        }
+    }
+
+    /// Finish the selection and copy text to clipboard via OSC 52.
+    pub fn mouse_end_selection(&mut self) {
+        if let Some(sel) = &mut self.text_selection {
+            if !sel.active {
+                return;
+            }
+            sel.active = false;
+            // Only copy if start != end (actual drag happened)
+            if sel.start_col != sel.end_col || sel.start_row != sel.end_row {
+                self.copy_selection_to_clipboard();
+            } else {
+                // Single click — clear selection
+                self.text_selection = None;
+            }
+        }
+    }
+
+    /// Extract selected text from the vt100 screen and copy via OSC 52.
+    fn copy_selection_to_clipboard(&self) {
+        let sel = match &self.text_selection {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mgr = match &self.terminal_manager {
+            Some(m) => m,
+            None => return,
+        };
+
+        let term = match mgr.terminals.get(sel.terminal_idx) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let p = term.parser.lock().unwrap();
+        let screen = p.screen();
+
+        // Normalize: ensure start <= end in reading order
+        let (sr, sc, er, ec) = if sel.start_row < sel.end_row
+            || (sel.start_row == sel.end_row && sel.start_col <= sel.end_col)
+        {
+            (sel.start_row, sel.start_col, sel.end_row, sel.end_col)
+        } else {
+            (sel.end_row, sel.end_col, sel.start_row, sel.start_col)
+        };
+
+        let mut text = String::new();
+        for row in sr..=er {
+            let col_start = if row == sr { sc } else { 0 };
+            let col_end = if row == er {
+                ec
+            } else {
+                sel.panel_rect.width.saturating_sub(1)
+            };
+
+            for col in col_start..=col_end {
+                if let Some(cell) = screen.cell(row, col) {
+                    if cell.has_contents() {
+                        text.push_str(&cell.contents());
+                    } else {
+                        text.push(' ');
+                    }
+                } else {
+                    text.push(' ');
+                }
+            }
+            if row != er {
+                text.push('\n');
+            }
+        }
+        drop(p);
+
+        // Trim trailing whitespace from each line
+        let trimmed: Vec<&str> = text.lines().map(|l| l.trim_end()).collect();
+        let final_text = trimmed.join("\n");
+
+        if !final_text.is_empty() {
+            Self::osc52_copy(&final_text);
+        }
+    }
+
+    /// Copy text to the system clipboard via OSC 52 escape sequence.
+    fn osc52_copy(text: &str) {
+        use base64::Engine;
+        use std::io::Write;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        let seq = format!("\x1b]52;c;{}\x07", encoded);
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(seq.as_bytes());
+        let _ = stdout.flush();
+    }
+
+    /// Handle mouse scroll within terminal panels for scrollback.
+    pub fn mouse_scroll(&mut self, col: u16, row: u16, up: bool) {
+        if self.active_view != ActiveView::Terminals {
+            return;
+        }
+        let rects = self.terminal_panel_rects.borrow();
+        for &(term_idx, rect) in rects.iter() {
+            if col >= rect.x
+                && col < rect.x + rect.width
+                && row >= rect.y
+                && row < rect.y + rect.height
+            {
+                drop(rects);
+                // Focus the terminal being scrolled
+                if let Some(mgr) = &mut self.terminal_manager {
+                    mgr.focused = term_idx;
+                }
+                if up {
+                    self.terminal_scroll_up(3);
+                    if self.terminal_input_mode == TerminalInputMode::Normal
+                        || self.terminal_input_mode == TerminalInputMode::TerminalFocused
+                    {
+                        self.terminal_input_mode = TerminalInputMode::ScrollBack;
+                    }
+                } else {
+                    self.terminal_scroll_down(3);
+                }
+                return;
+            }
+        }
     }
 }

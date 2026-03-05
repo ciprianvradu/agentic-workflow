@@ -4,14 +4,19 @@ mod data;
 mod discovery;
 mod launcher;
 mod settings;
+mod terminal;
 mod ui;
 mod worktree;
 
 use anyhow::Result;
-use app::{ActiveView, App, DetailMode, FocusPane};
+use app::{ActiveView, App, DetailMode, FocusPane, ModifierBarState, TerminalInputMode};
 use clap::Parser;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        KeyboardEnhancementFlags, ModifierKeyCode, MouseButton, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -42,6 +47,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = settings::Settings::load();
+    let initial_layout = cfg.parsed_terminal_layout();
 
     // Merge: CLI args override config. If CLI has values, use them; otherwise fall back to config.
     let repos = if cli.repos.is_empty() {
@@ -74,22 +80,71 @@ fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Try to enable kitty keyboard protocol for modifier-only key detection.
+    // Always attempt to push the flags — supports_keyboard_enhancement() is
+    // unreliable (returns false in WezTerm even when kitty protocol works).
+    // If the terminal truly doesn't support it, the escape sequence is
+    // silently ignored and we fall back to flash-on-modified-F-key.
+    let kitty_enabled = execute!(
+        io::stdout(),
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+        )
+    )
+    .is_ok();
 
     // Create app
     let mut app = App::new(repo_paths, poll_interval);
 
+    // Apply terminal settings from config
+    app.terminal_layout = initial_layout;
+    app.kitty_protocol_enabled = kitty_enabled;
+
     // Main loop
     let result = run_app(&mut terminal, &mut app);
 
+    // Cleanup embedded terminals before restoring
+    if let Some(mgr) = &mut app.terminal_manager {
+        mgr.cleanup_all();
+    }
+
+    // Pop kitty keyboard protocol if it was enabled
+    if kitty_enabled {
+        let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
+    }
+
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     result
+}
+
+/// Map current modifier flags to a bar state (supports combined modifiers).
+fn modifier_bar_from_event(modifiers: KeyModifiers) -> ModifierBarState {
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    match (shift, ctrl, alt) {
+        (true, true, _) => ModifierBarState::ShiftCtrl,
+        (true, false, true) => ModifierBarState::AltShift,
+        (false, true, true) => ModifierBarState::CtrlAlt,
+        (true, false, false) => ModifierBarState::Shift,
+        (false, true, false) => ModifierBarState::Ctrl,
+        (false, false, true) => ModifierBarState::Alt,
+        (false, false, false) => ModifierBarState::Normal,
+    }
 }
 
 fn run_app(
@@ -102,23 +157,179 @@ fn run_app(
         // Page size for PgUp/PgDn: terminal height minus status bar and borders
         let page_size = terminal.size().map(|s| s.height.saturating_sub(4).max(1)).unwrap_or(20);
 
-        // Use shorter poll timeout when search debounce is pending
+        // Use shorter poll timeout when search debounce is pending or
+        // terminals are actively running (for responsive PTY rendering).
         let search_pending = app.search_popup.as_ref().is_some_and(|p| p.dirty);
-        let timeout = if search_pending {
+        let terminals_active = app.active_view == ActiveView::Terminals
+            && app
+                .terminal_manager
+                .as_ref()
+                .is_some_and(|m| m.has_running());
+        let modifier_flash = app.modifier_bar_flash_until.is_some();
+        let timeout = if search_pending || terminals_active || modifier_flash {
             Duration::from_millis(50)
         } else {
             Duration::from_millis(250)
         };
         if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                // On Windows, crossterm fires both Press and Release events.
-                // Only handle Press to avoid double-toggling (flicker).
+            let ev = event::read()?;
+            // Handle terminal resize events
+            if let Event::Resize(cols, rows) = ev {
+                app.terminal_resize_all(rows, cols);
+            }
+            // Handle mouse events (selection + scroll in terminal panels)
+            if let Event::Mouse(mouse) = ev {
+                match mouse.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        app.mouse_start_selection(mouse.column, mouse.row);
+                    }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        app.mouse_extend_selection(mouse.column, mouse.row);
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => {
+                        app.mouse_end_selection();
+                    }
+                    MouseEventKind::ScrollUp => {
+                        app.mouse_scroll(mouse.column, mouse.row, true);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        app.mouse_scroll(mouse.column, mouse.row, false);
+                    }
+                    _ => {}
+                }
+            }
+            if let Event::Key(key) = ev {
+                // Handle modifier key release events — update bar based on
+                // which modifiers are STILL held (e.g., releasing Shift while
+                // Ctrl is held should show Ctrl layer, not Normal).
+                if key.kind == KeyEventKind::Release {
+                    if let KeyCode::Modifier(
+                        ModifierKeyCode::LeftShift
+                        | ModifierKeyCode::RightShift
+                        | ModifierKeyCode::LeftControl
+                        | ModifierKeyCode::RightControl
+                        | ModifierKeyCode::LeftAlt
+                        | ModifierKeyCode::RightAlt,
+                    ) = key.code
+                    {
+                        let remaining = modifier_bar_from_event(key.modifiers);
+                        app.modifier_bar_state = remaining;
+                        if remaining == ModifierBarState::Normal {
+                            app.modifier_bar_flash_until = None;
+                        }
+                    }
+                    continue;
+                }
+                // Only handle Press events for all other keys
                 if key.kind != KeyEventKind::Press {
                     continue;
                 }
+
+                // Handle modifier-only press events (bar updates when the
+                // terminal sends these via kitty protocol). Always set a
+                // flash timer as fallback — some terminals send Press but
+                // not Release events for modifier keys.
+                if let KeyCode::Modifier(mod_key) = key.code {
+                    let new_state = modifier_bar_from_event(key.modifiers);
+                    // Ignore modifier release-as-press quirks that would reset to Normal
+                    if new_state != ModifierBarState::Normal {
+                        app.modifier_bar_state = new_state;
+                        app.modifier_bar_flash_until = Some(
+                            std::time::Instant::now() + std::time::Duration::from_secs(2),
+                        );
+                    }
+                    let _ = mod_key; // suppress unused warning
+                    continue;
+                }
+
                 // Priority 0: Help overlay (any key closes)
                 if app.show_help {
                     app.show_help = false;
+                }
+                // Priority 0.6: Scroll-back mode
+                else if app.active_view == ActiveView::Terminals
+                    && app.terminal_input_mode == TerminalInputMode::ScrollBack
+                {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            app.terminal_scroll_reset();
+                            app.terminal_input_mode = TerminalInputMode::Normal;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.terminal_scroll_up(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.terminal_scroll_down(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.terminal_scroll_up(page_size as usize);
+                        }
+                        KeyCode::PageDown => {
+                            app.terminal_scroll_down(page_size as usize);
+                        }
+                        KeyCode::Home => {
+                            app.terminal_scroll_to_top();
+                        }
+                        KeyCode::End => {
+                            app.terminal_scroll_reset();
+                        }
+                        _ => {}
+                    }
+                }
+                // Priority 0.7: Terminal focus mode -- all keys go to PTY
+                else if app.active_view == ActiveView::Terminals
+                    && app.terminal_input_mode == TerminalInputMode::TerminalFocused
+                {
+                    // F12: toggle back to Normal mode (single-key exit)
+                    if key.code == KeyCode::F(12) {
+                        app.terminal_input_mode = TerminalInputMode::Normal;
+                    }
+                    // Shift+F-keys: global view switching (even while focused)
+                    else if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        match key.code {
+                            KeyCode::F(1) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::Tasks);
+                            }
+                            KeyCode::F(2) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::BeadsIssues);
+                            }
+                            KeyCode::F(3) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::Config);
+                            }
+                            KeyCode::F(4) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::CostSummary);
+                            }
+                            KeyCode::F(5) => {
+                                // Already in Terminals — just exit focus
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                            }
+                            // Shift+PgUp/PgDn: cycle terminals while staying focused
+                            KeyCode::PageUp => {
+                                app.terminal_focus_prev_running();
+                            }
+                            KeyCode::PageDown => {
+                                app.terminal_focus_next_running();
+                            }
+                            _ => {
+                                // Other Shift keys: forward to PTY
+                                let bytes =
+                                    terminal::widget::key_to_bytes(key.code, key.modifiers);
+                                if !bytes.is_empty() {
+                                    app.terminal_send_input(&bytes);
+                                }
+                            }
+                        }
+                    } else {
+                        let bytes =
+                            terminal::widget::key_to_bytes(key.code, key.modifiers);
+                        if !bytes.is_empty() {
+                            app.terminal_send_input(&bytes);
+                        }
+                    }
                 }
                 // Priority 1: Search popup
                 else if app.search_popup.is_some() {
@@ -131,6 +342,10 @@ fn run_app(
                 // Priority 2.5: Cleanup worktree popup
                 else if app.cleanup_popup.is_some() {
                     app.cleanup_popup_handle_key(key);
+                }
+                // Priority 2.7: Permission queue popup
+                else if app.permission_popup.is_some() {
+                    app.permission_popup_handle_key(key);
                 }
                 // Priority 3: Launch popup
                 else if app.launch_popup.is_some() {
@@ -172,6 +387,57 @@ fn run_app(
                 }
                 // Priority 5: Default key handling
                 else {
+                    // ── Shift+F-key layer: view switching ─────────────
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        match key.code {
+                            KeyCode::F(1) => {
+                                app.set_view(ActiveView::Tasks);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(2) => {
+                                app.set_view(ActiveView::BeadsIssues);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(3) => {
+                                app.set_view(ActiveView::Config);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(4) => {
+                                app.set_view(ActiveView::CostSummary);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(5) => {
+                                app.set_view(ActiveView::Terminals);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(6) => {
+                                app.enter_doc_list();
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(7) => {
+                                app.enter_history();
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            _ => {} // Shift+F8-F10 reserved
+                        }
+                    }
+                    // ── Ctrl+F-key layer (reserved for expansion) ────
+                    else if key.modifiers.contains(KeyModifiers::CONTROL) {
+                        match key.code {
+                            KeyCode::F(_) => {
+                                // Ctrl+F-keys: flash the layer for discovery
+                                app.flash_modifier_bar(ModifierBarState::Ctrl);
+                            }
+                            // Fall through to existing Ctrl+key handlers below
+                            _ => {
+                                if let KeyCode::Char('c') = key.code {
+                                    app.should_quit = true;
+                                }
+                            }
+                        }
+                    }
+                    // ── Base F-key layer (no modifier) ───────────────
+                    else {
                     match (key.modifiers, key.code) {
                         // Quit (q and F10 only — Esc never quits)
                         (_, KeyCode::Char('q')) | (_, KeyCode::F(10)) => {
@@ -205,18 +471,76 @@ fn run_app(
                         (_, KeyCode::F(6)) => app.open_cleanup_popup(),
 
                         // Documents & History (right pane shortcuts)
-                        (_, KeyCode::Char('d')) => app.enter_doc_list(),
+                        (_, KeyCode::Char('d')) => {
+                            if app.active_view == ActiveView::Terminals {
+                                // Dismiss exited terminal
+                                let is_exited = app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .and_then(|m| m.focused_terminal())
+                                    .is_some_and(|t| {
+                                        matches!(t.status, terminal::TerminalStatus::Exited(_))
+                                    });
+                                if is_exited {
+                                    app.terminal_dismiss_focused();
+                                }
+                            } else {
+                                app.enter_doc_list();
+                            }
+                        }
                         (_, KeyCode::Char('h')) => app.enter_history(),
 
-                        // Tree: expand/collapse repo
-                        (_, KeyCode::Enter) => app.tree_toggle(),
-                        (_, KeyCode::Char(' ')) => app.tree_toggle(),
-                        (_, KeyCode::Right) | (_, KeyCode::Char('l')) => app.tree_expand(),
-                        (_, KeyCode::Left) => app.tree_collapse(),
+                        // Tree: expand/collapse repo (Enter relaunch exited terminal in Terminals view)
+                        (_, KeyCode::Enter) => {
+                            if app.active_view == ActiveView::Terminals {
+                                // Only relaunch exited terminals; F12 is the focus toggle
+                                let is_exited = app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .and_then(|m| m.focused_terminal())
+                                    .is_some_and(|t| {
+                                        matches!(t.status, terminal::TerminalStatus::Exited(_))
+                                    });
+                                if is_exited {
+                                    app.terminal_relaunch_focused();
+                                }
+                            } else {
+                                app.tree_toggle();
+                            }
+                        }
+                        (_, KeyCode::Char(' ')) => {
+                            if app.active_view != ActiveView::Terminals {
+                                app.tree_toggle();
+                            }
+                        }
+                        (_, KeyCode::Right) | (_, KeyCode::Char('l')) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_layout = app.terminal_layout.next();
+                            } else {
+                                app.tree_expand();
+                            }
+                        }
+                        (_, KeyCode::Left) => {
+                            if app.active_view != ActiveView::Terminals {
+                                app.tree_collapse();
+                            }
+                        }
 
                         // Item navigation
-                        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => app.prev_item(),
-                        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => app.next_item(),
+                        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_focus_prev();
+                            } else {
+                                app.prev_item();
+                            }
+                        }
+                        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_focus_next();
+                            } else {
+                                app.next_item();
+                            }
+                        }
                         (_, KeyCode::PageDown) => app.tree_page_down(page_size),
                         (_, KeyCode::PageUp) => app.tree_page_up(page_size),
 
@@ -228,18 +552,69 @@ fn run_app(
                         (_, KeyCode::Char('2')) => app.set_view(ActiveView::BeadsIssues),
                         (_, KeyCode::Char('3')) => app.set_view(ActiveView::Config),
                         (_, KeyCode::Char('4')) => app.set_view(ActiveView::CostSummary),
+                        (_, KeyCode::Char('5')) => app.set_view(ActiveView::Terminals),
+
+                        // Jump to next terminal needing attention
+                        (_, KeyCode::F(7)) => app.terminal_focus_next_attention(),
+
+                        // Permission queue
+                        (_, KeyCode::F(8)) => app.open_permission_popup(),
+
+                        // Focus terminal (F9/F12 in Terminals view Normal mode)
+                        (_, KeyCode::F(9)) | (_, KeyCode::F(12)) => {
+                            if app.active_view == ActiveView::Terminals
+                                && app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .is_some_and(|m| !m.terminals.is_empty())
+                            {
+                                app.terminal_input_mode = TerminalInputMode::TerminalFocused;
+                            }
+                        }
+
+                        // Scroll-back mode ([ in Terminals view Normal mode)
+                        (_, KeyCode::Char('[')) => {
+                            if app.active_view == ActiveView::Terminals
+                                && app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .is_some_and(|m| !m.terminals.is_empty())
+                            {
+                                app.terminal_input_mode = TerminalInputMode::ScrollBack;
+                            }
+                        }
 
                         // Cycle views
                         (_, KeyCode::Char('`')) => app.next_view(),
 
+                        // Delete: dismiss exited terminal in Terminals view
+                        (_, KeyCode::Delete) => {
+                            if app.active_view == ActiveView::Terminals {
+                                let is_exited = app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .and_then(|m| m.focused_terminal())
+                                    .is_some_and(|t| {
+                                        matches!(t.status, terminal::TerminalStatus::Exited(_))
+                                    });
+                                if is_exited {
+                                    app.terminal_dismiss_focused();
+                                }
+                            }
+                        }
+
                         _ => {}
                     }
+                    } // close base else block
                 }
             }
         }
 
         // Fire debounced search after keystrokes are consumed
         app.tick_search_debounce();
+
+        // Tick modifier bar flash timeout (for non-kitty terminals)
+        app.tick_modifier_bar();
 
         if app.should_quit {
             return Ok(());
@@ -253,6 +628,9 @@ fn run_app(
 
         // Check for background refresh completion each tick
         app.check_bg_refresh();
+
+        // Poll embedded terminals for exit/attention status changes
+        app.poll_terminals();
 
         // Auto-refresh on poll interval
         if app.last_refresh.elapsed() >= Duration::from_secs(app.poll_interval_secs) {

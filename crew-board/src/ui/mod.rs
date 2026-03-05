@@ -6,10 +6,12 @@ pub mod create_popup;
 pub mod detail_pane;
 pub mod help_popup;
 pub mod launch_popup;
+pub mod permission_popup;
 pub mod search_popup;
 pub mod status_bar;
 pub mod styles;
 pub mod task_list;
+pub mod terminal_view;
 
 use crate::app::{ActiveView, App};
 use ratatui::{
@@ -32,6 +34,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         ActiveView::BeadsIssues => beads_view::draw(frame, app, chunks[0]),
         ActiveView::Config => config_view::draw(frame, app, chunks[0]),
         ActiveView::CostSummary => cost_view::draw(frame, app, chunks[0]),
+        ActiveView::Terminals => terminal_view::draw(frame, app, chunks[0]),
     };
 
     // Status bar
@@ -46,6 +49,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if app.cleanup_popup.is_some() {
         cleanup_popup::draw(frame, app);
+    }
+    if app.permission_popup.is_some() {
+        permission_popup::draw(frame, app, chunks[0]);
     }
     if app.search_popup.is_some() {
         search_popup::draw(frame, app);

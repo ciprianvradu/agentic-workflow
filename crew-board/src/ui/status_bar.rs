@@ -1,4 +1,7 @@
-use crate::app::{ActiveView, App, CleanupStep, CreateStep, DetailMode, FocusPane, LaunchStep};
+use crate::app::{
+    ActiveView, App, CleanupStep, CreateStep, DetailMode, FocusPane, LaunchStep,
+    ModifierBarState, TerminalInputMode,
+};
 use crate::ui::styles;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -17,7 +20,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     // Line 1: View tabs + contextual hints + stats
     draw_info_line(frame, app, chunks[0]);
 
-    // Line 2: NC-style F-key bar
+    // Line 2: F-key bar (context-adaptive)
     draw_fkey_bar(frame, app, chunks[1]);
 }
 
@@ -30,15 +33,55 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
     let total_issues: usize = app.repos.iter().map(|r| r.issues.len()).sum();
     let open_issues: usize = app.repos.iter().map(|r| r.open_issue_count()).sum();
 
+    // Attention + exited badge for terminal view indicator
+    let attn_count = app
+        .terminal_manager
+        .as_ref()
+        .map(|m| m.attention_count())
+        .unwrap_or(0);
+    let exited_count = app
+        .terminal_manager
+        .as_ref()
+        .map(|m| m.exited_count())
+        .unwrap_or(0);
+
+    // Active view label with position (replaces tab bar — Shift+F1-F5 switches views)
+    let (view_label, view_num) = match app.active_view {
+        ActiveView::Tasks => ("Tasks", 1),
+        ActiveView::BeadsIssues => ("Issues", 2),
+        ActiveView::Config => ("Config", 3),
+        ActiveView::CostSummary => ("Cost", 4),
+        ActiveView::Terminals => ("Terms", 5),
+    };
+    // Terminal badge appended to view label when relevant
+    let badge = if app.active_view == ActiveView::Terminals {
+        if attn_count > 0 {
+            format!(" \u{25c6}{}", attn_count) // ◆N
+        } else if exited_count > 0 {
+            format!(" \u{2717}{}", exited_count) // ✗N
+        } else {
+            String::new()
+        }
+    } else if attn_count > 0 {
+        // Show attention badge even when not on Terminals view
+        format!("  \u{25c6}{}", attn_count)
+    } else {
+        String::new()
+    };
+
     let line = Line::from(vec![
-        tab_span("1:Tasks", app.active_view == ActiveView::Tasks),
+        Span::styled(
+            format!(" {} [{}/5] ", view_label, view_num),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            badge,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
-        tab_span("2:Issues", app.active_view == ActiveView::BeadsIssues),
-        Span::raw(" "),
-        tab_span("3:Config", app.active_view == ActiveView::Config),
-        Span::raw(" "),
-        tab_span("4:Cost", app.active_view == ActiveView::CostSummary),
-        Span::raw("  "),
         Span::styled(hints, styles::hint_style()),
         Span::styled(
             format!(
@@ -70,72 +113,293 @@ fn draw_fkey_bar(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // NC-style F-key bar
-    let mut spans: Vec<Span> = Vec::new();
-
-    // Pad the start slightly
-    spans.push(Span::raw(" "));
-
-    spans.extend(fkey_spans(1, "Help"));
-    spans.extend(fkey_spans(2, "Launch"));
-    spans.extend(fkey_spans(3, "Search"));
-    spans.extend(fkey_spans(4, "New"));
-    spans.extend(fkey_spans(5, "Rfrsh"));
-    spans.extend(fkey_spans(6, "Clean"));
-
-    // Fill gap to push F10 to the right
-    // Calculate used width: " " + keys + F10 key
-    // Each key: "F{n}" (2-3 chars) + label + " " spacer
-    let used: usize = 1 // leading space
-        + fkey_width(1, "Help")
-        + fkey_width(2, "Launch")
-        + fkey_width(3, "Search")
-        + fkey_width(4, "New")
-        + fkey_width(5, "Rfrsh")
-        + fkey_width(6, "Clean")
-        + fkey_width(10, "Quit");
-    let total_width = area.width as usize;
-    let gap = total_width.saturating_sub(used);
-    if gap > 0 {
-        spans.push(Span::styled(
-            " ".repeat(gap),
-            Style::default().bg(Color::Black),
-        ));
+    // Terminal mode-specific bars (override modifier layers)
+    if app.active_view == ActiveView::Terminals {
+        match app.terminal_input_mode {
+            TerminalInputMode::TerminalFocused | TerminalInputMode::PrefixPending => {
+                draw_terminal_focused_bar(frame, area);
+                return;
+            }
+            TerminalInputMode::ScrollBack => {
+                draw_scrollback_bar(frame, app, area);
+                return;
+            }
+            TerminalInputMode::Normal => {}
+        }
     }
 
-    spans.extend(fkey_spans(10, "Quit"));
+    // Modifier layer bars
+    match app.modifier_bar_state {
+        ModifierBarState::Normal => draw_base_fkey_bar(frame, app, area),
+        ModifierBarState::Shift => draw_shift_fkey_bar(frame, area),
+        ModifierBarState::Ctrl => draw_ctrl_fkey_bar(frame, app, area),
+        ModifierBarState::Alt => draw_reserved_layer(frame, area, "ALT"),
+        ModifierBarState::ShiftCtrl => draw_reserved_layer(frame, area, "S+C"),
+        ModifierBarState::AltShift => draw_reserved_layer(frame, area, "A+S"),
+        ModifierBarState::CtrlAlt => draw_reserved_layer(frame, area, "C+A"),
+    }
+}
 
-    let line = Line::from(spans);
+/// Base F-key bar (no modifier held).
+fn draw_base_fkey_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(indicator_pad());
+    spans.extend(fkey_cell(1, "Help"));
+    spans.extend(fkey_cell(2, "Launch"));
+    spans.extend(fkey_cell(3, "Search"));
+    spans.extend(fkey_cell(4, "New"));
+    spans.extend(fkey_cell(5, "Rfrsh"));
+    spans.extend(fkey_cell(6, "Clean"));
+    spans.extend(fkey_cell(7, "Attn"));
+    spans.extend(fkey_cell(8, "Perms"));
+    if app.active_view == ActiveView::Terminals
+        && app.terminal_input_mode == TerminalInputMode::Normal
+    {
+        spans.extend(fkey_cell(9, "Focus"));
+    } else {
+        spans.extend(fkey_cell_empty(9));
+    }
+    spans.extend(fkey_cell(10, "Quit"));
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
+}
+
+/// Shift+F-key bar (view switching layer).
+fn draw_shift_fkey_bar(frame: &mut Frame, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(layer_indicator_fixed("SHIFT"));
+    spans.extend(fkey_cell(1, "Tasks"));
+    spans.extend(fkey_cell(2, "Issues"));
+    spans.extend(fkey_cell(3, "Config"));
+    spans.extend(fkey_cell(4, "Cost"));
+    spans.extend(fkey_cell(5, "Terms"));
+    spans.extend(fkey_cell(6, "Docs"));
+    spans.extend(fkey_cell(7, "Hist"));
+    spans.extend(fkey_cell_empty(8));
+    spans.extend(fkey_cell_empty(9));
+    spans.extend(fkey_cell_empty(10));
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
+}
+
+/// Ctrl+F-key bar (admin/context layer).
+fn draw_ctrl_fkey_bar(frame: &mut Frame, _app: &App, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(layer_indicator_fixed("CTRL"));
+    for n in 1..=10 {
+        spans.extend(fkey_cell_empty(n));
+    }
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
+}
+
+/// Bar shown when in TerminalFocused mode (input goes to PTY).
+fn draw_terminal_focused_bar(frame: &mut Frame, area: Rect) {
+    let line = Line::from(vec![
+        Span::styled(
+            " \u{2501}\u{2501} INPUT \u{2192} TERMINAL \u{2501}\u{2501} ",
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " F12 ",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "exit ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            " S+F1",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Tasks ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            "F2",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Issues ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            "F3",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Cfg ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            "F4",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Cost ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            "F5",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Terms ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            " S+PgUp/Dn",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "crew ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+    ]);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
 }
 
-/// Generate styled spans for a single F-key label (NC-style).
-/// Number portion: white on dark background. Label: black on cyan.
-fn fkey_spans(num: u8, label: &str) -> Vec<Span<'static>> {
+/// Bar shown during scroll-back mode.
+fn draw_scrollback_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let offset = app
+        .terminal_manager
+        .as_ref()
+        .and_then(|m| m.focused_terminal())
+        .map(|t| t.scroll_offset)
+        .unwrap_or(0);
+
+    let line = Line::from(vec![
+        Span::styled(
+            " SCROLL\u{25b6} ",
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ", Style::default().bg(Color::Black)),
+        prefix_key_span("\u{2191}\u{2193}/jk", "Line"),
+        prefix_key_span("PgUp/Dn", "Page"),
+        prefix_key_span("Home", "Top"),
+        prefix_key_span("End", "Live"),
+        prefix_key_span("q/Esc", "Exit"),
+        Span::styled(
+            format!("  offset:{}", offset),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
+/// Reserved modifier layer (no bindings yet — shows label + all empty slots).
+fn draw_reserved_layer(frame: &mut Frame, area: Rect, label: &str) {
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(layer_indicator_fixed(label));
+    for n in 1..=10 {
+        spans.extend(fkey_cell_empty(n));
+    }
+    let paragraph = Paragraph::new(Line::from(spans));
+    frame.render_widget(paragraph, area);
+}
+
+// ── Helper functions ─────────────────────────────────────────────────
+
+/// Fixed indicator width (matches " SHIFT▶" = 7 display columns).
+const INDICATOR_WIDTH: usize = 7;
+
+/// Fixed cell width: F{n}(2-3) + label_area + gap(1) = 9 per cell.
+const CELL_WIDTH: usize = 9;
+
+/// Fixed-width F-key cell (NC-style). Number: bold white. Label: black on cyan, padded.
+fn fkey_cell(num: u8, label: &str) -> Vec<Span<'static>> {
+    let fnum = format!("F{}", num);
+    let label_area = CELL_WIDTH - fnum.len() - 1;
+    let padded = format!("{:<w$}", label, w = label_area);
     vec![
         Span::styled(
-            format!("F{}", num),
+            fnum,
             Style::default()
                 .fg(Color::White)
                 .bg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            label.to_string(),
-            Style::default().fg(Color::Black).bg(Color::Cyan),
-        ),
+        Span::styled(padded, Style::default().fg(Color::Black).bg(Color::Cyan)),
         Span::styled(" ", Style::default().bg(Color::Black)),
     ]
 }
 
-/// Calculate the display width of an F-key cell.
-fn fkey_width(num: u8, label: &str) -> usize {
-    let num_str = format!("F{}", num);
-    num_str.len() + label.len() + 1 // +1 for trailing space
+/// Fixed-width empty F-key cell (dimmed number, no label).
+fn fkey_cell_empty(num: u8) -> Vec<Span<'static>> {
+    let fnum = format!("F{}", num);
+    let rest = CELL_WIDTH - fnum.len();
+    vec![
+        Span::styled(
+            fnum,
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        ),
+        Span::styled(
+            " ".repeat(rest),
+            Style::default().bg(Color::Black),
+        ),
+    ]
 }
 
-/// Context hints for the info line (shorter now that F-keys handle actions).
+/// Blank padding for the base layer (same width as modifier indicator).
+fn indicator_pad() -> Span<'static> {
+    Span::styled(
+        " ".repeat(INDICATOR_WIDTH),
+        Style::default().bg(Color::Black),
+    )
+}
+
+/// Fixed-width layer indicator (e.g., " SHIFT▶" right-aligned to INDICATOR_WIDTH).
+fn layer_indicator_fixed(label: &str) -> Span<'static> {
+    let text = format!(" {}\u{25b6}", label);
+    let padded = format!("{:>w$}", text, w = INDICATOR_WIDTH);
+    Span::styled(
+        padded,
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    )
+}
+
+/// Styled spans for a prefix command key+label.
+fn prefix_key_span(key: &str, label: &str) -> Span<'static> {
+    Span::styled(
+        format!(" {}:{}", key, label),
+        Style::default().fg(Color::Cyan),
+    )
+}
+
+/// Context hints for the info line.
 fn context_hints(app: &App) -> String {
     // Popups get their own hints in the F-key bar, so just show navigation hints
     if app.search_popup.is_some()
@@ -148,17 +412,38 @@ fn context_hints(app: &App) -> String {
 
     match app.active_view {
         ActiveView::Tasks => match app.focus_pane {
-            FocusPane::Left => "↑↓ nav  Enter expand  Tab→pane  d docs  h hist".to_string(),
+            FocusPane::Left => "\u{2191}\u{2193} nav  Enter expand  Tab\u{2192}pane  d docs  h hist".to_string(),
             FocusPane::Right => match &app.detail_mode {
-                DetailMode::Overview => "PgUp/Dn scroll  d docs  h hist  Tab←pane".to_string(),
-                DetailMode::DocList { .. } => "↑↓ select  Enter read  Esc back".to_string(),
+                DetailMode::Overview => "PgUp/Dn scroll  d docs  h hist  Tab\u{2190}pane".to_string(),
+                DetailMode::DocList { .. } => "\u{2191}\u{2193} select  Enter read  Esc back".to_string(),
                 DetailMode::DocReader { .. } => "PgUp/Dn scroll  Esc back".to_string(),
                 DetailMode::History => "PgUp/Dn scroll  Esc back".to_string(),
             },
         },
-        ActiveView::BeadsIssues => "↑↓ nav  Tab pane".to_string(),
+        ActiveView::BeadsIssues => "\u{2191}\u{2193} nav  Tab pane".to_string(),
         ActiveView::Config => "PgUp/Dn scroll".to_string(),
         ActiveView::CostSummary => "PgUp/Dn scroll".to_string(),
+        ActiveView::Terminals => match app.terminal_input_mode {
+            TerminalInputMode::Normal => {
+                "\u{2191}\u{2193} nav  Enter/F12 focus  d dismiss  [ scroll  F7 attn".to_string()
+            }
+            TerminalInputMode::TerminalFocused | TerminalInputMode::PrefixPending => {
+                format!(
+                    "F12 exit  Shift+F switch view  (input \u{2192} PTY)  {}",
+                    app.terminal_layout.label()
+                )
+            }
+            TerminalInputMode::ScrollBack => {
+                format!(
+                    "SCROLL: \u{2191}\u{2193}/PgUp/Dn  Home/End  q/Esc exit  offset:{}",
+                    app.terminal_manager
+                        .as_ref()
+                        .and_then(|m| m.focused_terminal())
+                        .map(|t| t.scroll_offset)
+                        .unwrap_or(0)
+                )
+            }
+        },
     }
 }
 
@@ -167,7 +452,7 @@ fn popup_hints(app: &App) -> Option<String> {
     if let Some(popup) = &app.search_popup {
         let count = popup.results.len();
         return Some(if count > 0 {
-            format!(" ↑↓ select  Enter go  Esc cancel  ({} results)", count)
+            format!(" \u{2191}\u{2193} select  Enter go  Esc cancel  ({} results)", count)
         } else {
             " Type to search  Esc cancel".to_string()
         });
@@ -175,9 +460,9 @@ fn popup_hints(app: &App) -> Option<String> {
     if let Some(popup) = &app.create_popup {
         return Some(match popup.step {
             CreateStep::InputDescription => " Enter next  Esc cancel".to_string(),
-            CreateStep::SelectHost => " ↑↓ select  Enter confirm  Esc cancel".to_string(),
+            CreateStep::SelectHost => " \u{2191}\u{2193} select  Enter confirm  Esc cancel".to_string(),
             CreateStep::ToggleSettings => {
-                " ↑↓ nav  Space toggle  Enter confirm  Esc cancel".to_string()
+                " \u{2191}\u{2193} nav  Space toggle  Enter confirm  Esc cancel".to_string()
             }
             CreateStep::Confirm => " Enter create  Esc cancel".to_string(),
             CreateStep::Executing => " Creating worktree...".to_string(),
@@ -199,10 +484,13 @@ fn popup_hints(app: &App) -> Option<String> {
             CleanupStep::Done => " Enter close  Esc close".to_string(),
         });
     }
+    if app.permission_popup.is_some() {
+        return Some(" \u{2191}\u{2193} select  a approve  d deny  v view  Esc close".to_string());
+    }
     if let Some(popup) = &app.launch_popup {
         return Some(match popup.step {
             LaunchStep::SelectTerminal | LaunchStep::SelectHost => {
-                " ↑↓ select  Enter confirm  Esc cancel".to_string()
+                " \u{2191}\u{2193} select  Enter confirm  Esc cancel".to_string()
             }
             LaunchStep::Done => " Enter close  Esc close".to_string(),
         });
@@ -210,15 +498,3 @@ fn popup_hints(app: &App) -> Option<String> {
     None
 }
 
-fn tab_span(label: &str, active: bool) -> Span<'_> {
-    if active {
-        Span::styled(
-            format!("[{}]", label),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::styled(label.to_string(), Style::default().fg(Color::DarkGray))
-    }
-}

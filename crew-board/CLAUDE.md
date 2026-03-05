@@ -8,7 +8,7 @@ Rust TUI dashboard for cross-project agentic-workflow task monitoring. Built wit
 cd crew-board
 cargo build                  # Dev build
 cargo build --release        # Optimized binary (strip + LTO)
-cargo test                   # All 17 unit tests
+cargo test                   # All 18 unit tests
 cargo clippy                 # Lint (fix all warnings before committing)
 ```
 
@@ -30,6 +30,9 @@ src/
 │   ├── task.rs      # Parses .tasks/*/state.json, incremental mtime reload, *.md artifacts
 │   ├── beads.rs     # Parses .beads/issues.jsonl (stream, skip malformed)
 │   └── config.rs    # Config cascade: global → project → task levels
+├── terminal/
+│   ├── mod.rs       # TerminalManager, EmbeddedTerminal, TerminalStatus, AttentionReason, LaunchParams
+│   └── pty.rs       # spawn_pty(), PtyHandles, ExitEvent, AttentionEvent, AttentionKind, reader thread
 └── ui/
     ├── mod.rs        # Root layout: main content + status bar + popup overlay
     ├── task_list.rs  # Left pane: tree view with repo/task rows + vertical scrollbar
@@ -37,8 +40,10 @@ src/
     ├── beads_view.rs # View 2: issues list + detail
     ├── config_view.rs# View 3: config cascade display
     ├── cost_view.rs  # View 4: cost summary from workflow state
+    ├── terminal_view.rs # View 5: embedded terminal multiplexer (list panel + PTY output)
     ├── status_bar.rs # Bottom: view tabs + contextual keybinding hints + aggregate stats
     ├── launch_popup.rs # F2 popup: terminal + AI host selection
+    ├── permission_popup.rs # F8 popup: permission queue for pending approvals
     ├── create_popup.rs # F4 popup: multi-step worktree creation wizard
     ├── cleanup_popup.rs# F6 popup: multi-select worktree cleanup with dry-run preview
     ├── search_popup.rs # F3 popup: full-text search across tasks + artifacts
@@ -79,15 +84,22 @@ Overview ──d──> DocList ──Enter──> DocReader
 
 ### Event Loop
 Keys are routed in priority order:
-1. Help overlay open → any key closes it
-2. Search popup open → search-specific keys
-3. Create worktree popup open → popup keys (text input, selection, toggles)
-4. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
-5. Launch popup open → popup keys only
-6. Right pane focused + non-Overview mode → doc/history navigation
-7. Default → tree nav, view switching, shortcuts
+1. Modifier-only key events (kitty protocol) → update `modifier_bar_state`, continue
+2. Help overlay open → any key closes it
+3. Terminal view + `PrefixPending` mode → prefix command dispatch
+4. Terminal view + `ScrollBack` mode → scroll navigation keys
+5. Terminal view + `TerminalFocused` mode → `Ctrl+B` enters PrefixPending, all other keys forwarded to PTY
+6. Search popup open → search-specific keys
+7. Create worktree popup open → popup keys (text input, selection, toggles)
+8. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
+9. Permission queue popup open → popup keys (approve/deny/view)
+10. Launch popup open → popup keys only
+11. Right pane focused + non-Overview mode → doc/history navigation
+12. Default → Shift+F-key layer → Ctrl+F-key layer → base F-keys, tree nav, view switching
 
 **Esc behavior:** Esc never quits the application. It only closes popups, backs out of detail views, or switches focus from right pane to left pane. Use `q` or `F10` to quit.
+
+**Poll timeout:** The `event::poll()` timeout is **50ms** when the Terminals view is active with at least one running terminal, or when a search debounce is pending. Otherwise it is **250ms**. This provides responsive PTY rendering without unnecessary CPU use.
 
 ### Refresh & Background Threading
 All data refresh is **non-blocking**. `refresh()` spawns a background thread via `start_bg_refresh()`. Each event-loop tick calls `check_bg_refresh()` which polls `JoinHandle::is_finished()` and swaps in the new data on completion.
@@ -97,6 +109,171 @@ All data refresh is **non-blocking**. `refresh()` spawns a background thread via
 - **Timer reset**: `last_refresh` is reset on **completion** (not start), preventing rapid re-refresh if the background thread takes longer than `poll_interval_secs`.
 - **Coalescing**: If a refresh is already in progress, `start_bg_refresh()` is a no-op. Multiple F5 presses or auto-refresh triggers are safely coalesced.
 - **Callers affected**: `refresh()` is also called from `close_create_popup()` and `close_cleanup_popup()`. After the change these get non-blocking behavior — data appears after the next tick rather than synchronously.
+- **Terminal polling**: `app.poll_terminals()` is called every tick (after `check_bg_refresh()`). It delegates to `TerminalManager::poll_status()`. This is separate from the background data-refresh thread — terminal status updates happen synchronously in the event loop tick, not in a background thread.
+
+### Embedded Terminal Multiplexer (View 5)
+
+View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Key types live in `src/terminal/`:
+
+**`pty.rs` — low-level PTY primitives**
+
+| Type | Description |
+|------|-------------|
+| `PtyHandles` | Returned by `spawn_pty()`. Bundles `parser`, `writer`, `master`, `exit_signal`, `attention_signal`, `last_output`. |
+| `ExitEvent` | `{ code: i32, timestamp: Instant }` — written by the reader thread on EOF. |
+| `AttentionKind` | Enum: `PermissionPrompt { line }`, `Idle { seconds }`, `Error { line }`. |
+| `AttentionEvent` | `{ kind: AttentionKind, timestamp: Instant }` — written by the reader thread. |
+| `SharedExitSignal` | `Arc<Mutex<Option<ExitEvent>>>` shared between reader thread and `poll_status()`. |
+| `SharedAttentionSignal` | `Arc<Mutex<Option<AttentionEvent>>>` shared between reader thread and `poll_status()`. |
+
+**`mod.rs` — manager types**
+
+| Type | Description |
+|------|-------------|
+| `EmbeddedTerminal` | Holds all `PtyHandles` fields plus `id`, `label`, `status`, `color_scheme_index`, `launch_params`, `scroll_offset`, `spawned_at`. |
+| `LaunchParams` | `{ command: String, args: Vec<String>, cwd: PathBuf }` — stored on each terminal for relaunch. |
+| `TerminalStatus` | Enum: `Running`, `NeedsAttention(AttentionReason)`, `Exited(i32)`. |
+| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt`, `Idle { seconds }`, `Error`. |
+| `TerminalManager` | `Vec<EmbeddedTerminal>` + `focused: usize`. Entry point for all terminal operations. |
+
+#### Reader Thread Architecture
+
+`spawn_pty()` starts a background reader thread that is **not** fire-and-forget — it actively writes to shared signals:
+
+1. Reads PTY output in a 4096-byte loop, feeding bytes into the `vt100::Parser`.
+2. Updates `last_output` (an `Arc<Mutex<Instant>>`) on every successful read.
+3. Every 500ms (throttled) calls `scan_for_attention()` which scans the last 5 vt100 screen rows for permission prompts (`Allow`/`Deny`, `(y/n)`, `(yes/no)`, `do you want to proceed`, `press enter to continue`) and error prefixes (`error:`, `fatal:`, `panic at`). Writes result to `attention_signal`.
+4. On EOF, calls `child.wait()` to get the exit code, then writes `ExitEvent` to `exit_signal`.
+
+The reader thread exits only when the child process closes the slave PTY (EOF).
+
+Scrollback is set to **1000 lines** (`vt100::Parser::new(rows, cols, 1000)`).
+
+#### Status Polling
+
+`TerminalManager::poll_status()` is called once per event-loop tick (via `App::poll_terminals()`):
+
+- Skips terminals already in `Exited` state.
+- Checks `exit_signal`; if set, transitions to `Exited(code)`.
+- Checks whether `last_output` is older than **120 seconds**; if so, synthesizes an `Idle` attention event (only if no higher-priority attention is already set).
+- Checks `attention_signal`; maps it to `NeedsAttention(reason)` or clears back to `Running` if the signal was cleared (e.g. by user input).
+- Returns `true` if any terminal changed status (used to decide whether to redraw).
+
+`App::poll_terminals()` additionally drops `TerminalInputMode` back to `Normal` when the focused terminal exits while in focused mode.
+
+#### Process Exit Handling
+
+When a terminal exits:
+
+- Status becomes `Exited(code)`. Border turns gray (code 0) or red (non-zero).
+- Border title shows `[exited: N - ok]` or `[exited: N - FAILED]`.
+- A centered overlay appears: `"Process exited. Press Enter to relaunch, d to dismiss."`.
+- `TerminalInputMode` automatically reverts to `Normal`.
+- **`d` / Delete** — calls `terminal_dismiss_focused()`, which removes the terminal from the manager entirely.
+- **Enter** — calls `terminal_relaunch_focused()`, which removes the old terminal and calls `TerminalManager::relaunch()`. Relaunch re-runs `spawn_pty()` with the stored `LaunchParams` and re-focuses the new terminal.
+
+#### Attention Detection
+
+When a terminal needs attention:
+
+- Status becomes `NeedsAttention(reason)`. Border turns bold yellow.
+- Border title appends `[PROMPT]`, `[idle Ns]`, or `[ERROR]` depending on the reason.
+- The status bar "5:Terms" tab shows `5:Terms[⚠N]` (N = count of attention terminals).
+- **F7** — calls `terminal_focus_next_attention()`, cycling through terminals that need attention.
+- Sending any input to a terminal clears its attention signal (`send_input()` sets `attention_signal` to `None`).
+
+#### Adaptive Refresh
+
+The event-loop poll timeout in `main.rs` is reduced to **50ms** when the Terminals view is active and at least one terminal has `TerminalStatus::Running`. Otherwise the normal 250ms timeout applies. This keeps PTY output rendering responsive without burning CPU when no terminals are active.
+
+#### Terminal Input Modes
+
+`TerminalInputMode` has four states:
+
+| Mode | Description |
+|------|-------------|
+| `Normal` | Keys navigate the terminal list. Standard crew-board navigation. |
+| `TerminalFocused` | All keys go to the PTY except `Ctrl+B` (prefix key). |
+| `PrefixPending` | `Ctrl+B` was pressed, waiting for next key as a command. |
+| `ScrollBack` | Navigate the vt100 scrollback buffer with Up/Down/PgUp/PgDn. |
+
+#### Layout Modes
+
+`TerminalLayout` controls how terminals are arranged in View 5:
+
+| Layout | Description |
+|--------|-------------|
+| `Focused` | One large terminal + 20-col crew list (default). |
+| `Tiled2` | Two terminals side by side + 18-col crew list. |
+| `Tiled4` | Four terminals in 2x2 grid + 15-col crew list. |
+| `Stacked` | Up to 5 terminals stacked vertically + 20-col crew list. |
+
+Cycle with `l` in Normal mode or `Ctrl+B l` in focused mode. Persists from `terminal_layout` setting.
+
+#### Terminal View Key Bindings (View 5)
+
+**Normal mode:**
+
+| Key | Action |
+|-----|--------|
+| `↑` / `k` | Focus previous terminal |
+| `↓` / `j` | Focus next terminal |
+| `Enter` (running) | Enter `TerminalFocused` mode |
+| `Enter` (exited) | Relaunch the exited terminal |
+| `d` / `Delete` (exited) | Dismiss (remove) the exited terminal |
+| `l` / `Right` | Cycle layout mode (focused → tiled-2 → tiled-4 → stacked) |
+| `F7` | Jump focus to next terminal needing attention |
+| `F8` | Open Permission Queue popup |
+
+**TerminalFocused mode:**
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+B` | Enter prefix-pending mode (next key is a command) |
+| All other keys | Sent directly to the PTY |
+
+**Prefix commands (after `Ctrl+B`):**
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+B` | Send literal Ctrl+B to PTY |
+| `n` | Jump to next terminal needing attention |
+| `p` | Open Permission Queue popup |
+| `[` | Enter scroll-back mode |
+| `l` | Cycle layout mode |
+| `!` | Focus next terminal (wrapping) |
+| `1`-`9` | Focus terminal by index |
+| Other | Return to Normal mode |
+
+**ScrollBack mode (entered via `Ctrl+B [`):**
+
+| Key | Action |
+|-----|--------|
+| `↑` / `k` | Scroll up 1 line |
+| `↓` / `j` | Scroll down 1 line |
+| `PgUp` | Scroll up one page |
+| `PgDn` | Scroll down one page |
+| `Home` | Scroll to top of scrollback buffer |
+| `End` | Scroll to live view (bottom) |
+| `q` / `Esc` | Exit scroll-back, return to TerminalFocused |
+
+Scrollback offset is stored per-terminal (`EmbeddedTerminal.scroll_offset`). The border turns magenta in scroll-back mode, with a `[N/total]` indicator at the bottom.
+
+#### Permission Queue Popup (F8)
+
+Shows all terminals with `NeedsAttention(PermissionPrompt)` or `NeedsAttention(Error)` status.
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Navigate the list |
+| `a` | Approve: send `y\n` to the selected terminal |
+| `d` | Deny: send `n\n` to the selected terminal |
+| `v` / `Enter` | View: close popup, switch to Terminals view, focus the terminal |
+| `Esc` | Close popup |
+
+#### PTY Cleanup
+
+On app exit (`q`/`F10`), `TerminalManager::cleanup_all()` drops all terminals, which closes their writers and causes child processes to receive EOF.
 
 ### In-Memory Search Index
 F3 search uses a pre-built `Vec<SearchEntry>` instead of scanning disk on every keystroke.
@@ -152,9 +329,43 @@ Vertical scrollbars appear in both panes when content overflows the visible area
 ### Status Bar (Norton Commander-style)
 Two-line status bar:
 - **Line 1**: View tabs + contextual navigation hints + aggregate stats
-- **Line 2**: NC-style F-key bar: `F1Help  F2Launch  F3Search  F4New  F5Rfrsh  F6Clean  ...  F10Quit`
+- **Line 2**: Context-adaptive F-key bar with modifier layers
 
-When a popup is open, line 2 shows popup-specific hints instead of the F-key bar.
+#### F-Key Bar Layers
+
+The bar supports three modifier layers, triggered by holding Shift or Ctrl:
+
+**Base layer (no modifier):**
+`F1Help  F2Launch  F3Search  F4New  F5Rfrsh  F6Clean  F7Attn  F8Perms  F9[Focus]  F10Quit`
+
+**Shift layer (view switching + detail):**
+`SHIFT▶ S+F1Tasks  S+F2Issues  S+F3Config  S+F4Cost  S+F5Terms  S+F6Docs  S+F7Hist`
+
+**Ctrl layer (admin, reserved for expansion):**
+`CTRL▶ C+F9Focus` (other slots reserved)
+
+**Modifier detection:** At startup, crew-board enables the kitty keyboard protocol via `PushKeyboardEnhancementFlags` if supported. With kitty protocol, modifier-only key presses (Shift alone, Ctrl alone) are detected and the bar updates in real-time. On terminals without kitty support (e.g., Windows Terminal), pressing a Shift+F-key or Ctrl+F-key flashes the corresponding layer for 2 seconds, showing what else is available.
+
+#### Context-Adaptive Terminal Bars
+
+In Terminals view, the bar changes based on the input mode:
+
+- **TerminalFocused**: `━━ ALL KEYS → TERMINAL ━━  Ctrl+B: prefix (n:attn  p:perms  [:scroll  l:layout  1-9:crew)`
+- **PrefixPending**: `PREFIX▶  n:Attn  p:Perms  [:Scroll  l:Layout  !:Next  1-9:Crew#  C-b:Literal  Esc Cancel`
+- **ScrollBack**: `SCROLL▶  ↑↓:Line  PgUp/Dn:Page  Home:Top  End:Live  q/Esc:Exit  offset:N`
+
+#### F-Key Empty Slots
+
+Unbound F-key slots show a dimmed F-number with no label (e.g., F9 appears in dark gray when not contextually active). This preserves positional reference without noise.
+
+#### Popup Override
+
+When a popup is open, line 2 shows popup-specific hints instead of the F-key bar (unchanged from before).
+
+The "5:Terms" tab in line 1 carries a status badge when terminals need attention:
+- `5:Terms[⚠N]` — N terminals have `NeedsAttention` status (attention count > 0, takes priority)
+- `5:Terms[✗N]` — N terminals have exited (exited count > 0, shown when no attention)
+- `5:Terms` — all terminals running or none present
 
 ### Color Schemes
 8 schemes from Python `CREW_COLOR_SCHEMES` (state_tools.py), indexed by `color_scheme_index` from worktree state. Used for tree row accents, detail pane colors, and terminal tab colors.
@@ -162,6 +373,24 @@ When a popup is open, line 2 shows popup-specific hints instead of the F-key bar
 `launcher.rs` provides `ColorSchemeHex` with hex strings for terminal commands:
 - Windows Terminal: `--tabColor` and `--colorScheme` args to `wt.exe`
 - tmux: `set-option window-style bg=...,fg=...`
+
+## Settings Keys (`~/.config/crew-board.toml`)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `repos` | `string[]` | `[]` | Explicit repo paths |
+| `scan` | `string[]` | `[]` | Directories to scan for repos |
+| `poll_interval` | `u64` | `3` | Auto-refresh interval (seconds) |
+| `embed_terminals` | `bool` | `true` | Enable embedded terminal feature |
+| `prefix_key` | `string` | `"C-b"` | Prefix key for terminal commands (tmux syntax) |
+| `terminal_layout` | `string` | `"focused"` | Default layout: focused/tiled-2/tiled-4/stacked |
+| `scrollback_lines` | `u32` | `10000` | Scrollback buffer per terminal |
+| `auto_embed_on_create` | `bool` | `true` | Embed terminal on F4 worktree creation |
+| `idle_timeout_secs` | `u64` | `120` | Idle detection threshold |
+| `visual_bell` | `bool` | `true` | Flash status indicator on attention |
+| `system_bell` | `bool` | `false` | Terminal bell on attention |
+
+All new keys use `#[serde(default)]` with custom default functions, so existing configs are fully backward-compatible.
 
 ## Data Sources
 
@@ -213,3 +442,19 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **`F4`/`F6` key scope**: Only works on Repo rows — `open_create_popup()` and `open_cleanup_popup()` return early on Task rows.
 - **Search index free functions**: `build_search_index()` and `build_search_entry()` are module-level free functions, not `impl App` methods. This is required because they are called from the background thread closure (which cannot capture `&self`).
 - **`LoadedTask` construction sites**: When adding fields to `LoadedTask`, update all construction sites: 3 in `load_tasks()` (metadata fallback, normal state.json, gap-fill), plus the corresponding sites in `load_tasks_incremental()`. The `state_mtime` field must be `Some(mtime)` for normal tasks and `None` for archived/fallback tasks.
+- **Terminal `d` key conflict**: The `d` key normally opens the doc list (`enter_doc_list()`). In the Terminals view it dismisses an exited terminal instead. The event loop checks `app.active_view == ActiveView::Terminals` before deciding which action to take.
+- **Terminal `Enter` key conflict**: In the Terminals view `Enter` either enters `TerminalFocused` mode (running terminal) or relaunches (exited terminal). Outside the Terminals view it expands/collapses tree rows.
+- **`poll_terminals()` auto-exits focus mode**: If the user is in `TerminalFocused` mode and the terminal exits, `poll_terminals()` automatically resets `terminal_input_mode` to `Normal`. No manual key press is needed.
+- **Attention cleared on input**: `TerminalManager::send_input()` always sets `attention_signal` to `None`. This means typing in a terminal immediately clears any attention badge, even if the screen still shows the prompt.
+- **Idle threshold in `poll_status()`**: Idle detection (120s) is handled in `poll_status()`, not in the reader thread. The reader thread only sets `attention_signal` for screen-content patterns (prompts/errors). Idle is a time-based check against `last_output` done each tick.
+- **Reader thread lifetime**: The reader thread for each PTY runs until the child process exits (EOF on the master reader). It is not killed explicitly — it exits naturally. After EOF it waits for the child exit code via `child.wait()` before writing the exit signal.
+- **Scroll-back via `set_scrollback()`**: The vt100 crate's `Parser::set_scrollback(n)` controls how many scrollback lines appear in the visible view. `draw_terminal()` temporarily sets it during rendering and restores it after. The parser lock is held for the entire render — the reader thread will block during this brief period.
+- **`PrefixPending` timeout**: There is no timeout for the prefix-pending state. If the user presses `Ctrl+B` and waits, the mode stays until the next keypress. Any unrecognized key after `Ctrl+B` drops back to Normal mode (not TerminalFocused).
+- **Layout mode in tiled views**: `terminal_indices_for_layout()` selects which terminals to show. It always includes the focused terminal and fills remaining slots with neighbors. The focused terminal's border uses `focused_border_style()` to distinguish it from inactive tiles.
+- **Permission popup refreshes entries**: After approve/deny, the popup rebuilds its entries list from scratch. The cursor clamps if the list shrinks.
+- **`last_terminal_size` for relaunch**: `terminal_resize_all()` stores the computed PTY dimensions in `App.last_terminal_size`. `terminal_relaunch_focused()` uses these instead of hardcoded 24x80.
+- **Kitty protocol runtime detection**: `crossterm::terminal::supports_keyboard_enhancement()` queries the terminal at startup. If supported, `PushKeyboardEnhancementFlags` is executed with `DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES | REPORT_ALL_KEYS_AS_ESCAPE_CODES`. Must be popped with `PopKeyboardEnhancementFlags` on exit.
+- **Modifier bar flash fallback**: On terminals without kitty protocol (e.g., Windows Terminal), pressing Shift+F1 both executes the action AND sets `modifier_bar_flash_until` to `Instant::now() + 2s`. The flash timeout is ticked each loop iteration via `tick_modifier_bar()`. The poll timeout drops to 50ms during flash for responsive decay.
+- **Modifier+F-key priority**: Shift+F-key and Ctrl+F-key bindings are checked BEFORE the base `match` in Priority 12. This prevents `Shift+F(1)` from falling through to the plain `F(1)` handler.
+- **Shift+F-keys bypass TerminalFocused mode**: Modified F-keys in TerminalFocused mode are forwarded to the PTY like all other keys. Only the Ctrl+B prefix can escape TerminalFocused mode. The Shift/Ctrl+F-key layers only work in Normal mode.
+- **F9 Focus is contextual**: F9 only shows a label ("Focus") in the Terminals view Normal mode. In other views it renders as a dimmed empty placeholder. The binding is a no-op outside Terminals view.
