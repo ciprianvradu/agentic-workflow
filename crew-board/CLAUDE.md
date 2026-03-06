@@ -8,7 +8,7 @@ Rust TUI dashboard for cross-project agentic-workflow task monitoring. Built wit
 cd crew-board
 cargo build                  # Dev build
 cargo build --release        # Optimized binary (strip + LTO)
-cargo test                   # All 18 unit tests
+cargo test                   # All 38 unit tests
 cargo clippy                 # Lint (fix all warnings before committing)
 ```
 
@@ -137,7 +137,7 @@ View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Ke
 | `EmbeddedTerminal` | Holds all `PtyHandles` fields plus `id`, `label`, `status`, `color_scheme_index`, `launch_params`, `scroll_offset`, `spawned_at`. |
 | `LaunchParams` | `{ command: String, args: Vec<String>, cwd: PathBuf }` — stored on each terminal for relaunch. |
 | `TerminalStatus` | Enum: `Running`, `NeedsAttention(AttentionReason)`, `Exited(i32)`. |
-| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt`, `Idle { seconds }`, `Error`. |
+| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt { context: String }`, `Idle { seconds }`, `Error { context: String }`. Context carries the actual prompt/error line for display in the F8 popup. |
 | `TerminalManager` | `Vec<EmbeddedTerminal>` + `focused: usize`. Entry point for all terminal operations. Includes `focus_next_running()` / `focus_prev_running()` which skip exited terminals. |
 
 #### Reader Thread Architecture
@@ -225,6 +225,7 @@ Cycle with `l` / `Right` in Normal mode. Layout cannot be cycled while in Termin
 | `F9` / `F12` | Enter `TerminalFocused` mode (running terminal required) |
 | `Enter` (exited) | Relaunch the exited terminal |
 | `d` / `Delete` (exited) | Dismiss (remove) the exited terminal |
+| `D` | Dismiss ALL exited terminals at once |
 | `l` / `Right` | Cycle layout mode (focused → tiled-2 → tiled-4 → stacked) |
 | `[` | Enter scroll-back mode |
 | `F7` | Jump focus to next terminal needing attention |
@@ -254,19 +255,24 @@ Cycle with `l` / `Right` in Normal mode. Layout cannot be cycled while in Termin
 | `PgDn` | Scroll down one page |
 | `Home` | Scroll to top of scrollback buffer |
 | `End` | Scroll to live view (bottom) |
-| `q` / `Esc` | Exit scroll-back, return to TerminalFocused |
+| `/` | Enter search mode (type query, Enter to search) |
+| `n` | Jump to next search match |
+| `N` | Jump to previous search match |
+| `q` / `Esc` | Exit scroll-back, return to Normal |
 
 Scrollback offset is stored per-terminal (`EmbeddedTerminal.scroll_offset`). The border turns magenta in scroll-back mode, with a `[N/total]` indicator at the bottom. Mouse scroll wheel also enters scroll-back mode (see Mouse Support below).
 
 #### Permission Queue Popup (F8)
 
-Shows all terminals with `NeedsAttention(PermissionPrompt)` or `NeedsAttention(Error)` status.
+Shows all terminals with `NeedsAttention(PermissionPrompt { context })` or `NeedsAttention(Error { context })` status. Displays the actual context line from the terminal.
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate the list |
 | `a` | Approve: send `y\n` to the selected terminal |
 | `d` | Deny: send `n\n` to the selected terminal |
+| `A` | Approve ALL: batch-approve all pending terminals |
+| `t` | Type: enter quick-send input mode (type custom response) |
 | `v` / `Enter` | View: close popup, switch to Terminals view, focus the terminal |
 | `Esc` | Close popup |
 
@@ -437,6 +443,10 @@ The "5:Terms" tab in line 1 carries a status badge when terminals need attention
 | `idle_timeout_secs` | `u64` | `120` | Idle detection threshold |
 | `visual_bell` | `bool` | `true` | Flash status indicator on attention |
 | `system_bell` | `bool` | `false` | Terminal bell on attention |
+| `log_directory` | `string?` | `null` | Terminal output log dir (each terminal logs to `<dir>/<id>.log`) |
+| `permission_profile` | `string` | `"interactive"` | Permission profile: interactive/trusted/autonomous |
+| `auto_approve_patterns` | `string[]` | `[]` | Regex patterns for auto-approval in trusted profile |
+| `desktop_notifications` | `bool` | `false` | Send desktop notification on attention events |
 
 All new keys use `#[serde(default)]` with custom default functions, so existing configs are fully backward-compatible.
 
@@ -511,3 +521,10 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **OSC 52 clipboard**: Text is copied via OSC 52 (`\x1b]52;c;{base64}\x07`). This requires terminal support (WezTerm, iTerm2, modern Windows Terminal). The `base64` crate is a dependency for this feature.
 - **`key_to_bytes()` CSI u encoding**: Modified Enter and Backspace use CSI u encoding (`\x1b[13;{mod}u`, `\x1b[127;{mod}u`) so that programs like Claude Code can distinguish e.g. Ctrl+Enter from plain Enter.
 - **PrefixPending is legacy**: The `PrefixPending` variant of `TerminalInputMode` is kept for enum compatibility but no code path enters this state. The `Ctrl+B` prefix system was replaced by `F12` toggle + `Shift+F-key` view switching.
+- **Permission profile auto-approval**: In `Autonomous` profile, `auto_approve_permissions()` sends `y\n` to every terminal with `PermissionPrompt` attention on each poll tick. In `Trusted` profile, only prompts matching `auto_approve_patterns` are approved. In `Interactive` (default), no auto-approval occurs.
+- **Terminal output logging**: When `log_directory` is set, `spawn_pty_with_log()` opens an append-mode log file. The reader thread tees all raw PTY output bytes to the file. Log files include ANSI escape codes (use `less -R` or `cat` to view).
+- **Desktop notifications**: `send_desktop_notification()` spawns a detached thread to run `notify-send` (Linux) or `osascript` (macOS). Failures are silently ignored.
+- **Terminal search in scroll-back**: `/` enters search mode, query is matched case-insensitively against visible screen rows. Matches are stored as scroll offsets; `n`/`N` navigate between them. Search state (`terminal_search_query`, `terminal_search_matches`) persists until scroll-back is exited.
+- **Crew summary line**: In Focused layout with 2+ terminals, a one-line summary appears above the terminal panel showing all terminals' status icons and short IDs. Uses `●` (running), `◆` (attention), `✓`/`✗` (exited ok/failed).
+- **Phase+progress in terminal title**: `lookup_task_phase()` scans `app.repos` for a task matching the terminal's ID and appends `[phase]` or `[phase N%]` to the border title of running terminals.
+- **`D` key vs `d` key**: `D` (shift+d) dismisses ALL exited terminals at once via `dismiss_all_exited()`. Lowercase `d` dismisses only the focused exited terminal.

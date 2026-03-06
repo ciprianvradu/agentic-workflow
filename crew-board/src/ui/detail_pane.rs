@@ -82,6 +82,7 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
             let block = Block::default()
                 .title(format!(" Details{} ", focus_marker))
                 .borders(Borders::ALL)
+                .border_type(styles::border_type_for(is_focused))
                 .border_style(border_style);
             let para = Paragraph::new("Select a task or repo").block(block);
             frame.render_widget(para, area);
@@ -146,7 +147,8 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
         let block = Block::default()
             .title(breadcrumb)
             .borders(Borders::ALL)
-            .border_style(border_style);
+            .border_type(styles::border_type_for(is_focused))
+                .border_style(border_style);
         let paragraph = Paragraph::new(text)
             .block(block)
             .wrap(Wrap { trim: false })
@@ -374,7 +376,8 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
     let block = Block::default()
         .title(breadcrumb)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_type(styles::border_type_for(is_focused))
+                .border_style(border_style);
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -488,7 +491,8 @@ fn draw_doc_list(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
     let block = Block::default()
         .title(breadcrumb)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_type(styles::border_type_for(is_focused))
+                .border_style(border_style);
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -574,7 +578,8 @@ fn draw_doc_reader(
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_type(styles::border_type_for(is_focused))
+                .border_style(border_style);
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -594,6 +599,7 @@ fn draw_history(frame: &mut Frame, app: &App, area: Rect, border_style: Style, i
             let block = Block::default()
                 .title(format!(" History{} ", focus_marker))
                 .borders(Borders::ALL)
+                .border_type(styles::border_type_for(is_focused))
                 .border_style(border_style);
             frame.render_widget(Paragraph::new("No task selected").block(block), area);
             return;
@@ -1084,7 +1090,8 @@ fn draw_history(frame: &mut Frame, app: &App, area: Rect, border_style: Style, i
     let block = Block::default()
         .title(breadcrumb)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_type(styles::border_type_for(is_focused))
+                .border_style(border_style);
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })
@@ -1190,7 +1197,8 @@ fn draw_repo_summary(
     let block = Block::default()
         .title(format!(" Repo Summary{} ", focus_marker))
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_type(styles::border_type_for(is_focused))
+                .border_style(border_style);
     let paragraph = Paragraph::new(text)
         .block(block)
         .wrap(Wrap { trim: false })

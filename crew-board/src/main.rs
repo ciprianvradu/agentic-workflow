@@ -105,6 +105,16 @@ fn main() -> Result<()> {
     // Apply terminal settings from config
     app.terminal_layout = initial_layout;
     app.kitty_protocol_enabled = kitty_enabled;
+    app.system_bell = cfg.system_bell;
+    app.visual_bell = cfg.visual_bell;
+    app.log_directory = cfg.log_directory.map(std::path::PathBuf::from);
+    app.permission_profile = app::PermissionProfile::from_str(&cfg.permission_profile);
+    app.auto_approve_patterns = cfg
+        .auto_approve_patterns
+        .iter()
+        .filter_map(|p| regex::Regex::new(p).ok())
+        .collect();
+    app.desktop_notifications = cfg.desktop_notifications;
 
     // Main loop
     let result = run_app(&mut terminal, &mut app);
@@ -242,38 +252,81 @@ fn run_app(
                     continue;
                 }
 
+                // Priority -1: Quit confirmation dialog
+                if app.quit_confirm {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app.should_quit = true;
+                        }
+                        _ => {
+                            app.quit_confirm = false;
+                        }
+                    }
+                }
                 // Priority 0: Help overlay (any key closes)
-                if app.show_help {
+                else if app.show_help {
                     app.show_help = false;
                 }
                 // Priority 0.6: Scroll-back mode
                 else if app.active_view == ActiveView::Terminals
                     && app.terminal_input_mode == TerminalInputMode::ScrollBack
                 {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            app.terminal_scroll_reset();
-                            app.terminal_input_mode = TerminalInputMode::Normal;
+                    // Search input mode active
+                    if app.terminal_search_input.is_some() {
+                        match key.code {
+                            KeyCode::Enter => {
+                                app.terminal_search_execute();
+                            }
+                            KeyCode::Esc => {
+                                app.terminal_search_input = None;
+                            }
+                            _ => {
+                                if let Some(ref mut input) = app.terminal_search_input {
+                                    use tui_input::backend::crossterm::EventHandler;
+                                    input.handle_event(
+                                        &crossterm::event::Event::Key(key),
+                                    );
+                                }
+                            }
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            app.terminal_scroll_up(1);
+                    } else {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') => {
+                                // Keep scroll position — Ctrl+F5 or End resets to live
+                                app.terminal_search_query.clear();
+                                app.terminal_search_matches.clear();
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                app.terminal_scroll_up(1);
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                app.terminal_scroll_down(1);
+                            }
+                            KeyCode::PageUp => {
+                                app.terminal_scroll_up(page_size as usize);
+                            }
+                            KeyCode::PageDown => {
+                                app.terminal_scroll_down(page_size as usize);
+                            }
+                            KeyCode::Home => {
+                                app.terminal_scroll_to_top();
+                            }
+                            KeyCode::End => {
+                                app.terminal_scroll_reset();
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                            }
+                            KeyCode::Char('/') => {
+                                app.terminal_search_start();
+                            }
+                            KeyCode::Char('n') => {
+                                app.terminal_search_next();
+                            }
+                            KeyCode::Char('N') => {
+                                app.terminal_search_prev();
+                            }
+                            _ => {}
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            app.terminal_scroll_down(1);
-                        }
-                        KeyCode::PageUp => {
-                            app.terminal_scroll_up(page_size as usize);
-                        }
-                        KeyCode::PageDown => {
-                            app.terminal_scroll_down(page_size as usize);
-                        }
-                        KeyCode::Home => {
-                            app.terminal_scroll_to_top();
-                        }
-                        KeyCode::End => {
-                            app.terminal_scroll_reset();
-                        }
-                        _ => {}
                     }
                 }
                 // Priority 0.7: Terminal focus mode -- all keys go to PTY
@@ -381,7 +434,7 @@ fn run_app(
                         KeyCode::PageDown => app.scroll_detail_page_down(page_size),
                         KeyCode::PageUp => app.scroll_detail_page_up(page_size),
                         KeyCode::Tab => app.toggle_focus(),
-                        KeyCode::Char('q') | KeyCode::F(10) => app.should_quit = true,
+                        KeyCode::Char('q') | KeyCode::F(10) => app.quit_confirm = true,
                         _ => {}
                     }
                 }
@@ -424,6 +477,11 @@ fn run_app(
                     // ── Ctrl+F-key layer (reserved for expansion) ────
                     else if key.modifiers.contains(KeyModifiers::CONTROL) {
                         match key.code {
+                            KeyCode::F(5) => {
+                                // Ctrl+F5: go to live view (reset scroll offset)
+                                app.terminal_scroll_reset();
+                                app.flash_modifier_bar(ModifierBarState::Ctrl);
+                            }
                             KeyCode::F(_) => {
                                 // Ctrl+F-keys: flash the layer for discovery
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
@@ -439,10 +497,11 @@ fn run_app(
                     // ── Base F-key layer (no modifier) ───────────────
                     else {
                     match (key.modifiers, key.code) {
-                        // Quit (q and F10 only — Esc never quits)
+                        // Quit (q and F10 show confirmation — Esc never quits)
                         (_, KeyCode::Char('q')) | (_, KeyCode::F(10)) => {
-                            app.should_quit = true
+                            app.quit_confirm = true;
                         }
+                        // Ctrl+C: force quit (no confirmation)
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.should_quit = true,
 
                         // Esc: back out progressively, never quit
@@ -560,8 +619,21 @@ fn run_app(
                         // Permission queue
                         (_, KeyCode::F(8)) => app.open_permission_popup(),
 
-                        // Focus terminal (F9/F12 in Terminals view Normal mode)
-                        (_, KeyCode::F(9)) | (_, KeyCode::F(12)) => {
+                        // F9: toggle pane focus (all views), or enter terminal focus
+                        (_, KeyCode::F(9)) => {
+                            if app.active_view == ActiveView::Terminals
+                                && app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .is_some_and(|m| !m.terminals.is_empty())
+                            {
+                                app.terminal_input_mode = TerminalInputMode::TerminalFocused;
+                            } else {
+                                app.toggle_focus();
+                            }
+                        }
+                        // F12: enter terminal focus (Terminals view only)
+                        (_, KeyCode::F(12)) => {
                             if app.active_view == ActiveView::Terminals
                                 && app
                                     .terminal_manager
@@ -586,6 +658,13 @@ fn run_app(
 
                         // Cycle views
                         (_, KeyCode::Char('`')) => app.next_view(),
+
+                        // Dismiss ALL exited terminals at once (Shift+D)
+                        (_, KeyCode::Char('D')) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_dismiss_all_exited();
+                            }
+                        }
 
                         // Delete: dismiss exited terminal in Terminals view
                         (_, KeyCode::Delete) => {

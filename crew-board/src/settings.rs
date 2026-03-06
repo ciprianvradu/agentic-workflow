@@ -51,6 +51,30 @@ pub struct Settings {
     /// Trigger a terminal bell (\x07) when a crew needs attention.
     #[serde(default)]
     pub system_bell: bool,
+
+    /// Directory for terminal output log files. Each terminal logs to
+    /// `<log_directory>/<terminal_id>.log`. None = logging disabled.
+    #[serde(default)]
+    pub log_directory: Option<String>,
+
+    // ── Permission Profiles ─────────────────────────────────────────
+
+    /// Permission profile: "interactive" (default), "trusted", or "autonomous".
+    /// - interactive: all prompts require manual approval
+    /// - trusted: auto-approve prompts matching `auto_approve_patterns`
+    /// - autonomous: auto-approve all permission prompts (y\n)
+    #[serde(default = "default_permission_profile")]
+    pub permission_profile: String,
+
+    /// Regex patterns for auto-approval in "trusted" profile.
+    /// Each pattern is matched against the permission context line.
+    /// Example: ["(?i)read file", "(?i)list directory"]
+    #[serde(default)]
+    pub auto_approve_patterns: Vec<String>,
+
+    /// Send desktop notification on terminal attention events.
+    #[serde(default)]
+    pub desktop_notifications: bool,
 }
 
 impl Default for Settings {
@@ -67,6 +91,10 @@ impl Default for Settings {
             idle_timeout_secs: 120,
             visual_bell: true,
             system_bell: false,
+            log_directory: None,
+            permission_profile: "interactive".to_string(),
+            auto_approve_patterns: Vec::new(),
+            desktop_notifications: false,
         }
     }
 }
@@ -89,6 +117,10 @@ fn default_scrollback_lines() -> u32 {
 
 fn default_idle_timeout() -> u64 {
     120
+}
+
+fn default_permission_profile() -> String {
+    "interactive".to_string()
 }
 
 impl Settings {
@@ -211,5 +243,36 @@ system_bell = true
         assert!(!settings.visual_bell);
         assert!(settings.system_bell);
         let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_load_permission_config() {
+        let tmp = std::env::temp_dir().join("crew-board-test-permission.toml");
+        fs::write(
+            &tmp,
+            r#"
+permission_profile = "trusted"
+auto_approve_patterns = ["(?i)read file", "(?i)list directory"]
+desktop_notifications = true
+log_directory = "/tmp/crew-logs"
+"#,
+        )
+        .unwrap();
+        let settings = Settings::load_from(&tmp);
+        assert_eq!(settings.permission_profile, "trusted");
+        assert_eq!(settings.auto_approve_patterns.len(), 2);
+        assert_eq!(settings.auto_approve_patterns[0], "(?i)read file");
+        assert!(settings.desktop_notifications);
+        assert_eq!(settings.log_directory, Some("/tmp/crew-logs".to_string()));
+        let _ = fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_default_permission_settings() {
+        let settings = Settings::default();
+        assert_eq!(settings.permission_profile, "interactive");
+        assert!(settings.auto_approve_patterns.is_empty());
+        assert!(!settings.desktop_notifications);
+        assert!(settings.log_directory.is_none());
     }
 }

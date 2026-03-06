@@ -250,6 +250,11 @@ pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
     // Ctrl+key — character control codes (Ctrl+A=0x01 .. Ctrl+Z=0x1a)
     if modifiers.contains(KeyModifiers::CONTROL) {
         if let KeyCode::Char(c) = code {
+            // Some terminals (kitty protocol) report Ctrl+Enter as Char('\r') or Char('\n')
+            // instead of KeyCode::Enter. Route these to the CSI u encoding below.
+            if c == '\r' || c == '\n' {
+                return format!("\x1b[13;{}u", m).into_bytes();
+            }
             let ctrl = (c.to_ascii_lowercase() as u8)
                 .wrapping_sub(b'a')
                 .wrapping_add(1);
@@ -359,5 +364,53 @@ fn fkey_ss3(letter: u8, m: u8) -> Vec<u8> {
         vec![0x1b, b'O', letter]
     } else {
         format!("\x1b[1;{}{}", m, letter as char).into_bytes()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    #[test]
+    fn test_plain_enter() {
+        assert_eq!(key_to_bytes(KeyCode::Enter, KeyModifiers::NONE), b"\r");
+    }
+
+    #[test]
+    fn test_ctrl_enter_keycode() {
+        // When crossterm reports Ctrl+Enter as KeyCode::Enter
+        let bytes = key_to_bytes(KeyCode::Enter, KeyModifiers::CONTROL);
+        assert_eq!(bytes, b"\x1b[13;5u");
+    }
+
+    #[test]
+    fn test_ctrl_enter_as_char_cr() {
+        // When crossterm (kitty protocol) reports Ctrl+Enter as Char('\r')
+        let bytes = key_to_bytes(KeyCode::Char('\r'), KeyModifiers::CONTROL);
+        assert_eq!(bytes, b"\x1b[13;5u");
+    }
+
+    #[test]
+    fn test_ctrl_enter_as_char_lf() {
+        // When crossterm (kitty protocol) reports Ctrl+Enter as Char('\n')
+        let bytes = key_to_bytes(KeyCode::Char('\n'), KeyModifiers::CONTROL);
+        assert_eq!(bytes, b"\x1b[13;5u");
+    }
+
+    #[test]
+    fn test_ctrl_a() {
+        assert_eq!(key_to_bytes(KeyCode::Char('a'), KeyModifiers::CONTROL), vec![1]);
+    }
+
+    #[test]
+    fn test_ctrl_c() {
+        assert_eq!(key_to_bytes(KeyCode::Char('c'), KeyModifiers::CONTROL), vec![3]);
+    }
+
+    #[test]
+    fn test_ctrl_right_arrow() {
+        let bytes = key_to_bytes(KeyCode::Right, KeyModifiers::CONTROL);
+        assert_eq!(bytes, b"\x1b[1;5C");
     }
 }

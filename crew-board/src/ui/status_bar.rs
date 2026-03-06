@@ -63,11 +63,20 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
             String::new()
         }
     } else if attn_count > 0 {
-        // Show attention badge even when not on Terminals view
+        // Show attention badge even when not on Terminals view (cross-view flash)
         format!("  \u{25c6}{}", attn_count)
     } else {
         String::new()
     };
+
+    // Determine if attention flash is active (alternating style)
+    let flash_active = app.attention_flash_until.is_some_and(|until| {
+        let elapsed_ms = (std::time::Instant::now()
+            .duration_since(until.checked_sub(std::time::Duration::from_secs(2)).unwrap_or(until)))
+            .as_millis();
+        // Blink: 250ms on/off cycle
+        (elapsed_ms / 250).is_multiple_of(2)
+    });
 
     let line = Line::from(vec![
         Span::styled(
@@ -79,7 +88,14 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled(
             badge,
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            if flash_active && attn_count > 0 {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            },
         ),
         Span::raw(" "),
         Span::styled(hints, styles::hint_style()),
@@ -187,7 +203,11 @@ fn draw_ctrl_fkey_bar(frame: &mut Frame, _app: &App, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
     spans.push(layer_indicator_fixed("CTRL"));
     for n in 1..=10 {
-        spans.extend(fkey_cell_empty(n));
+        if n == 5 {
+            spans.extend(fkey_cell(n, "Live"));
+        } else {
+            spans.extend(fkey_cell_empty(n));
+        }
     }
     let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
@@ -294,7 +314,41 @@ fn draw_scrollback_bar(frame: &mut Frame, app: &App, area: Rect) {
         .map(|t| t.scroll_offset)
         .unwrap_or(0);
 
-    let line = Line::from(vec![
+    // If search input is active, show the search bar instead
+    if let Some(ref input) = app.terminal_search_input {
+        let line = Line::from(vec![
+            Span::styled(
+                " /",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(input.value().to_string(), Style::default().fg(Color::White)),
+            Span::styled("_", Style::default().fg(Color::DarkGray)),
+            Span::styled("  Enter: search  Esc: cancel", Style::default().fg(Color::DarkGray)),
+        ]);
+        let paragraph = Paragraph::new(line);
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
+    let search_info = if !app.terminal_search_query.is_empty() {
+        let total = app.terminal_search_matches.len();
+        if total > 0 {
+            format!(
+                "  \"{}\": {}/{} matches  n/N:next/prev",
+                app.terminal_search_query,
+                app.terminal_search_match_idx + 1,
+                total
+            )
+        } else {
+            format!("  \"{}\": no matches", app.terminal_search_query)
+        }
+    } else {
+        String::new()
+    };
+
+    let mut spans = vec![
         Span::styled(
             " SCROLL\u{25b6} ",
             Style::default()
@@ -306,13 +360,18 @@ fn draw_scrollback_bar(frame: &mut Frame, app: &App, area: Rect) {
         prefix_key_span("\u{2191}\u{2193}/jk", "Line"),
         prefix_key_span("PgUp/Dn", "Page"),
         prefix_key_span("Home", "Top"),
-        prefix_key_span("End", "Live"),
-        prefix_key_span("q/Esc", "Exit"),
+        prefix_key_span("End", "Live+Exit"),
+        prefix_key_span("/", "Search"),
+        prefix_key_span("Esc", "Exit (keep pos)"),
         Span::styled(
             format!("  offset:{}", offset),
             Style::default().fg(Color::DarkGray),
         ),
-    ]);
+    ];
+    if !search_info.is_empty() {
+        spans.push(Span::styled(search_info, Style::default().fg(Color::Yellow)));
+    }
+    let line = Line::from(spans);
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
 }
@@ -425,7 +484,7 @@ fn context_hints(app: &App) -> String {
         ActiveView::CostSummary => "PgUp/Dn scroll".to_string(),
         ActiveView::Terminals => match app.terminal_input_mode {
             TerminalInputMode::Normal => {
-                "\u{2191}\u{2193} nav  Enter/F12 focus  d dismiss  [ scroll  F7 attn".to_string()
+                "\u{2191}\u{2193} nav  Enter/F12 focus  d dismiss  D all  [ scroll  F7 attn".to_string()
             }
             TerminalInputMode::TerminalFocused | TerminalInputMode::PrefixPending => {
                 format!(
@@ -485,7 +544,7 @@ fn popup_hints(app: &App) -> Option<String> {
         });
     }
     if app.permission_popup.is_some() {
-        return Some(" \u{2191}\u{2193} select  a approve  d deny  v view  Esc close".to_string());
+        return Some(" \u{2191}\u{2193} select  a approve  d deny  A all  t type  v view  Esc close".to_string());
     }
     if let Some(popup) = &app.launch_popup {
         return Some(match popup.step {

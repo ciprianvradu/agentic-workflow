@@ -29,7 +29,19 @@ Monitor tasks, embed live terminals, detect permission prompts, and manage 10+ p
 
 **Permission Prompt Detection** — Automatically detects when an AI agent is waiting for approval. Yellow attention badges appear in the crew list, and F7 jumps straight to the next blocked crew.
 
-**Permission Queue (F8)** — Centralized popup showing all pending permissions across all crews. Approve or deny without switching terminals.
+**Permission Queue (F8)** — Centralized popup showing all pending permissions across all crews. Context preview shows the actual prompt text. Approve, deny, batch-approve (A), or type a custom response (t).
+
+**Permission Profiles** — Configure `permission_profile` in settings: `interactive` (manual approval), `trusted` (auto-approve matching regex patterns), or `autonomous` (auto-approve everything).
+
+**Terminal Output Logging** — Set `log_directory` in settings to capture all terminal output to per-task log files for post-mortem analysis.
+
+**Desktop Notifications** — Enable `desktop_notifications` to receive OS notifications when any terminal needs attention (via `notify-send` on Linux, `osascript` on macOS).
+
+**Terminal Search** — Press `/` in scroll-back mode to search terminal output. Navigate matches with `n`/`N`.
+
+**Crew Summary Line** — In focused layout with multiple terminals, a compact status line shows all crew members' status at a glance.
+
+**Phase & Progress in Title** — Terminal borders show the current workflow phase and implementation progress (e.g., `[implementer 60%]`).
 
 **Mouse Support** — Click and drag to select text within terminal panels (constrained to panel boundaries). Scroll wheel for scrollback. Auto-copy to clipboard via OSC 52.
 
@@ -147,6 +159,7 @@ View 5 is a full terminal multiplexer with three input modes:
 | `F9` / `F12` | Enter focused mode (all keys go to PTY) |
 | `Enter` | Relaunch exited terminal |
 | `d` / `Delete` | Dismiss exited terminal |
+| `D` | Dismiss ALL exited terminals |
 | `l` / `Right` | Cycle layout (focused → tiled-2 → tiled-4 → stacked) |
 | `[` | Enter scroll-back mode |
 
@@ -167,6 +180,8 @@ View 5 is a full terminal multiplexer with three input modes:
 | `↑`/`↓` or `j`/`k` | Scroll line by line |
 | `PgUp`/`PgDn` | Scroll by page |
 | `Home`/`End` | Jump to top / live view |
+| `/` | Search terminal output |
+| `n` / `N` | Next / previous search match |
 | `q` / `Esc` | Exit scroll-back |
 
 ### Mouse (Terminal Panels)
@@ -182,8 +197,10 @@ View 5 is a full terminal multiplexer with three input modes:
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` | Navigate pending permissions |
-| `a` | Approve (sends `y` to the terminal) |
-| `d` | Deny (sends `n` to the terminal) |
+| `a` | Approve selected (sends `y` to the terminal) |
+| `d` | Deny selected (sends `n` to the terminal) |
+| `A` | Approve ALL pending terminals at once |
+| `t` | Type custom response (opens input field) |
 | `v` / `Enter` | View — jump to the terminal for full context |
 | `Esc` | Close |
 
@@ -244,6 +261,20 @@ visual_bell = true
 
 # Trigger terminal bell on attention (default: false)
 system_bell = false
+
+# Log terminal output to files (default: disabled)
+# log_directory = "/tmp/crew-board-logs"
+
+# ── Permission Profiles ─────────────────────────
+
+# Permission profile: "interactive" (default), "trusted", or "autonomous"
+permission_profile = "interactive"
+
+# Regex patterns for auto-approval in trusted profile
+# auto_approve_patterns = ["(?i)read file", "(?i)list directory"]
+
+# Send desktop notification on attention events (default: false)
+desktop_notifications = false
 ```
 
 CLI flags override config values when both are present.

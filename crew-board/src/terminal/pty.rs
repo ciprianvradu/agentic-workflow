@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -149,6 +149,22 @@ pub fn spawn_pty(
     rows: u16,
     cols: u16,
 ) -> Result<PtyHandles> {
+    spawn_pty_with_log(command, args, cwd, rows, cols, None)
+}
+
+/// Spawn a child process inside a PTY with optional output logging.
+///
+/// If `log_path` is Some, PTY output bytes are also written to the given file
+/// (appended). This provides a persistent log of terminal output.
+#[allow(dead_code)]
+pub fn spawn_pty_with_log(
+    command: &str,
+    args: &[String],
+    cwd: &Path,
+    rows: u16,
+    cols: u16,
+    log_path: Option<PathBuf>,
+) -> Result<PtyHandles> {
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -210,6 +226,18 @@ pub fn spawn_pty(
         let mut last_scan = Instant::now();
         let scan_interval = std::time::Duration::from_millis(500);
 
+        // Open log file if configured
+        let mut log_file = log_path.and_then(|p| {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&p)
+                .ok()
+        });
+
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break, // EOF -- child exited
@@ -218,6 +246,11 @@ pub fn spawn_pty(
                     p.process(&buf[..n]);
                     drop(p); // release parser lock before updating timestamp
                     *last_output_clone.lock().unwrap() = Instant::now();
+
+                    // Tee output to log file
+                    if let Some(ref mut f) = log_file {
+                        let _ = f.write_all(&buf[..n]);
+                    }
 
                     // Throttled attention scanning (every 500ms)
                     if last_scan.elapsed() >= scan_interval {

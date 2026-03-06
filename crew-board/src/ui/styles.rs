@@ -1,4 +1,5 @@
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::BorderType;
 
 /// Crew color scheme, matching state_tools.py CREW_COLOR_SCHEMES.
 #[allow(dead_code)]
@@ -95,6 +96,15 @@ pub fn focused_border_style() -> Style {
 
 pub fn unfocused_border_style() -> Style {
     Style::default().fg(Color::DarkGray)
+}
+
+/// Double border for focused panels, plain for unfocused.
+pub fn border_type_for(focused: bool) -> BorderType {
+    if focused {
+        BorderType::Double
+    } else {
+        BorderType::Plain
+    }
 }
 
 pub fn popup_selected_style() -> Style {

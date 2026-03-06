@@ -14,8 +14,12 @@ pub mod task_list;
 pub mod terminal_view;
 
 use crate::app::{ActiveView, App};
+use crate::terminal::TerminalStatus;
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -59,6 +63,74 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.show_help {
         help_popup::draw(frame, app);
     }
+    if app.quit_confirm {
+        draw_quit_confirm(frame, app);
+    }
+}
+
+fn draw_quit_confirm(frame: &mut Frame, app: &App) {
+    let (running, attention) = app
+        .terminal_manager
+        .as_ref()
+        .map(|mgr| {
+            let r = mgr
+                .terminals
+                .iter()
+                .filter(|t| matches!(t.status, TerminalStatus::Running))
+                .count();
+            let a = mgr
+                .terminals
+                .iter()
+                .filter(|t| matches!(t.status, TerminalStatus::NeedsAttention(_)))
+                .count();
+            (r, a)
+        })
+        .unwrap_or((0, 0));
+
+    let mut lines = vec![Line::from(Span::styled(
+        " Quit crew-board? ",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::raw(""));
+
+    if running + attention > 0 {
+        if running > 0 {
+            lines.push(Line::from(format!("  {} crew(s) still running", running)));
+        }
+        if attention > 0 {
+            lines.push(Line::from(format!(
+                "  {} terminal(s) need attention",
+                attention
+            )));
+        }
+        lines.push(Line::raw(""));
+    }
+
+    lines.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("[Y]", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw("es  "),
+        Span::styled("[N]", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw("o / Esc"),
+    ]));
+
+    let height = lines.len() as u16 + 2;
+    let width = 36;
+    let area = frame.area();
+    let popup = Rect::new(
+        area.width.saturating_sub(width) / 2,
+        area.height.saturating_sub(height) / 2,
+        width.min(area.width),
+        height.min(area.height),
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(lines).block(block), popup);
 }
 
 fn draw_dual_pane(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {

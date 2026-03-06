@@ -28,9 +28,9 @@ pub enum TerminalStatus {
 /// Reason a terminal needs attention.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttentionReason {
-    PermissionPrompt,
+    PermissionPrompt { context: String },
     Idle { seconds: u64 },
-    Error,
+    Error { context: String },
 }
 
 /// Stored launch parameters for relaunching a terminal.
@@ -92,7 +92,24 @@ impl TerminalManager {
         cols: u16,
         color_scheme_index: Option<usize>,
     ) -> Result<()> {
-        let handles = pty::spawn_pty(command, args, cwd, rows, cols)?;
+        self.spawn_with_log(id, label, command, args, cwd, rows, cols, color_scheme_index, None)
+    }
+
+    /// Spawn a new embedded terminal with optional output logging.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_log(
+        &mut self,
+        id: TerminalId,
+        label: String,
+        command: &str,
+        args: &[String],
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        color_scheme_index: Option<usize>,
+        log_path: Option<std::path::PathBuf>,
+    ) -> Result<()> {
+        let handles = pty::spawn_pty_with_log(command, args, cwd, rows, cols, log_path)?;
 
         self.terminals.push(EmbeddedTerminal {
             id,
@@ -304,13 +321,15 @@ impl TerminalManager {
             let attn_event = term.attention_signal.lock().unwrap().clone();
             if let Some(event) = attn_event {
                 let reason = match &event.kind {
-                    pty::AttentionKind::PermissionPrompt { .. } => {
-                        AttentionReason::PermissionPrompt
+                    pty::AttentionKind::PermissionPrompt { line } => {
+                        AttentionReason::PermissionPrompt { context: line.clone() }
                     }
                     pty::AttentionKind::Idle { seconds } => {
                         AttentionReason::Idle { seconds: *seconds }
                     }
-                    pty::AttentionKind::Error { .. } => AttentionReason::Error,
+                    pty::AttentionKind::Error { line } => {
+                        AttentionReason::Error { context: line.clone() }
+                    }
                 };
                 if term.status != TerminalStatus::NeedsAttention(reason.clone()) {
                     term.status = TerminalStatus::NeedsAttention(reason);
@@ -349,6 +368,35 @@ impl TerminalManager {
             .any(|t| matches!(t.status, TerminalStatus::Running))
     }
 
+    /// Remove all exited terminals at once. Returns count removed.
+    pub fn dismiss_all_exited(&mut self) -> usize {
+        let before = self.terminals.len();
+        self.terminals
+            .retain(|t| !matches!(t.status, TerminalStatus::Exited(_)));
+        let removed = before - self.terminals.len();
+        // Clamp focus
+        if !self.terminals.is_empty() {
+            if self.focused >= self.terminals.len() {
+                self.focused = self.terminals.len() - 1;
+            }
+        } else {
+            self.focused = 0;
+        }
+        removed
+    }
+
+    /// Send input bytes to a specific terminal by index.
+    /// Also clears any attention signal.
+    pub fn send_input_to(&self, idx: usize, bytes: &[u8]) -> Result<()> {
+        if let Some(term) = self.terminals.get(idx) {
+            let mut writer = term.writer.lock().unwrap();
+            writer.write_all(bytes)?;
+            writer.flush()?;
+            *term.attention_signal.lock().unwrap() = None;
+        }
+        Ok(())
+    }
+
     /// Cleanup all terminals on app exit.
     /// Drops all writers (closes their stdin), which causes the child processes
     /// to eventually receive EOF and exit. The reader threads will detect this
@@ -356,5 +404,91 @@ impl TerminalManager {
     pub fn cleanup_all(&mut self) {
         // Drop writers to signal EOF to child processes
         self.terminals.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_attention_reason_permission_prompt_with_context() {
+        let reason = AttentionReason::PermissionPrompt {
+            context: "Allow running bash command?".to_string(),
+        };
+        match reason {
+            AttentionReason::PermissionPrompt { context } => {
+                assert_eq!(context, "Allow running bash command?");
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_attention_reason_error_with_context() {
+        let reason = AttentionReason::Error {
+            context: "error: compilation failed".to_string(),
+        };
+        match reason {
+            AttentionReason::Error { context } => {
+                assert_eq!(context, "error: compilation failed");
+            }
+            _ => panic!("Wrong variant"),
+        }
+    }
+
+    #[test]
+    fn test_terminal_manager_new() {
+        let mgr = TerminalManager::new();
+        assert!(mgr.terminals.is_empty());
+        assert_eq!(mgr.focused, 0);
+        assert_eq!(mgr.attention_count(), 0);
+        assert_eq!(mgr.exited_count(), 0);
+        assert!(!mgr.has_running());
+    }
+
+    #[test]
+    fn test_dismiss_all_exited_empty() {
+        let mut mgr = TerminalManager::new();
+        assert_eq!(mgr.dismiss_all_exited(), 0);
+        assert!(mgr.terminals.is_empty());
+    }
+
+    #[test]
+    fn test_terminal_status_eq() {
+        assert_eq!(TerminalStatus::Running, TerminalStatus::Running);
+        assert_eq!(TerminalStatus::Exited(0), TerminalStatus::Exited(0));
+        assert_ne!(TerminalStatus::Exited(0), TerminalStatus::Exited(1));
+        assert_ne!(TerminalStatus::Running, TerminalStatus::Exited(0));
+
+        let reason1 = AttentionReason::PermissionPrompt {
+            context: "test".to_string(),
+        };
+        let reason2 = AttentionReason::PermissionPrompt {
+            context: "test".to_string(),
+        };
+        assert_eq!(
+            TerminalStatus::NeedsAttention(reason1),
+            TerminalStatus::NeedsAttention(reason2)
+        );
+    }
+
+    #[test]
+    fn test_focus_navigation_empty() {
+        let mut mgr = TerminalManager::new();
+        mgr.focus_next();
+        assert_eq!(mgr.focused, 0);
+        mgr.focus_prev();
+        assert_eq!(mgr.focused, 0);
+        assert!(!mgr.focus_next_attention());
+    }
+
+    #[test]
+    fn test_attention_reason_idle() {
+        let reason = AttentionReason::Idle { seconds: 120 };
+        match reason {
+            AttentionReason::Idle { seconds } => assert_eq!(seconds, 120),
+            _ => panic!("Wrong variant"),
+        }
     }
 }

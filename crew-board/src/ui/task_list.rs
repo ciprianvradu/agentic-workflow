@@ -15,6 +15,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         styles::unfocused_border_style()
     };
+    let border_type = styles::border_type_for(is_focused);
 
     let items: Vec<ListItem> = app
         .tree_rows
@@ -34,6 +35,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
+                .border_type(border_type)
                 .border_style(border_style),
         )
         .highlight_style(styles::selected_style())

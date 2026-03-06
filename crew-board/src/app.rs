@@ -10,6 +10,34 @@ use std::path::PathBuf;
 use ratatui::layout::Rect;
 use tui_input::Input;
 
+/// Send a desktop notification (best-effort, non-blocking).
+fn send_desktop_notification(title: &str, body: &str) {
+    let title = title.to_string();
+    let body = body.to_string();
+    std::thread::spawn(move || {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = std::process::Command::new("notify-send")
+                .args([&title, &body])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let script = format!(
+                "display notification \"{}\" with title \"{}\"",
+                body, title
+            );
+            let _ = std::process::Command::new("osascript")
+                .args(["-e", &script])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
+    });
+}
+
 /// Which view/tab is active.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ActiveView {
@@ -31,6 +59,27 @@ pub enum TerminalInputMode {
     PrefixPending,
     /// Scroll-back mode: navigate the vt100 scrollback buffer.
     ScrollBack,
+}
+
+/// Permission profile controlling auto-approval behavior.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PermissionProfile {
+    /// All prompts require manual approval.
+    Interactive,
+    /// Auto-approve prompts matching configured patterns.
+    Trusted,
+    /// Auto-approve all permission prompts.
+    Autonomous,
+}
+
+impl PermissionProfile {
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "trusted" => Self::Trusted,
+            "autonomous" => Self::Autonomous,
+            _ => Self::Interactive,
+        }
+    }
 }
 
 /// Layout mode for the Terminals view.
@@ -272,6 +321,7 @@ pub struct App {
 
     // UI state
     pub should_quit: bool,
+    pub quit_confirm: bool,
     pub show_help: bool,
     pub last_refresh: std::time::Instant,
     pub detail_scroll: u16,
@@ -319,6 +369,8 @@ pub struct App {
     pub modifier_bar_state: ModifierBarState,
     /// When set, the modifier bar reverts to Normal after this instant (flash fallback).
     pub modifier_bar_flash_until: Option<std::time::Instant>,
+    /// When set, the status bar attention badge flashes until this instant.
+    pub attention_flash_until: Option<std::time::Instant>,
     /// Whether the kitty keyboard protocol is active (modifier-only detection).
     pub kitty_protocol_enabled: bool,
 
@@ -328,6 +380,32 @@ pub struct App {
     /// Panel rects for terminal panels, set during draw for mouse hit-testing.
     /// Vec of (terminal_index, inner_rect).
     pub terminal_panel_rects: RefCell<Vec<(usize, Rect)>>,
+
+    // Bell settings (loaded from settings.toml)
+    /// Trigger a terminal bell (\x07) when a crew needs attention.
+    pub system_bell: bool,
+    /// Flash the status indicator when a crew needs attention.
+    pub visual_bell: bool,
+    /// Directory for terminal output logs (None = disabled).
+    pub log_directory: Option<PathBuf>,
+
+    // Permission profile
+    /// Permission approval mode.
+    pub permission_profile: PermissionProfile,
+    /// Compiled regex patterns for auto-approval (trusted profile).
+    pub auto_approve_patterns: Vec<regex::Regex>,
+    /// Send desktop notifications on attention events.
+    pub desktop_notifications: bool,
+
+    // Terminal search (scroll-back mode)
+    /// Active search input in scroll-back mode (None = not searching).
+    pub terminal_search_input: Option<Input>,
+    /// Last search query used for n/N navigation.
+    pub terminal_search_query: String,
+    /// Matched line offsets from bottom (for n/N navigation).
+    pub terminal_search_matches: Vec<usize>,
+    /// Current match index in `terminal_search_matches`.
+    pub terminal_search_match_idx: usize,
 }
 
 /// Build the full search index from all repos' tasks.
@@ -425,6 +503,7 @@ impl App {
             active_view: ActiveView::Tasks,
             focus_pane: FocusPane::Left,
             should_quit: false,
+            quit_confirm: false,
             show_help: false,
             last_refresh: std::time::Instant::now(),
             detail_scroll: 0,
@@ -448,9 +527,20 @@ impl App {
             last_terminal_size: (24, 80),
             modifier_bar_state: ModifierBarState::Normal,
             modifier_bar_flash_until: None,
+            attention_flash_until: None,
             kitty_protocol_enabled: false,
             text_selection: None,
             terminal_panel_rects: RefCell::new(Vec::new()),
+            system_bell: false,
+            visual_bell: true,
+            log_directory: None,
+            permission_profile: PermissionProfile::Interactive,
+            auto_approve_patterns: Vec::new(),
+            desktop_notifications: false,
+            terminal_search_input: None,
+            terminal_search_query: String::new(),
+            terminal_search_matches: Vec::new(),
+            terminal_search_match_idx: 0,
         };
         app.rebuild_tree();
         app.ensure_artifacts();
@@ -1767,6 +1857,44 @@ impl App {
     /// Handle key events in the permission queue popup.
     pub fn permission_popup_handle_key(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::KeyCode;
+        use tui_input::backend::crossterm::EventHandler;
+
+        // If quick-send input is active, handle input mode
+        if let Some(popup) = &mut self.permission_popup {
+            if let Some(input) = &mut popup.quick_send_input {
+                match key.code {
+                    KeyCode::Enter => {
+                        let text = input.value().to_string();
+                        let term_idx_opt =
+                            popup.entries.get(popup.cursor).copied();
+                        // Close input mode
+                        popup.quick_send_input = None;
+                        // Send text + newline to the selected terminal
+                        if let Some(term_idx) = term_idx_opt {
+                            if let Some(mgr) = &self.terminal_manager {
+                                let bytes =
+                                    format!("{}\n", text).into_bytes();
+                                let _ = mgr.send_input_to(term_idx, &bytes);
+                            }
+                        }
+                        let new_popup =
+                            crate::ui::permission_popup::PermissionPopup::new(self);
+                        self.permission_popup = Some(new_popup);
+                        return;
+                    }
+                    KeyCode::Esc => {
+                        popup.quick_send_input = None;
+                        return;
+                    }
+                    _ => {
+                        input.handle_event(
+                            &crossterm::event::Event::Key(key),
+                        );
+                        return;
+                    }
+                }
+            }
+        }
 
         let popup = match &mut self.permission_popup {
             Some(p) => p,
@@ -1791,30 +1919,36 @@ impl App {
                 // Approve: send 'y\n' to the selected terminal
                 if let Some(&term_idx) = popup.entries.get(popup.cursor) {
                     if let Some(mgr) = &self.terminal_manager {
-                        if let Some(term) = mgr.terminals.get(term_idx) {
-                            let _ = term.writer.lock().unwrap().write_all(b"y\n");
-                            let _ = term.writer.lock().unwrap().flush();
-                            *term.attention_signal.lock().unwrap() = None;
-                        }
+                        let _ = mgr.send_input_to(term_idx, b"y\n");
                     }
-                    // Refresh entries
                     let new_popup = crate::ui::permission_popup::PermissionPopup::new(self);
                     self.permission_popup = Some(new_popup);
                 }
+            }
+            KeyCode::Char('A') => {
+                // Batch approve: send 'y\n' to ALL terminals in the queue
+                let entries: Vec<usize> = popup.entries.clone();
+                if let Some(mgr) = &self.terminal_manager {
+                    for &term_idx in &entries {
+                        let _ = mgr.send_input_to(term_idx, b"y\n");
+                    }
+                }
+                let new_popup = crate::ui::permission_popup::PermissionPopup::new(self);
+                self.permission_popup = Some(new_popup);
             }
             KeyCode::Char('d') => {
                 // Deny: send 'n\n' to the selected terminal
                 if let Some(&term_idx) = popup.entries.get(popup.cursor) {
                     if let Some(mgr) = &self.terminal_manager {
-                        if let Some(term) = mgr.terminals.get(term_idx) {
-                            let _ = term.writer.lock().unwrap().write_all(b"n\n");
-                            let _ = term.writer.lock().unwrap().flush();
-                            *term.attention_signal.lock().unwrap() = None;
-                        }
+                        let _ = mgr.send_input_to(term_idx, b"n\n");
                     }
                     let new_popup = crate::ui::permission_popup::PermissionPopup::new(self);
                     self.permission_popup = Some(new_popup);
                 }
+            }
+            KeyCode::Char('t') => {
+                // Quick-send: enter text input mode
+                popup.quick_send_input = Some(tui_input::Input::default());
             }
             KeyCode::Char('v') | KeyCode::Enter => {
                 // View terminal: close popup, switch to Terminals view, focus the terminal
@@ -1865,9 +1999,13 @@ impl App {
         cwd: &std::path::Path,
         color_scheme_index: Option<usize>,
     ) {
+        let log_path = self
+            .log_directory
+            .as_ref()
+            .map(|dir| dir.join(format!("{}.log", task_id)));
         if let Some(mgr) = &mut self.terminal_manager {
             // Use a default size; will be resized on next draw
-            let _ = mgr.spawn(
+            let _ = mgr.spawn_with_log(
                 task_id.to_string(),
                 label.to_string(),
                 command,
@@ -1876,6 +2014,7 @@ impl App {
                 24,
                 80,
                 color_scheme_index,
+                log_path,
             );
         }
     }
@@ -1945,11 +2084,49 @@ impl App {
     /// Poll all embedded terminals for status changes.
     /// Call once per event loop tick. Returns true if any status changed.
     pub fn poll_terminals(&mut self) -> bool {
+        // Count attention before polling to detect new attention events
+        let attn_before = self
+            .terminal_manager
+            .as_ref()
+            .map_or(0, |m| m.attention_count());
+
         let changed = if let Some(mgr) = &mut self.terminal_manager {
             mgr.poll_status()
         } else {
             false
         };
+
+        if changed {
+            let attn_after = self
+                .terminal_manager
+                .as_ref()
+                .map_or(0, |m| m.attention_count());
+
+            // New attention event detected
+            if attn_after > attn_before {
+                // System bell
+                if self.system_bell {
+                    use std::io::Write;
+                    let _ = std::io::stdout().write_all(b"\x07");
+                    let _ = std::io::stdout().flush();
+                }
+
+                // Attention flash (visible on all views)
+                if self.visual_bell {
+                    self.attention_flash_until = Some(
+                        std::time::Instant::now() + std::time::Duration::from_secs(2),
+                    );
+                }
+
+                // Desktop notification
+                if self.desktop_notifications {
+                    send_desktop_notification("crew-board", "Terminal needs attention");
+                }
+
+                // Auto-approval based on permission profile
+                self.auto_approve_permissions();
+            }
+        }
 
         // If the focused terminal exited while we're in TerminalFocused mode,
         // drop back to Normal mode so the user can interact with the list.
@@ -1963,7 +2140,43 @@ impl App {
             }
         }
 
+        // Tick attention flash timer
+        if let Some(until) = self.attention_flash_until {
+            if std::time::Instant::now() >= until {
+                self.attention_flash_until = None;
+            }
+        }
+
         changed
+    }
+
+    /// Auto-approve permission prompts based on the active permission profile.
+    fn auto_approve_permissions(&self) {
+        use crate::terminal::{AttentionReason, TerminalStatus};
+
+        let mgr = match &self.terminal_manager {
+            Some(m) => m,
+            None => return,
+        };
+
+        for (idx, term) in mgr.terminals.iter().enumerate() {
+            if let TerminalStatus::NeedsAttention(AttentionReason::PermissionPrompt {
+                context,
+            }) = &term.status
+            {
+                let should_approve = match self.permission_profile {
+                    PermissionProfile::Autonomous => true,
+                    PermissionProfile::Trusted => {
+                        self.auto_approve_patterns.iter().any(|p| p.is_match(context))
+                    }
+                    PermissionProfile::Interactive => false,
+                };
+
+                if should_approve {
+                    let _ = mgr.send_input_to(idx, b"y\n");
+                }
+            }
+        }
     }
 
     /// Dismiss (remove) the currently focused terminal.
@@ -1973,6 +2186,13 @@ impl App {
                 let id = term.id.clone();
                 mgr.remove(&id);
             }
+        }
+    }
+
+    /// Dismiss all exited terminals at once.
+    pub fn terminal_dismiss_all_exited(&mut self) {
+        if let Some(mgr) = &mut self.terminal_manager {
+            mgr.dismiss_all_exited();
         }
     }
 
@@ -2025,6 +2245,113 @@ impl App {
                 let max_scrollback =
                     crate::terminal::widget::scrollback_available(&term.parser);
                 term.scroll_offset = max_scrollback;
+            }
+        }
+    }
+
+    // ── Terminal Search (scroll-back) ─────────────────────────────
+
+    /// Start search mode in scroll-back.
+    pub fn terminal_search_start(&mut self) {
+        self.terminal_search_input = Some(Input::default());
+    }
+
+    /// Execute search: scan the scrollback buffer for query matches.
+    pub fn terminal_search_execute(&mut self) {
+        let query = self
+            .terminal_search_input
+            .as_ref()
+            .map(|i| i.value().to_string())
+            .unwrap_or_default();
+        if query.is_empty() {
+            self.terminal_search_input = None;
+            return;
+        }
+        self.terminal_search_query = query.clone();
+        self.terminal_search_input = None;
+
+        // Scan the focused terminal's screen content for matches
+        self.terminal_search_matches.clear();
+        self.terminal_search_match_idx = 0;
+
+        // Get parser handle (clone the Arc to avoid borrow conflict)
+        let parser_handle = self
+            .terminal_manager
+            .as_ref()
+            .and_then(|m| m.focused_terminal())
+            .map(|t| t.parser.clone());
+
+        let parser_handle = match parser_handle {
+            Some(p) => p,
+            None => return,
+        };
+
+        {
+            let parser = parser_handle.lock().unwrap();
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+            let query_lower = query.to_lowercase();
+
+            // Scan visible rows (scrollback is not directly accessible via cell()
+            // with negative indices in vt100 0.15 — scan visible rows only)
+            for row in 0..rows {
+                let mut line_text = String::with_capacity(cols as usize);
+                for col in 0..cols {
+                    if let Some(cell) = screen.cell(row, col) {
+                        if cell.has_contents() {
+                            line_text.push_str(&cell.contents());
+                        } else {
+                            line_text.push(' ');
+                        }
+                    }
+                }
+
+                if line_text.to_lowercase().contains(&query_lower) {
+                    // Convert to scroll offset from bottom
+                    let offset_from_bottom = (rows as usize).saturating_sub(1).saturating_sub(row as usize);
+                    self.terminal_search_matches.push(offset_from_bottom);
+                }
+            }
+        } // parser lock released here
+
+        // Jump to first match
+        if !self.terminal_search_matches.is_empty() {
+            let offset = self.terminal_search_matches[0];
+            if let Some(mgr) = &mut self.terminal_manager {
+                if let Some(term) = mgr.focused_terminal_mut() {
+                    term.scroll_offset = offset;
+                }
+            }
+        }
+    }
+
+    /// Jump to the next search match.
+    pub fn terminal_search_next(&mut self) {
+        if self.terminal_search_matches.is_empty() {
+            return;
+        }
+        self.terminal_search_match_idx =
+            (self.terminal_search_match_idx + 1) % self.terminal_search_matches.len();
+        let offset = self.terminal_search_matches[self.terminal_search_match_idx];
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal_mut() {
+                term.scroll_offset = offset;
+            }
+        }
+    }
+
+    /// Jump to the previous search match.
+    pub fn terminal_search_prev(&mut self) {
+        if self.terminal_search_matches.is_empty() {
+            return;
+        }
+        let len = self.terminal_search_matches.len();
+        self.terminal_search_match_idx =
+            (self.terminal_search_match_idx + len - 1) % len;
+        let offset = self.terminal_search_matches[self.terminal_search_match_idx];
+        if let Some(mgr) = &mut self.terminal_manager {
+            if let Some(term) = mgr.focused_terminal_mut() {
+                term.scroll_offset = offset;
             }
         }
     }
@@ -2200,5 +2527,59 @@ impl App {
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_permission_profile_from_str() {
+        assert_eq!(
+            PermissionProfile::from_str("interactive"),
+            PermissionProfile::Interactive
+        );
+        assert_eq!(
+            PermissionProfile::from_str("trusted"),
+            PermissionProfile::Trusted
+        );
+        assert_eq!(
+            PermissionProfile::from_str("autonomous"),
+            PermissionProfile::Autonomous
+        );
+        // Case insensitive
+        assert_eq!(
+            PermissionProfile::from_str("TRUSTED"),
+            PermissionProfile::Trusted
+        );
+        assert_eq!(
+            PermissionProfile::from_str("Autonomous"),
+            PermissionProfile::Autonomous
+        );
+        // Unknown defaults to Interactive
+        assert_eq!(
+            PermissionProfile::from_str("unknown"),
+            PermissionProfile::Interactive
+        );
+        assert_eq!(
+            PermissionProfile::from_str(""),
+            PermissionProfile::Interactive
+        );
+    }
+
+    #[test]
+    fn test_terminal_layout_next() {
+        assert_eq!(TerminalLayout::Focused.next(), TerminalLayout::Tiled2);
+        assert_eq!(TerminalLayout::Tiled2.next(), TerminalLayout::Tiled4);
+        assert_eq!(TerminalLayout::Tiled4.next(), TerminalLayout::Stacked);
+        assert_eq!(TerminalLayout::Stacked.next(), TerminalLayout::Focused);
+    }
+
+    #[test]
+    fn test_terminal_input_mode_eq() {
+        assert_eq!(TerminalInputMode::Normal, TerminalInputMode::Normal);
+        assert_ne!(TerminalInputMode::Normal, TerminalInputMode::TerminalFocused);
+        assert_ne!(TerminalInputMode::Normal, TerminalInputMode::ScrollBack);
     }
 }

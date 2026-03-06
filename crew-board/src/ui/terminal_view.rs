@@ -4,13 +4,13 @@
 //! Right panel: rendered output of the focused terminal (or tiled layout).
 
 use crate::app::{App, TerminalInputMode, TerminalLayout};
-use crate::terminal::{self, widget, EmbeddedTerminal, TerminalStatus};
+use crate::terminal::{self, widget, EmbeddedTerminal, TerminalManager, TerminalStatus};
 use crate::ui::styles;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, BorderType, Borders, Paragraph},
     Frame,
 };
 
@@ -86,9 +86,16 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
         styles::unfocused_border_style()
     };
 
+    let border_type = if is_focused {
+        BorderType::Double
+    } else {
+        BorderType::Plain
+    };
+
     let block = Block::default()
         .title(" Crew List ")
         .borders(Borders::ALL)
+        .border_type(border_type)
         .border_style(border_style);
 
     let inner = block.inner(area);
@@ -104,9 +111,9 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
             ),
             TerminalStatus::NeedsAttention(reason) => {
                 let (icon, color) = match reason {
-                    terminal::AttentionReason::PermissionPrompt => ("\u{25c6} ", Color::Cyan), // ◆ prompt
+                    terminal::AttentionReason::PermissionPrompt { .. } => ("\u{25c6} ", Color::Cyan), // ◆ prompt
                     terminal::AttentionReason::Idle { .. } => ("\u{25cb} ", Color::DarkGray),  // ○ idle
-                    terminal::AttentionReason::Error => ("\u{2716} ", Color::Red),             // ✖ error
+                    terminal::AttentionReason::Error { .. } => ("\u{2716} ", Color::Red),             // ✖ error
                 };
                 Span::styled(
                     icon,
@@ -141,18 +148,33 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             &term.id
         };
-        let short_id = base_id.strip_prefix("TASK_").map_or_else(
-            || base_id.to_string(),
-            |num| format!("#{}", num),
-        );
-        let display_name = short_id.as_str();
+        let short_num = base_id.strip_prefix("TASK_").unwrap_or(base_id);
+        // Extract repo initials from cwd (e.g. "agentic-workflow" → "AW")
+        let repo_initials: String = term
+            .launch_params
+            .cwd
+            .ancestors()
+            .filter_map(|p| p.file_name())
+            .find(|n| {
+                let s = n.to_string_lossy();
+                !s.starts_with("TASK_") && !s.ends_with("-worktrees")
+            })
+            .map(|n| {
+                n.to_string_lossy()
+                    .split(['-', '_', '.'])
+                    .filter_map(|w| w.chars().next())
+                    .map(|c| c.to_ascii_uppercase())
+                    .collect()
+            })
+            .unwrap_or_else(|| "?".to_string());
+        let display_name = format!("{}{}", repo_initials, short_num);
 
         // Truncate to fit
         let avail = max_label.saturating_sub(elapsed_str.len() + 1);
         let label = if display_name.len() > avail {
             format!("{}...", &display_name[..avail.saturating_sub(3)])
         } else {
-            display_name.to_string()
+            display_name
         };
 
         let style = if i == mgr.focused {
@@ -176,20 +198,83 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, inner);
 }
 
-/// Focused layout: one large terminal panel.
+/// Focused layout: one large terminal panel with crew summary line.
 fn draw_focused_layout(frame: &mut Frame, app: &App, area: Rect) {
     let mgr = match &app.terminal_manager {
         Some(m) => m,
         None => return,
     };
 
+    // Show a 1-line crew summary when there are multiple terminals
+    let (summary_area, terminal_area) = if mgr.terminals.len() > 1 {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(3)])
+            .split(area);
+        draw_crew_summary_line(frame, mgr, chunks[0]);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, area)
+    };
+    let _ = summary_area;
+
     if let Some(term) = mgr.focused_terminal() {
         let is_focused = app.terminal_input_mode == TerminalInputMode::TerminalFocused
             || app.terminal_input_mode == TerminalInputMode::PrefixPending;
         let is_scrollback = app.terminal_input_mode == TerminalInputMode::ScrollBack;
 
-        draw_single_terminal(frame, app, area, term, is_focused || is_scrollback, mgr.focused);
+        draw_single_terminal(frame, app, terminal_area, term, is_focused || is_scrollback, mgr.focused);
     }
+}
+
+/// Draw a one-line crew summary showing all terminals' status.
+fn draw_crew_summary_line(frame: &mut Frame, mgr: &TerminalManager, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::styled(" crew: ", Style::default().fg(Color::DarkGray)));
+
+    for (i, term) in mgr.terminals.iter().enumerate() {
+        let is_focused = i == mgr.focused;
+        let base_id = if term.id.contains('/') || term.id.contains('\\') {
+            std::path::Path::new(&term.id)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&term.id)
+        } else {
+            &term.id
+        };
+        let short_id = base_id.strip_prefix("TASK_").map_or_else(
+            || base_id.to_string(),
+            |num| format!("#{}", num),
+        );
+
+        let (icon, icon_color) = match &term.status {
+            TerminalStatus::Running => ("\u{25cf}", Color::Green),           // ●
+            TerminalStatus::NeedsAttention(_) => ("\u{25c6}", Color::Yellow), // ◆
+            TerminalStatus::Exited(code) => {
+                if *code == 0 {
+                    ("\u{2713}", Color::DarkGray) // ✓
+                } else {
+                    ("\u{2717}", Color::Red) // ✗
+                }
+            }
+        };
+
+        let label_style = if is_focused {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        spans.push(Span::styled(icon.to_string(), Style::default().fg(icon_color)));
+        spans.push(Span::styled(short_id, label_style));
+        spans.push(Span::styled(" ", Style::default()));
+    }
+
+    let line = Line::from(spans);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
 }
 
 /// Tiled-2 layout: two terminals side by side.
@@ -347,9 +432,12 @@ fn draw_single_terminal(
             || app.terminal_input_mode == TerminalInputMode::PrefixPending);
     let is_scrollback = is_active && app.terminal_input_mode == TerminalInputMode::ScrollBack;
 
-    // Build title with status + elapsed + scroll indicator
+    // Build title with status + elapsed + scroll indicator + phase/progress
     let elapsed = term.spawned_at.elapsed().as_secs();
     let elapsed_str = format_elapsed(elapsed);
+
+    // Look up phase and progress from task state
+    let phase_info = lookup_task_phase(app, &term.id);
 
     let title = match &term.status {
         TerminalStatus::Running => {
@@ -360,22 +448,24 @@ fn draw_single_terminal(
             };
             let scroll_marker = if is_scrollback {
                 format!(" [SCROLL +{}]", term.scroll_offset)
+            } else if term.scroll_offset > 0 {
+                format!(" [+{}]", term.scroll_offset)
             } else {
                 String::new()
             };
             format!(
-                " {} ({}) {} {}{}",
-                term.id, term.label, elapsed_str, focus_marker.trim(), scroll_marker
+                " {} ({}) {} {}{}{}",
+                term.id, term.label, elapsed_str, focus_marker.trim(), phase_info, scroll_marker
             )
         }
         TerminalStatus::NeedsAttention(reason) => match reason {
             terminal::AttentionReason::Idle { seconds } => {
                 format!(" {} ({}) [idle {}s] ", term.id, term.label, seconds)
             }
-            terminal::AttentionReason::PermissionPrompt => {
+            terminal::AttentionReason::PermissionPrompt { .. } => {
                 format!(" {} ({}) [\u{25c6} PROMPT] ", term.id, term.label)
             }
-            terminal::AttentionReason::Error => {
+            terminal::AttentionReason::Error { .. } => {
                 format!(" {} ({}) [\u{2716} ERROR] ", term.id, term.label)
             }
         },
@@ -435,9 +525,16 @@ fn draw_single_terminal(
         None
     };
 
+    let border_type = if is_terminal_focused || is_active {
+        BorderType::Double
+    } else {
+        BorderType::Plain
+    };
+
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
+        .border_type(border_type)
         .border_style(border_style);
 
     let inner = block.inner(area);
@@ -476,20 +573,25 @@ fn draw_single_terminal(
         sel_range.as_ref(),
     );
 
-    // Draw scroll indicator when in scroll-back mode
-    if is_scrollback && inner.height > 0 {
+    // Draw scroll indicator when scrolled back (any mode)
+    if term.scroll_offset > 0 && inner.height > 0 {
         let scrollback_total = widget::scrollback_available(&term.parser);
         if scrollback_total > 0 {
-            let indicator = format!(
-                " [{}/{}] ",
-                term.scroll_offset,
-                scrollback_total
-            );
+            let indicator = if is_scrollback {
+                format!(
+                    " [{}/{}] ",
+                    term.scroll_offset,
+                    scrollback_total
+                )
+            } else {
+                format!(" [+{}] ", term.scroll_offset)
+            };
+            let bg_color = if is_scrollback { Color::Magenta } else { Color::DarkGray };
             let indicator_span = Span::styled(
                 indicator,
                 Style::default()
                     .fg(Color::White)
-                    .bg(Color::Magenta)
+                    .bg(bg_color)
                     .add_modifier(Modifier::BOLD),
             );
             let indicator_line = Line::from(vec![indicator_span]);
@@ -523,6 +625,30 @@ fn draw_single_terminal(
             frame.render_widget(overlay_text, overlay_inner);
         }
     }
+}
+
+/// Look up the current phase and progress for a terminal's task.
+/// Returns a string like " [implementer 60%]" or "" if not found.
+fn lookup_task_phase(app: &App, terminal_id: &str) -> String {
+    for repo in &app.repos {
+        for task in &repo.tasks {
+            if task.state.task_id == terminal_id {
+                let phase = match &task.state.phase {
+                    Some(p) if !p.is_empty() => p.as_str(),
+                    _ => return String::new(),
+                };
+                let progress = &task.state.implementation_progress;
+                let total = progress.total_steps;
+                let current = progress.current_step;
+                if total > 0 {
+                    let pct = (current as f64 / total as f64 * 100.0) as u32;
+                    return format!(" [{} {}%]", phase, pct);
+                }
+                return format!(" [{}]", phase);
+            }
+        }
+    }
+    String::new()
 }
 
 /// Format elapsed seconds into a human-readable string.
