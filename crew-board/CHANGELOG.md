@@ -3,6 +3,108 @@
 All notable changes to crew-board are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.0] - 2026-03-07
+
+### Added
+- **Hook-based communication** — HTTP hook server (`hook_server.rs`) receives
+  structured events from Claude Code hooks. Real-time visibility into tool usage,
+  permission requests, and session lifecycle without screen-scraping.
+- **Activity Feed (View 6)** — new view showing a real-time event stream from all
+  terminals. Filter by terminal (`t`), event type (`e`), or tool name (`f`).
+  Toggle auto-scroll with `a`. Toggle Gantt timeline view with `g`.
+- **Gantt timeline** — visualize tool execution spans across terminals as
+  color-coded horizontal bars. Per-terminal swim lanes, time scale, and tool
+  color legend. Toggle with `g` in View 6.
+- **Permission approval via hooks** — permission requests route through the hook
+  server with configurable profiles: `interactive` (manual F8 popup), `trusted`
+  (auto-approve matching patterns), `autonomous` (approve all).
+- **Context injection** — `SessionStart` hook injects task context (description,
+  phase, decisions) into Claude Code via `additionalContext` JSON field.
+- **History logging** — all hook events appended to `{task_dir}/history.jsonl`
+  as structured JSONL for audit trail.
+- **Activity log** (`data/activity.rs`) — ring buffer of 500 events with
+  per-terminal stats, tool span tracking, and global aggregation.
+- **File claims registry** (`data/file_claims.rs`) — cross-terminal file
+  conflict detection with 10-minute claim expiry.
+- **Security rules engine** (`security.rs`) — configurable regex rules for tool
+  governance (deny/ask/allow), credential scanning, sensitive file protection,
+  and per-terminal rate limiting.
+- **Auto-orchestration engine** (`orchestration.rs`) — task scheduling with
+  dependency resolution, circuit breaker (3 failures → downgrade), cost ceiling,
+  and concurrent terminal limits. Modes: Manual, SemiAuto, FullAuto.
+- **Cross-platform hook bridge** (`hook_bridge.rs`) — bridge scripts and config
+  generation for Gemini CLI, GitHub Copilot, and OpenCode. Event name
+  normalization across hosts.
+- **Statistics popup** (`Ctrl+F6`) — global stats, security metrics,
+  orchestration status, and per-terminal breakdown.
+- **F5/F6 terminal cycling** — in focused mode, `F5` goes to previous terminal,
+  `F6` to next (skips exited, wraps around).
+- **F7 attention bypass** — `F7` jumps to next attention terminal even while in
+  focused mode, without needing to exit first.
+- **Hook state in terminal borders** — active tool label and cumulative tool
+  counts shown in terminal list and borders.
+- **Crew summary line enrichment** — hook activity label and tool count badges
+  in the crew list.
+
+### Changed
+- **Focused mode keybindings** — replaced Shift+PgUp/PgDn (intercepted by
+  Windows Terminal, causing screen corruption) with F5/F6 for terminal cycling.
+- Permission popup now shows both PTY-scanned prompts and hook-based pending
+  permissions with unified approve/deny UX.
+- Terminal view borders show hook-driven activity labels when available.
+- Status bar shows attention badge `5:Terms[⚠N]` and hook event stats.
+- Help popup updated with all new key bindings (F5/F6/F7 focused mode, View 6
+  keys, Ctrl+F6 stats).
+
+### Fixed
+- **Shift+PgUp/PgDn screen corruption** — Windows Terminal intercepts these keys
+  for its own scrollback, corrupting the TUI. Replaced with F5/F6.
+
+## [0.4.0] - 2026-03-05
+
+### Added
+- **Embedded terminal multiplexer** (View 5) — full PTY terminals inside the
+  TUI. Run Claude Code, Gemini CLI, GitHub Copilot, or OpenCode with ANSI color,
+  cursor positioning, and alternate screen support.
+- **Permission prompt detection** — reader thread scans terminal output for
+  `Allow`/`Deny`, `(y/n)`, `do you want to proceed` patterns. Yellow attention
+  badges in the crew list, F7 jumps to next blocked crew.
+- **Permission Queue (F8)** — centralized popup for batch permission management.
+  Approve (`a`), deny (`d`), approve all (`A`), type custom response (`t`),
+  or view terminal (`v`/`Enter`).
+- **Permission profiles** — `interactive` (manual), `trusted` (regex auto-
+  approve), `autonomous` (approve everything). Configurable in settings.
+- **Four terminal layouts** — Focused (one large), Tiled-2 (side-by-side),
+  Tiled-4 (2x2 grid), Stacked (vertical). Cycle with `l`.
+- **Terminal input modes** — Normal (navigate list), TerminalFocused (all keys
+  to PTY, F12 exits), ScrollBack (browse history with search).
+- **Terminal search** — `/` in scroll-back to search output, `n`/`N` to
+  navigate matches.
+- **Mouse support** — click+drag text selection in terminal panels (constrained
+  to panel boundaries), scroll wheel for scrollback, auto-copy via OSC 52.
+- **Crew summary line** — compact status line showing all crew members when in
+  focused layout with multiple terminals.
+- **Phase & progress in title** — terminal borders show workflow phase and
+  implementation progress (e.g., `[implementer 60%]`).
+- **Terminal output logging** — `log_directory` setting captures all PTY output
+  to per-task log files.
+- **Desktop notifications** — `desktop_notifications` setting triggers OS
+  notifications on attention events.
+- **Context-adaptive F-key bar** — status bar changes based on terminal input
+  mode (Normal/Focused/ScrollBack), with modifier layers (Shift/Ctrl).
+- **Kitty keyboard protocol** — runtime detection and opt-in for modifier-only
+  key press events. Modifier bar updates in real-time on supporting terminals.
+- **Full modifier encoding** — Ctrl+Arrow, Ctrl+Enter, Shift+Up/Down, and all
+  modifier+key combinations work correctly inside embedded terminals.
+- **Quit confirmation** — dialog summarizes running/attention terminals before
+  quitting.
+- `F9`/`F12` as focus toggle, `Shift+F1-F5` for view switching while focused.
+
+### Changed
+- View count increased from 4 to 5 (Terminals view added as View 5).
+- Status bar "5:Terms" tab shows attention `[⚠N]` and exited `[✗N]` badges.
+- Idle detection at 120s (configurable) with attention badge.
+
 ## [0.3.2] - 2026-02-27
 
 ### Fixed

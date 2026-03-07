@@ -49,7 +49,19 @@ Monitor tasks, embed live terminals, detect permission prompts, and manage 10+ p
 
 **Full Modifier Encoding** — Ctrl+Arrow (word jump), Ctrl+Enter (newline), Shift+Up/Down, and all other modifier+key combinations work correctly inside embedded terminals.
 
-**Five Dashboard Views** — Tasks, Issues, Config, Cost, and Terminals. Switch instantly with number keys or Shift+F-keys (even while focused in a terminal).
+**Six Dashboard Views** — Tasks, Issues, Config, Cost, Terminals, and Activity Feed. Switch instantly with number keys or Shift+F-keys (even while focused in a terminal).
+
+**Hook-Based Communication** — HTTP hook server receives structured events from Claude Code hooks. Real-time visibility into tool usage, permission requests, and session lifecycle.
+
+**Activity Feed (View 6)** — Real-time event stream from all terminals with filtering by terminal, event type, or tool name. Includes a Gantt timeline view showing tool execution spans across terminals.
+
+**Statistics Popup (Ctrl+F6)** — Global stats, security metrics, orchestration status, and per-terminal breakdown.
+
+**Security Rules Engine** — Configurable regex rules for tool governance (deny/ask/allow), credential scanning, sensitive file protection, and rate limiting.
+
+**Auto-Orchestration** — Task scheduling with dependency resolution, circuit breaker, cost ceiling, and concurrent terminal limits. Modes: Manual, SemiAuto, FullAuto.
+
+**Cross-Platform Hook Bridge** — Bridge scripts for Gemini CLI, GitHub Copilot, and OpenCode with event name normalization.
 
 **Worktree Management** — Create (F4) and cleanup (F6) git worktrees with color-themed terminal tabs. Each crew gets its own isolated workspace.
 
@@ -91,6 +103,7 @@ Switch views with number keys, backtick to cycle, or Shift+F1-F5:
 | `3` | Config | Configuration cascade (global/project/task) |
 | `4` | Cost | Cost estimates and actuals from workflow state |
 | `5` | Terminals | Embedded terminal multiplexer with crew list |
+| `6` | Activity | Real-time hook event feed with Gantt timeline |
 
 ## Key Bindings
 
@@ -133,7 +146,7 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 | `Enter`/`Space` | Expand/collapse repo |
 | `Tab` | Switch focus between panes |
 | `PgUp`/`PgDn` | Scroll detail pane |
-| `1`-`5` | Switch views |
+| `1`-`6` | Switch views |
 | `` ` `` | Cycle views |
 | `q` / `Ctrl+C` | Quit |
 
@@ -167,10 +180,11 @@ View 5 is a full terminal multiplexer with three input modes:
 
 | Key | Action |
 |-----|--------|
+| `F5` | Focus previous running terminal (skips exited) |
+| `F6` | Focus next running terminal (skips exited) |
+| `F7` | Jump to next terminal needing attention |
 | `F12` | Exit focus (back to Normal) |
 | `Shift+F1`-`F5` | Switch view (works even while focused) |
-| `Shift+PgUp` | Focus previous running terminal (skips exited) |
-| `Shift+PgDn` | Focus next running terminal (skips exited) |
 | All other keys | Sent to PTY with full modifier encoding |
 
 **Scroll-Back Mode** — Browse terminal history:
@@ -202,6 +216,25 @@ View 5 is a full terminal multiplexer with three input modes:
 | `A` | Approve ALL pending terminals at once |
 | `t` | Type custom response (opens input field) |
 | `v` / `Enter` | View — jump to the terminal for full context |
+| `Esc` | Close |
+
+### Activity Feed (View 6)
+
+| Key | Action |
+|-----|--------|
+| `t` | Cycle terminal filter |
+| `e` | Cycle event type filter |
+| `f` | Cycle tool name filter |
+| `a` | Toggle auto-scroll |
+| `g` | Toggle Gantt timeline view |
+| `↑`/`↓` | Manual scroll (when auto-scroll off) |
+
+### Statistics Popup (Ctrl+F6)
+
+| Key | Action |
+|-----|--------|
+| `↑`/`↓` | Scroll by line |
+| `PgUp`/`PgDn` | Scroll by page |
 | `Esc` | Close |
 
 ### Worktree Creation (F4)
@@ -275,6 +308,30 @@ permission_profile = "interactive"
 
 # Send desktop notification on attention events (default: false)
 desktop_notifications = false
+
+# ── Hook Communication ─────────────────────────
+
+# Enable HTTP hook server for structured AI activity tracking (default: true)
+hook_communication = true
+
+# ── Security ───────────────────────────────────
+
+# Enable security rules enforcement (default: false)
+security_enabled = false
+
+# Rate limit per terminal (0 = unlimited, default: 0)
+# rate_limit_per_minute = 60
+
+# ── Orchestration ──────────────────────────────
+
+# Orchestration mode: "manual" (default), "semi-auto", "full-auto"
+# orchestration_mode = "manual"
+
+# Max concurrent terminals (default: 5)
+# max_concurrent = 5
+
+# Cost ceiling in dollars (default: 50.0)
+# cost_limit = 50.0
 ```
 
 CLI flags override config values when both are present.
@@ -321,33 +378,41 @@ The `5:Terms` tab in the status bar shows attention badges:
 
 ```
 crew-board/src/
-├── main.rs          — CLI (clap), terminal setup, event loop, mouse handling
-├── app.rs           — App state, navigation, detail modes, popups, text selection
-├── settings.rs      — ~/.config/crew-board.toml loader
-├── discovery.rs     — Repo scanning (finds .tasks/ and .beads/ dirs)
-├── launcher.rs      — Terminal detection, AI host launch, color schemes
-├── worktree.rs      — Native worktree creation (git ops, state.json, symlinks)
-├── cleanup.rs       — Worktree cleanup (candidate discovery, dry-run, execution)
-├── data/            — Data layer (all parsers use serde with #[serde(default)])
-│   ├── task.rs      — .tasks/*/state.json + artifact discovery
-│   ├── beads.rs     — .beads/issues.jsonl stream parser
-│   └── config.rs    — Config cascade loader (YAML)
-├── terminal/        — Embedded terminal multiplexer
-│   ├── mod.rs       — TerminalManager, EmbeddedTerminal, status polling
-│   ├── pty.rs       — PTY spawning, reader thread, attention detection
-│   └── widget.rs    — Terminal rendering (vt100→ratatui), keyboard encoding
-└── ui/              — ratatui rendering
-    ├── task_list.rs      — Tree view (left pane)
-    ├── detail_pane.rs    — Overview/docs/history (right pane)
-    ├── terminal_view.rs  — View 5: crew list + terminal panels + mouse rects
-    ├── status_bar.rs     — View tabs, F-key bar, modifier layers
-    ├── help_popup.rs     — F1 scrollable help overlay
-    ├── launch_popup.rs   — F2 terminal launch dialog
-    ├── create_popup.rs   — F4 worktree creation wizard
-    ├── cleanup_popup.rs  — F6 worktree cleanup dialog
-    ├── search_popup.rs   — F3 full-text search
+├── main.rs            — CLI (clap), terminal setup, event loop, mouse handling
+├── app.rs             — App state, navigation, detail modes, popups, text selection
+├── settings.rs        — ~/.config/crew-board.toml loader
+├── discovery.rs       — Repo scanning (finds .tasks/ and .beads/ dirs)
+├── launcher.rs        — Terminal detection, AI host launch, color schemes
+├── worktree.rs        — Native worktree creation (git ops, state.json, symlinks)
+├── cleanup.rs         — Worktree cleanup (candidate discovery, dry-run, execution)
+├── hook_server.rs     — HTTP hook server for Claude Code event streaming
+├── hook_bridge.rs     — Cross-platform hook bridge (Gemini/Copilot/OpenCode)
+├── orchestration.rs   — Auto-orchestration engine (tasks, circuit breaker, guardrails)
+├── security.rs        — Security rules engine (regex rules, credentials, rate limiting)
+├── data/              — Data layer (all parsers use serde with #[serde(default)])
+│   ├── task.rs        — .tasks/*/state.json + artifact discovery
+│   ├── beads.rs       — .beads/issues.jsonl stream parser
+│   ├── config.rs      — Config cascade loader (YAML)
+│   ├── activity.rs    — Activity event ring buffer + tool span tracking
+│   └── file_claims.rs — Cross-terminal file conflict detection
+├── terminal/          — Embedded terminal multiplexer
+│   ├── mod.rs         — TerminalManager, EmbeddedTerminal, HookState, status polling
+│   ├── pty.rs         — PTY spawning, reader thread, attention detection
+│   └── widget.rs      — Terminal rendering (vt100→ratatui), keyboard encoding
+└── ui/                — ratatui rendering
+    ├── task_list.rs       — Tree view (left pane)
+    ├── detail_pane.rs     — Overview/docs/history (right pane)
+    ├── terminal_view.rs   — View 5: crew list + terminal panels + mouse rects
+    ├── activity_view.rs   — View 6: activity feed + Gantt timeline
+    ├── status_bar.rs      — View tabs, F-key bar, modifier layers
+    ├── help_popup.rs      — F1 scrollable help overlay
+    ├── launch_popup.rs    — F2 terminal launch dialog
+    ├── create_popup.rs    — F4 worktree creation wizard
+    ├── cleanup_popup.rs   — F6 worktree cleanup dialog
+    ├── search_popup.rs    — F3 full-text search
     ├── permission_popup.rs — F8 permission queue
-    └── styles.rs         — Color schemes, selection/border/hint helpers
+    ├── stats_popup.rs     — Ctrl+F6 statistics overlay
+    └── styles.rs          — Color schemes, selection/border/hint helpers
 ```
 
 ## Dependencies
@@ -362,6 +427,9 @@ crew-board/src/
 | `clap` | CLI argument parsing |
 | `serde` / `toml` / `serde_yaml` / `serde_json` | Configuration and data parsing |
 | `tui-input` | Text input widget for popups |
+| `tiny_http` | HTTP hook server |
+| `rand` | Auth token generation |
+| `regex` | Security rules and pattern matching |
 | `anyhow` | Error handling |
 
 ## License
