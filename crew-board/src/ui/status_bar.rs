@@ -52,6 +52,7 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
         ActiveView::Config => ("Config", 3),
         ActiveView::CostSummary => ("Cost", 4),
         ActiveView::Terminals => ("Terms", 5),
+        ActiveView::ActivityFeed => ("Activity", 6),
     };
     // Terminal badge appended to view label when relevant
     let badge = if app.active_view == ActiveView::Terminals {
@@ -69,6 +70,14 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
+    // Security badge
+    let sec = &app.rules_engine.stats;
+    let security_badge = if sec.denied > 0 || sec.warned > 0 {
+        format!(" D{} W{}", sec.denied, sec.warned)
+    } else {
+        String::new()
+    };
+
     // Determine if attention flash is active (alternating style)
     let flash_active = app.attention_flash_until.is_some_and(|until| {
         let elapsed_ms = (std::time::Instant::now()
@@ -80,7 +89,7 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
 
     let line = Line::from(vec![
         Span::styled(
-            format!(" {} [{}/5] ", view_label, view_num),
+            format!(" {} [{}/6] ", view_label, view_num),
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
@@ -96,6 +105,10 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             },
+        ),
+        Span::styled(
+            security_badge,
+            Style::default().fg(Color::Red),
         ),
         Span::raw(" "),
         Span::styled(hints, styles::hint_style()),
@@ -205,6 +218,8 @@ fn draw_ctrl_fkey_bar(frame: &mut Frame, _app: &App, area: Rect) {
     for n in 1..=10 {
         if n == 5 {
             spans.extend(fkey_cell(n, "Live"));
+        } else if n == 6 {
+            spans.extend(fkey_cell(n, "Stats"));
         } else {
             spans.extend(fkey_cell_empty(n));
         }
@@ -232,6 +247,17 @@ fn draw_terminal_focused_bar(frame: &mut Frame, area: Rect) {
         ),
         Span::styled(
             "exit ",
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(
+            " F7 ",
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Attn ",
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::styled(
@@ -279,25 +305,25 @@ fn draw_terminal_focused_bar(frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::styled(
-            "F5",
+            " F5 ",
             Style::default()
                 .fg(Color::White)
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "Terms ",
+            "Prev ",
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::styled(
-            " S+PgUp/Dn",
+            " F6 ",
             Style::default()
                 .fg(Color::White)
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            "crew ",
+            "Next ",
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
     ]);
@@ -465,6 +491,7 @@ fn context_hints(app: &App) -> String {
         || app.create_popup.is_some()
         || app.cleanup_popup.is_some()
         || app.launch_popup.is_some()
+        || app.stats_popup.is_some()
     {
         return String::new();
     }
@@ -482,6 +509,7 @@ fn context_hints(app: &App) -> String {
         ActiveView::BeadsIssues => "\u{2191}\u{2193} nav  Tab pane".to_string(),
         ActiveView::Config => "PgUp/Dn scroll".to_string(),
         ActiveView::CostSummary => "PgUp/Dn scroll".to_string(),
+        ActiveView::ActivityFeed => "t:crew e:event f:tool a:auto-scroll \u{2191}\u{2193} scroll".to_string(),
         ActiveView::Terminals => match app.terminal_input_mode {
             TerminalInputMode::Normal => {
                 "\u{2191}\u{2193} nav  Enter/F12 focus  d dismiss  D all  [ scroll  F7 attn".to_string()
@@ -545,6 +573,9 @@ fn popup_hints(app: &App) -> Option<String> {
     }
     if app.permission_popup.is_some() {
         return Some(" \u{2191}\u{2193} select  a approve  d deny  A all  t type  v view  Esc close".to_string());
+    }
+    if app.stats_popup.is_some() {
+        return Some(" \u{2191}\u{2193}/PgUp/PgDn scroll  Esc close".to_string());
     }
     if let Some(popup) = &app.launch_popup {
         return Some(match popup.step {

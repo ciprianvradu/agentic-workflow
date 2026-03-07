@@ -9,6 +9,7 @@ pub mod widget;
 
 use anyhow::Result;
 use portable_pty::MasterPty;
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -31,6 +32,27 @@ pub enum AttentionReason {
     PermissionPrompt { context: String },
     Idle { seconds: u64 },
     Error { context: String },
+    /// Attention triggered by a Claude Code Notification hook event.
+    HookNotification { message: String },
+}
+
+/// Hook-based activity and status tracking for an embedded terminal.
+///
+/// Populated from Claude Code HTTP hook events (Phase 1: observational only).
+#[derive(Debug, Clone)]
+pub struct HookState {
+    /// Name of the last event received (e.g. "PreToolUse").
+    pub last_event: String,
+    /// When the last event was received.
+    pub last_event_at: Instant,
+    /// Current tool activity label (e.g. "Edit src/main.rs").
+    /// Set on PreToolUse, cleared on PostToolUse.
+    pub activity_label: String,
+    /// Cumulative tool usage counts (tool_name → count).
+    /// Incremented on each PostToolUse event.
+    pub tool_counts: HashMap<String, u32>,
+    /// Whether a Claude Code session is currently active.
+    pub session_active: bool,
 }
 
 /// Stored launch parameters for relaunching a terminal.
@@ -62,6 +84,13 @@ pub struct EmbeddedTerminal {
     pub scroll_offset: usize,
     /// Timestamp when this terminal was spawned.
     pub spawned_at: Instant,
+    /// Hook-based activity state (Some if hook communication is active).
+    pub hook_state: Option<HookState>,
+    /// The cwd that was written to .claude/settings.local.json (for cleanup).
+    pub hook_settings_cwd: Option<PathBuf>,
+    /// Additional hook config files to clean up on terminal dismiss (for non-Claude hosts).
+    #[allow(dead_code)]
+    pub hook_cleanup_paths: Vec<PathBuf>,
 }
 
 /// Manages all embedded terminals.
@@ -109,7 +138,25 @@ impl TerminalManager {
         color_scheme_index: Option<usize>,
         log_path: Option<std::path::PathBuf>,
     ) -> Result<()> {
-        let handles = pty::spawn_pty_with_log(command, args, cwd, rows, cols, log_path)?;
+        self.spawn_with_log_and_env(id, label, command, args, cwd, rows, cols, color_scheme_index, log_path, vec![])
+    }
+
+    /// Spawn a new embedded terminal with optional output logging and extra env vars.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_with_log_and_env(
+        &mut self,
+        id: TerminalId,
+        label: String,
+        command: &str,
+        args: &[String],
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+        color_scheme_index: Option<usize>,
+        log_path: Option<std::path::PathBuf>,
+        env_vars: Vec<(String, String)>,
+    ) -> Result<()> {
+        let handles = pty::spawn_pty_with_log(command, args, cwd, rows, cols, log_path, env_vars)?;
 
         self.terminals.push(EmbeddedTerminal {
             id,
@@ -129,6 +176,9 @@ impl TerminalManager {
             last_output: handles.last_output,
             scroll_offset: 0,
             spawned_at: Instant::now(),
+            hook_state: None,
+            hook_settings_cwd: None,
+            hook_cleanup_paths: Vec::new(),
         });
 
         // Focus the newly spawned terminal

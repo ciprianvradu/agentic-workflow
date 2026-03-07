@@ -8,7 +8,7 @@ Rust TUI dashboard for cross-project agentic-workflow task monitoring. Built wit
 cd crew-board
 cargo build                  # Dev build
 cargo build --release        # Optimized binary (strip + LTO)
-cargo test                   # All 38 unit tests
+cargo test                   # All ~110 unit tests
 cargo clippy                 # Lint (fix all warnings before committing)
 ```
 
@@ -21,17 +21,23 @@ src/
 ├── main.rs          # CLI parsing (clap), terminal setup, event loop, bg refresh polling
 ├── app.rs           # Application state: tree nav, views, popups, search index, bg refresh
 ├── settings.rs      # Loads ~/.config/crew-board.toml (TOML)
+├── hook_server.rs   # HTTP hook server (127.0.0.1:0): receives Claude Code hook events, auth, mpsc dispatch
 ├── discovery.rs     # Repo discovery: --repo paths + --scan directories
 ├── launcher.rs      # Terminal launch: detect env, spawn wt.exe/tmux/osascript, color schemes
 ├── worktree.rs      # Native worktree creation: task ID, git ops, state.json, symlink
 ├── cleanup.rs       # Worktree cleanup: candidate discovery, dry-run preview, execute via script
+├── orchestration.rs # Auto-orchestration engine: modes, tasks, circuit breaker, guardrails
+├── security.rs      # Security rules engine: regex rules, credential scanning, rate limiter, sensitive files
+├── hook_bridge.rs   # Cross-platform hook support: Gemini/Copilot/OpenCode bridge scripts, event normalization
 ├── data/
 │   ├── mod.rs       # RepoData: load + load_incremental, aggregates tasks + issues + config
 │   ├── task.rs      # Parses .tasks/*/state.json, incremental mtime reload, *.md artifacts
 │   ├── beads.rs     # Parses .beads/issues.jsonl (stream, skip malformed)
-│   └── config.rs    # Config cascade: global → project → task levels
+│   ├── config.rs    # Config cascade: global → project → task levels
+│   ├── activity.rs  # Activity event log: ring buffer, per-terminal stats, tool spans for timeline
+│   └── file_claims.rs # File claims registry: cross-terminal conflict detection, 10-min expiry
 ├── terminal/
-│   ├── mod.rs       # TerminalManager, EmbeddedTerminal, TerminalStatus, AttentionReason, LaunchParams
+│   ├── mod.rs       # TerminalManager, EmbeddedTerminal, TerminalStatus, AttentionReason, HookState, LaunchParams
 │   ├── pty.rs       # spawn_pty(), PtyHandles, ExitEvent, AttentionEvent, AttentionKind, reader thread
 │   └── widget.rs    # Terminal rendering (draw_terminal), keyboard encoding (key_to_bytes), SelectionRange
 └── ui/
@@ -49,6 +55,8 @@ src/
     ├── cleanup_popup.rs# F6 popup: multi-select worktree cleanup with dry-run preview
     ├── search_popup.rs # F3 popup: full-text search across tasks + artifacts
     ├── help_popup.rs  # F1 popup: scrollable help overlay with all key bindings
+    ├── activity_view.rs # View 6: Activity Feed with event table + Gantt timeline
+    ├── stats_popup.rs   # Ctrl+F6: Statistics popup with global/security/orchestration/per-terminal breakdown
     └── styles.rs     # 8 crew color schemes, phase styles, selection/border/hint helpers
 ```
 
@@ -92,7 +100,7 @@ Keys are routed in priority order:
 4. Modifier-only key press events (kitty protocol) → update `modifier_bar_state`, continue
 5. Help overlay open → any key closes it
 6. Terminal view + `ScrollBack` mode → scroll navigation keys
-7. Terminal view + `TerminalFocused` mode → `F12` exits, Shift+F-keys switch views, Shift+PgUp/PgDn cycle terminals, all other keys forwarded to PTY via `key_to_bytes()`
+7. Terminal view + `TerminalFocused` mode → `F12` exits, F5/F6 cycle prev/next terminal, F7 jumps to attention, Shift+F-keys switch views, all other keys forwarded to PTY via `key_to_bytes()`
 8. Search popup open → search-specific keys
 9. Create worktree popup open → popup keys (text input, selection, toggles)
 10. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
@@ -115,6 +123,70 @@ All data refresh is **non-blocking**. `refresh()` spawns a background thread via
 - **Callers affected**: `refresh()` is also called from `close_create_popup()` and `close_cleanup_popup()`. After the change these get non-blocking behavior — data appears after the next tick rather than synchronously.
 - **Terminal polling**: `app.poll_terminals()` is called every tick (after `check_bg_refresh()`). It delegates to `TerminalManager::poll_status()`. This is separate from the background data-refresh thread — terminal status updates happen synchronously in the event loop tick, not in a background thread.
 
+### Hook-Based Communication
+
+When `hook_communication = true` (default), crew-board opens a lightweight HTTP server (`hook_server.rs`) on `127.0.0.1:0` at startup and injects hook configuration into each Claude Code terminal it spawns. This gives the dashboard structured real-time visibility into what each agent is doing.
+
+**Startup and lifecycle:**
+
+1. `App::init_hook_server()` is called from `main.rs` after settings are applied. It calls `HookServer::start()`, which binds `tiny_http` to `127.0.0.1:0` (OS-assigned port), starts a background thread polling the socket, and returns `(HookServer, port, Receiver<HookEvent>, Receiver<PendingPermission>)`. The port, server handle, and both receivers are stored on `App`.
+2. Before spawning a Claude Code terminal, `App::generate_hook_config(task_id, command, cwd)` generates a per-terminal auth token, calls `HookServer::register_token_with_profile(terminal_id, token, context, profile, patterns)`, and writes `.claude/settings.local.json` in the worktree directory with HTTP hook entries for all 7 event types (including `PermissionRequest`) pointing to `http://127.0.0.1:{port}/hook/{task_id}`. `PreToolUse` and `PermissionRequest` hooks use 30s timeout (for blocking approval); others use 5s.
+3. Three env vars are passed to the terminal process: `CREW_BOARD_PORT`, `CREW_BOARD_TASK_ID`, `CREW_BOARD_TOKEN`. The settings file uses `$CREW_BOARD_TOKEN` and `allowedEnvVars` so Claude Code expands the token at hook send time.
+4. `App::drain_hook_events()` is called each event-loop tick. It drains both the `mpsc::Receiver<HookEvent>` (activity events) and `mpsc::Receiver<PendingPermission>` (queued permission requests), routes events to terminals via `process_hook_event()`, and appends pending permissions to `App.pending_permissions`.
+5. On terminal dismiss (`d`/`Delete`) or app exit, `settings.local.json` is deleted from the worktree and `HookServer::deregister_token()` is called. `HookServer` also deregisters on `Drop`.
+
+**`HookEvent` enum** (in `hook_server.rs`):
+
+| Variant | Key Fields |
+|---------|-----------|
+| `SessionStart` | `session_id` |
+| `PreToolUse` | `tool_name`, `tool_input_summary` |
+| `PostToolUse` | `tool_name`, `tool_input_summary`, `success` |
+| `PermissionRequest` | `tool_name`, `tool_input: serde_json::Value` |
+| `Notification` | `message` |
+| `Stop` | `preview` |
+| `SessionEnd` | — |
+
+**`HookState`** (per-terminal, in `terminal/mod.rs`):
+
+| Field | Description |
+|-------|-------------|
+| `last_event` | Name of the most recent event received (e.g. `"PreToolUse"`). |
+| `last_event_at` | `Instant` when the last event arrived. |
+| `activity_label` | Human-readable tool activity (e.g. `"Edit src/main.rs"`). Set on `PreToolUse`, cleared on `PostToolUse`. |
+| `tool_counts` | `HashMap<String, u32>` of cumulative tool invocations per tool name. |
+| `session_active` | `true` between `SessionStart` and `SessionEnd`. |
+
+`HookState` is `Option<HookState>` on `EmbeddedTerminal` — `None` until the first hook event arrives for that terminal.
+
+**`AttentionReason::HookNotification`:** A `Notification` hook event triggers `NeedsAttention(HookNotification { message })`. The border turns bold yellow, border title shows `[NOTIFY]`, and the status bar attention count increments. Icon in the crew summary line: `◆` (same as other attention states).
+
+**Permission approval via hooks (Phase 2):** For `PreToolUse` and `PermissionRequest` events, the hook server applies the permission profile before responding:
+- **Autonomous**: Immediate `200` with `{"hookSpecificOutput": {"permissionDecision": "allow"}}` — server thread never blocks.
+- **Trusted**: Checks `auto_approve_patterns` (regex match against tool name). Match → allow; no match → queue.
+- **Interactive**: Always queues for user approval.
+
+When queued, the server thread creates an `mpsc::channel`, sends a `PendingPermission` to the main thread, and blocks on `recv_timeout(25s)`. The main thread shows the pending permission in the F8 popup. When the user approves/denies, the decision is sent back through the channel, and the server responds with the appropriate `hookSpecificOutput` JSON. If the 25s timeout expires, a fallback `"ask"` response is sent (for PreToolUse) or `"allow"` (for PermissionRequest), letting Claude Code fall back to its built-in prompt.
+
+**`PendingPermission`** (in `hook_server.rs`):
+
+| Field | Description |
+|-------|-------------|
+| `terminal_id` | Which terminal this permission request came from. |
+| `tool_name` | Name of the tool (e.g. `"Bash"`, `"Edit"`). |
+| `tool_input_summary` | Short human-readable summary of the tool input. |
+| `tool_input` | `Option<serde_json::Value>` — full tool input object for detailed display. |
+| `event_type` | `"PreToolUse"` or `"PermissionRequest"` — determines response format. |
+| `response_tx` | `mpsc::Sender<PermissionDecision>` — channel to send decision back to server thread. |
+
+**`PermissionEntry`** (in `permission_popup.rs`): The F8 popup shows both PTY-scanned prompts (`PtyBased { terminal_idx }`) and hook-based pending permissions (`HookBased { pending_idx }`). PTY entries use `y\n`/`n\n` bytes; hook entries use the `response_tx` channel.
+
+**Activity tracking (Phase 3):** Tool counts are tracked per-terminal in `HookState.tool_counts` (incremented on `PostToolUse`). The crew list shows a second line per terminal with the current activity label or aggregated tool counts. All hook events are appended to `{task_dir}/history.jsonl` as structured JSONL for audit trail.
+
+**Context injection:** `SessionStart` hook responses include pre-computed task context (description, phase, decisions) via the `additionalContext` JSON field, so Claude Code automatically has task context at session start.
+
+**Auth flow:** Each request must include `Authorization: Bearer <token>`. Unknown `terminal_id` values receive `200 OK` but the event is silently dropped (not a 401 — avoids leaking terminal existence). Invalid token receives `401`. The token registry is an `Arc<RwLock<HashMap<String, TerminalRegistration>>>` shared between the server thread and the main thread. `TerminalRegistration` holds the token, session context, permission profile, and auto-approve patterns.
+
 ### Embedded Terminal Multiplexer (View 5)
 
 View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Key types live in `src/terminal/`:
@@ -134,10 +206,11 @@ View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Ke
 
 | Type | Description |
 |------|-------------|
-| `EmbeddedTerminal` | Holds all `PtyHandles` fields plus `id`, `label`, `status`, `color_scheme_index`, `launch_params`, `scroll_offset`, `spawned_at`. |
+| `EmbeddedTerminal` | Holds all `PtyHandles` fields plus `id`, `label`, `status`, `color_scheme_index`, `launch_params`, `scroll_offset`, `spawned_at`, `hook_state`, `hook_settings_cwd`. |
 | `LaunchParams` | `{ command: String, args: Vec<String>, cwd: PathBuf }` — stored on each terminal for relaunch. |
 | `TerminalStatus` | Enum: `Running`, `NeedsAttention(AttentionReason)`, `Exited(i32)`. |
-| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt { context: String }`, `Idle { seconds }`, `Error { context: String }`. Context carries the actual prompt/error line for display in the F8 popup. |
+| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt { context: String }`, `Idle { seconds }`, `Error { context: String }`, `HookNotification { message: String }`. Context carries the actual prompt/error line for display in the F8 popup. `HookNotification` is triggered by Claude Code `Notification` hook events. |
+| `HookState` | Per-terminal hook activity tracker: `last_event`, `last_event_at`, `activity_label`, `tool_counts`, `session_active`. `None` until first hook event arrives. |
 | `TerminalManager` | `Vec<EmbeddedTerminal>` + `focused: usize`. Entry point for all terminal operations. Includes `focus_next_running()` / `focus_prev_running()` which skip exited terminals. |
 
 #### Reader Thread Architecture
@@ -197,7 +270,7 @@ The event-loop poll timeout in `main.rs` is reduced to **50ms** when the Termina
 | Mode | Description |
 |------|-------------|
 | `Normal` | Keys navigate the terminal list. Standard crew-board navigation. |
-| `TerminalFocused` | All keys go to the PTY. `F12` exits back to Normal. Shift+F-keys bypass for global view switching. Shift+PgUp/PgDn cycle terminals. |
+| `TerminalFocused` | All keys go to the PTY. `F12` exits back to Normal. `F5`/`F6` cycle prev/next terminal. `F7` jumps to attention. Shift+F-keys bypass for global view switching. |
 | `PrefixPending` | Legacy (unused). Kept for enum compatibility; no code path enters this state. |
 | `ScrollBack` | Navigate the vt100 scrollback buffer with Up/Down/PgUp/PgDn. |
 
@@ -235,14 +308,15 @@ Cycle with `l` / `Right` in Normal mode. Layout cannot be cycled while in Termin
 
 | Key | Action |
 |-----|--------|
+| `F5` | Focus previous running terminal (skips exited, wraps) |
+| `F6` | Focus next running terminal (skips exited, wraps) |
+| `F7` | Jump to next terminal needing attention |
 | `F12` | Exit focus, return to Normal mode |
 | `Shift+F1` | Exit focus + switch to Tasks view |
 | `Shift+F2` | Exit focus + switch to Issues view |
 | `Shift+F3` | Exit focus + switch to Config view |
 | `Shift+F4` | Exit focus + switch to Cost view |
 | `Shift+F5` | Exit focus (already in Terminals view) |
-| `Shift+PgUp` | Focus previous running terminal (skips exited, wraps) |
-| `Shift+PgDn` | Focus next running terminal (skips exited, wraps) |
 | All other keys | Sent directly to the PTY via `key_to_bytes()` encoding |
 
 **ScrollBack mode (entered via `[` in Normal mode or mouse scroll):**
@@ -403,7 +477,7 @@ The bar supports three modifier layers, triggered by holding Shift or Ctrl:
 
 In Terminals view, the bar changes based on the input mode:
 
-- **TerminalFocused**: `━━ INPUT → TERMINAL ━━  F12 exit  S+F1 Tasks  F2 Issues  F3 Cfg  F4 Cost  F5 Terms  S+PgUp/Dn crew`
+- **TerminalFocused**: `━━ INPUT → TERMINAL ━━  F12 exit  F7 Attn  S+F1 Tasks  F2 Issues  F3 Cfg  F4 Cost  F5 Prev  F6 Next`
 - **ScrollBack**: `SCROLL▶  ↑↓/jk:Line  PgUp/Dn:Page  Home:Top  End:Live  q/Esc:Exit  offset:N`
 
 The PrefixPending bar is no longer shown (the prefix system is legacy; F12 is now the sole focus toggle).
@@ -428,6 +502,113 @@ The "5:Terms" tab in line 1 carries a status badge when terminals need attention
 - Windows Terminal: `--tabColor` and `--colorScheme` args to `wt.exe`
 - tmux: `set-option window-style bg=...,fg=...`
 
+### Activity Feed (View 6)
+
+View 6 (`6` key) shows a real-time stream of hook events from all embedded terminals. The view has two areas: a filter bar at the top and an event table below.
+
+**Filter bar** shows active filters, auto-scroll state, and global stats (total tool calls, errors, active terminals). Key hints appear on the right.
+
+**Event table** shows one row per hook event: relative timestamp, terminal ID (short form), event type with color coding, tool name, and detail/input summary. Color coding: cyan for `PreToolUse`, green for `PostToolUse`, blue for `SessionStart`, dark gray for `SessionEnd`, yellow/bold for `Notification`, red for `PermissionRequest`, magenta for `Stop`. Success/failure markers appear on `PostToolUse` rows.
+
+**Key bindings (View 6):**
+
+| Key | Action |
+|-----|--------|
+| `t` | Cycle terminal filter (All -> T1 -> T2 -> ... -> All) |
+| `e` | Cycle event type filter (All -> PreToolUse -> PostToolUse -> ... -> All) |
+| `f` | Cycle tool name filter (All -> Edit -> Bash -> ... -> All) |
+| `a` | Toggle auto-scroll (on/off) |
+| `g` | Toggle Gantt timeline view |
+| `Up` / `Down` | Manual scroll (when auto-scroll is off) |
+
+When auto-scroll is enabled (default), the table always shows the most recent events. When disabled, Up/Down keys scroll through the event history. A scrollbar appears when events exceed the visible area.
+
+### Statistics Popup (Ctrl+F6)
+
+Press `Ctrl+F6` to open a scrollable statistics overlay. Shows four sections:
+
+**Global Statistics:** Total tool calls, total errors, active terminals, and activity log event count.
+
+**Security:** Denied requests, warnings, auto-approved and human-approved decisions, credential exposures. Values are highlighted in red/yellow when non-zero.
+
+**Orchestration** (shown only when orchestration is active): Current mode (Manual/Semi-Auto/Full-Auto), pending/running/completed/failed task counts, total cost, and circuit breaker status (OK or TRIPPED in red).
+
+**Per-Terminal Breakdown:** For each terminal: tools used, errors, files touched, currently active tool, and the 4 most recently touched files.
+
+| Key | Action |
+|-----|--------|
+| `Up` / `Down` | Scroll by line |
+| `PgUp` / `PgDn` | Scroll by page |
+| `Esc` | Close popup |
+
+### Security Rules Engine
+
+The security rules engine (`security.rs`) evaluates tool requests against configurable rules before the permission profile check. Enable via `security_enabled = true` in settings.
+
+**`SecurityRuleConfig`** defines a rule with:
+- `name` — human-readable rule identifier
+- `tool_pattern` — regex matched against tool name (e.g. `"Bash"`)
+- `input_pattern` — regex matched against tool input summary (e.g. `"(?i)push.*--force"`)
+- `file_pattern` — regex matched against tool input summary for file paths
+- `action` — `deny` (block immediately), `ask` (force human review), or `allow` (permit without prompting)
+- `reason` — explanation shown when rule triggers
+
+**Rule evaluation priority:** Deny > Ask > Allow. When multiple rules match, the highest-priority action wins. All specified patterns within a rule must match (AND logic). Rules with no patterns are skipped.
+
+**Credential scanning:** `credential_patterns` is a list of regex patterns matched against tool output to detect leaked secrets (API keys, passwords). Detections increment `SecurityStats.credential_exposures`.
+
+**Sensitive file protection:**
+- `sensitive_files.never_access` — file patterns that are automatically denied (e.g. `.env`, `*.pem`)
+- `sensitive_files.warn_on_access` — file patterns that trigger a warning (e.g. `Cargo.lock`)
+
+**Rate limiting:** `rate_limit_per_minute` sets a per-terminal sliding-window rate limit. When exceeded, tool requests are blocked until the window clears. Set to 0 (default) for unlimited.
+
+**Status bar badge:** When security is enabled and rules have triggered, the status bar shows `D{n} W{n}` indicating denied and warned counts.
+
+### Auto-Orchestration
+
+The orchestration engine (`orchestration.rs`) manages automated task scheduling and execution. It is opt-in and defaults to Manual mode.
+
+**`OrchestrationMode`:**
+- `Manual` — user controls everything; the engine only suggests actions
+- `SemiAuto` — suggests actions and requires confirmation before execution
+- `FullAuto` — executes actions automatically within guardrails
+
+**`OrchestratedTask` lifecycle:** `Pending` (waiting for dependencies) -> `Running` (terminal launched) -> `Completed` or `Failed { error }`. Each task tracks its `depends_on` list, terminal_id, retry count, and timing.
+
+**`CircuitBreaker`:** Tracks recent failures in a sliding window. Default: 3 failures within 10 minutes triggers the breaker, which automatically downgrades `FullAuto` to `SemiAuto`. Call `reset()` to re-enable after investigation.
+
+**Guardrails:**
+- `cost_ceiling` — maximum total cost before pausing all orchestration (default: $50)
+- `max_concurrent` — maximum terminals running simultaneously (default: 5)
+- `max_retries` — maximum retry attempts per failed task (default: 5)
+
+**Tick cycle:** `OrchestrationState::tick()` runs each event-loop iteration. It checks cost ceiling, finds tasks with all dependencies completed, finds failed tasks eligible for retry, respects concurrent limits, and populates the action queue. Actions are `LaunchTask`, `RetryTask`, `DowngradeMode`, or `CostLimitReached`.
+
+**Configuration:** Set `orchestration_mode` in settings to `"manual"`, `"semi-auto"`, or `"full-auto"`. Guardrail values are configured via `max_concurrent`, `cost_limit`, and `max_retries`.
+
+### Cross-Platform Hook Bridge
+
+The hook bridge (`hook_bridge.rs`) enables non-Claude AI hosts to communicate with the crew-board hook server.
+
+**`AiHostType` enum:** `Claude`, `Gemini`, `Copilot`, `OpenCode`, `Shell`. Each host has its own event naming conventions.
+
+**Event normalization:** `AiHostType::normalize_event_name()` maps host-specific event names to internal names:
+- Gemini: `BeforeTool`/`before_tool` -> `PreToolUse`, `AfterTool`/`after_tool` -> `PostToolUse`
+- Copilot: `tool.execute.before` -> `PreToolUse`, `tool.execute.after` -> `PostToolUse`
+- OpenCode: `pre_tool`/`PreTool` -> `PreToolUse`, `post_tool`/`PostTool` -> `PostToolUse`
+
+**Bridge script generation:** `generate_bridge_script()` creates a bash script that reads JSON from stdin, POSTs it to the crew-board HTTP server with auth, and echoes the response. Used by non-Claude hosts that support shell-based hooks.
+
+**Hook config generation:** `generate_hook_config()` produces host-specific configuration files:
+- Gemini: `.gemini/crew-hook.sh` + `.gemini/settings.json`
+- Copilot: `.github/hooks/crew-hook.sh` + `.github/hooks/hooks.json`
+- OpenCode: `.opencode/plugins/crew-hook.sh` + `.opencode/plugins/crew-board.ts`
+- Claude: returns `None` (handled via `settings.local.json` elsewhere)
+- Shell: returns `None` (no hook system)
+
+**Response formatting:** `format_response()` produces host-appropriate JSON for allow/deny decisions. Claude uses `hookSpecificOutput.permissionDecision`; others use `{"action": "allow/deny"}`.
+
 ## Settings Keys (`~/.config/crew-board.toml`)
 
 | Key | Type | Default | Description |
@@ -447,6 +628,19 @@ The "5:Terms" tab in line 1 carries a status badge when terminals need attention
 | `permission_profile` | `string` | `"interactive"` | Permission profile: interactive/trusted/autonomous |
 | `auto_approve_patterns` | `string[]` | `[]` | Regex patterns for auto-approval in trusted profile |
 | `desktop_notifications` | `bool` | `false` | Send desktop notification on attention events |
+| `hook_communication` | `bool` | `true` | Enable HTTP hook server for structured Claude Code activity tracking |
+| `security_enabled` | `bool` | `false` | Enable security rules enforcement |
+| `security_rules` | `SecurityRuleConfig[]` | `[]` | Security rules for tool governance |
+| `credential_patterns` | `string[]` | `[]` | Regex patterns for credential detection |
+| `rate_limit_per_minute` | `u32` | `0` | Rate limit per terminal (0=unlimited) |
+| `sensitive_files` | `SensitiveFiles` | `{}` | Files to protect (never_access, warn_on_access) |
+| `capture_tool_events` | `bool` | `true` | Capture tool events in history.jsonl |
+| `capture_prompts` | `bool` | `false` | Capture user prompts in history.jsonl |
+| `capture_permissions` | `bool` | `true` | Capture permission decisions in history.jsonl |
+| `orchestration_mode` | `string` | `""` | Orchestration: manual/semi-auto/full-auto |
+| `max_concurrent` | `u32` | `5` | Max concurrent orchestrated terminals |
+| `cost_limit` | `f64` | `50.0` | Cost ceiling for orchestration |
+| `max_retries` | `u32` | `5` | Max retries per orchestrated task |
 
 All new keys use `#[serde(default)]` with custom default functions, so existing configs are fully backward-compatible.
 
@@ -461,6 +655,9 @@ All new keys use `#[serde(default)]` with custom default functions, so existing 
 | Config (global) | `~/.claude/workflow-config.yaml` | YAML |
 | Config (project) | `config/workflow-config.yaml` | YAML |
 | User settings | `~/.config/crew-board.toml` | TOML |
+| Activity log | (in-memory) | Ring buffer of 500 ActivityEvents |
+| File claims | (in-memory) | HashMap with 10-min expiry per file |
+| Tool spans | (in-memory) | Completed PreToolUse->PostToolUse spans |
 
 ## Adding a New Popup
 
@@ -514,7 +711,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Kitty protocol runtime detection**: `crossterm::terminal::supports_keyboard_enhancement()` queries the terminal at startup. If supported, `PushKeyboardEnhancementFlags` is executed with `DISAMBIGUATE_ESCAPE_CODES | REPORT_EVENT_TYPES | REPORT_ALL_KEYS_AS_ESCAPE_CODES`. Must be popped with `PopKeyboardEnhancementFlags` on exit.
 - **Modifier bar flash fallback**: On terminals without kitty protocol (e.g., Windows Terminal), pressing Shift+F1 both executes the action AND sets `modifier_bar_flash_until` to `Instant::now() + 2s`. The flash timeout is ticked each loop iteration via `tick_modifier_bar()`. The poll timeout drops to 50ms during flash for responsive decay.
 - **Modifier+F-key priority**: Shift+F-key and Ctrl+F-key bindings are checked BEFORE the base `match` in Priority 12. This prevents `Shift+F(1)` from falling through to the plain `F(1)` handler.
-- **Shift+F-keys DO bypass TerminalFocused mode**: Unlike regular keys, Shift+F1-F5 in TerminalFocused mode exit focus and switch views. Shift+PgUp/PgDn cycle terminals while staying focused. Other Shift+key combinations are forwarded to the PTY. `F12` is the sole single-key exit from focused mode.
+- **Shift+F-keys DO bypass TerminalFocused mode**: Unlike regular keys, Shift+F1-F5 in TerminalFocused mode exit focus and switch views. F5/F6 cycle prev/next terminals while staying focused. F7 jumps to attention terminals. Other key combinations are forwarded to the PTY. `F12` is the sole single-key exit from focused mode.
 - **F9/F12 Focus is contextual**: F9 and F12 both enter TerminalFocused mode, but only when in Terminals view with at least one terminal. F9 shows a label ("Focus") in the base F-key bar only in Terminals view Normal mode; otherwise it renders as a dimmed empty placeholder.
 - **Mouse capture scope**: Mouse capture is always enabled (`EnableMouseCapture`). Click/drag/release are handled only when `active_view == Terminals`. Scroll events also only apply in Terminals view. Clicking outside any terminal panel clears the selection.
 - **`terminal_panel_rects` is RefCell**: Because panel rects are written during `draw()` (immutable `&App`) and read during mouse handling (mutable `&mut App`), the rects use `RefCell<Vec<(usize, Rect)>>`. This is the only `RefCell` in `App`.
@@ -528,3 +725,18 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Crew summary line**: In Focused layout with 2+ terminals, a one-line summary appears above the terminal panel showing all terminals' status icons and short IDs. Uses `●` (running), `◆` (attention), `✓`/`✗` (exited ok/failed).
 - **Phase+progress in terminal title**: `lookup_task_phase()` scans `app.repos` for a task matching the terminal's ID and appends `[phase]` or `[phase N%]` to the border title of running terminals.
 - **`D` key vs `d` key**: `D` (shift+d) dismisses ALL exited terminals at once via `dismiss_all_exited()`. Lowercase `d` dismisses only the focused exited terminal.
+- **Hook server port is dynamic**: `HookServer::start()` binds to `127.0.0.1:0`, so the OS assigns the port. The port is stored in `App.hook_server.port` and written into each terminal's `settings.local.json` and env vars at spawn time. There is no fixed port to configure.
+- **`settings.local.json` cleanup is best-effort**: On terminal dismiss or app exit, crew-board removes the file at `{worktree}/.claude/settings.local.json`. If crew-board crashes, the file is left behind and must be removed manually. It does not persist any user settings — it is solely crew-board's hook injection file.
+- **Hook events only flow for Claude Code terminals**: `generate_hook_config()` checks the `command` value and only writes hook config when the command is `claude`. Non-Claude terminals (Copilot, Gemini, OpenCode) get no hook injection and `hook_state` remains `None`.
+- **`HookState` is initialized lazily**: The `hook_state: Option<HookState>` field on `EmbeddedTerminal` starts as `None` and is created on first `process_hook_event()` call. Do not assume it is `Some` until at least one event has arrived.
+- **`HookNotification` vs PTY-scanned attention**: `AttentionReason::HookNotification` is set directly by `process_hook_event()` on the `EmbeddedTerminal.status` field, bypassing `poll_status()` and the reader-thread attention signal. This means it is not cleared by sending input to the terminal — only a subsequent event or explicit status reset clears it.
+- **Token registry is `Arc<RwLock<>>`**: `HookServer.tokens` is shared between the server background thread (reads per-request) and the main thread (writes on register/deregister). Take the write lock only briefly. Do not call `register_token` or `deregister_token` while already holding any other lock that the server thread might need.
+- **Hook permission blocking**: For `PreToolUse` and `PermissionRequest` hooks, the server thread blocks on `recv_timeout(25s)` waiting for user decision from the F8 popup. If the main thread is unresponsive, the 25s timeout returns a safe fallback (`"ask"` for PreToolUse, `"allow"` for PermissionRequest). Never hold locks across the blocking receive.
+- **PendingPermission lifetime**: `PendingPermission` entries in `App.pending_permissions` hold a `response_tx` channel sender. When the popup sends a decision, the entry must be removed (via `Vec::remove()`) — the server thread will unblock. If the app exits without responding, channels drop and the server thread's `recv_timeout` returns `Err`, triggering the fallback.
+- **F8 popup dual entries**: The permission popup shows both `PtyBased` (screen-scanned prompts) and `HookBased` (hook pending permissions). Quick-send (`t`) is only available for PTY entries since hook entries require structured `allow`/`deny` decisions.
+- **Auto-approve skips hook terminals**: `auto_approve_permissions()` (PTY-based `y\n` sending) skips terminals with `hook_state.is_some()`. For hook-based terminals, auto-approval happens in the server thread itself via `check_permission_profile()`, so no PTY bytes are needed.
+- **`RulesEngine` is on main thread**: `rules_engine` is a field on `App`, not shared with the server thread. Security evaluation in the hook server path must be done via the permission profile, not direct rule evaluation.
+- **`ActivityLog` ring buffer**: Max 500 events. Oldest events are evicted. `completed_spans` is separately capped at 1000.
+- **`FileClaimsRegistry` 10-min expiry**: Claims expire after 10 minutes. Call `gc()` periodically (not yet automated).
+- **Stats popup priority**: The stats popup (Ctrl+F6) has priority 0.5 in the key routing -- between help overlay (0) and scroll-back mode (0.6).
+- **Orchestration is opt-in**: Default mode is Manual. No automatic actions without explicit `orchestration_mode` config.

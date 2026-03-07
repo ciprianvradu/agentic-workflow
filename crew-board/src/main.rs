@@ -2,7 +2,11 @@ mod app;
 mod cleanup;
 mod data;
 mod discovery;
+mod hook_bridge;
+mod hook_server;
+mod orchestration;
 mod launcher;
+mod security;
 mod settings;
 mod terminal;
 mod ui;
@@ -115,12 +119,50 @@ fn main() -> Result<()> {
         .filter_map(|p| regex::Regex::new(p).ok())
         .collect();
     app.desktop_notifications = cfg.desktop_notifications;
+    app.hook_communication = cfg.hook_communication;
+
+    // Initialize security rules engine
+    if cfg.security_enabled {
+        app.rules_engine = crate::security::RulesEngine::from_config(
+            &cfg.security_rules,
+            &cfg.credential_patterns,
+        );
+    }
+
+    // Initialize orchestration engine
+    {
+        let mode = match cfg.orchestration_mode.as_str() {
+            "semi-auto" => orchestration::OrchestrationMode::SemiAuto,
+            "full-auto" => orchestration::OrchestrationMode::FullAuto,
+            _ => orchestration::OrchestrationMode::Manual,
+        };
+        let mut orch = orchestration::OrchestrationState::new(mode);
+        orch.guardrails.max_concurrent = cfg.max_concurrent;
+        orch.guardrails.cost_ceiling = cfg.cost_limit;
+        orch.guardrails.max_retries = cfg.max_retries;
+        app.orchestration = Some(orch);
+    }
+
+    // Start hook server if enabled
+    app.init_hook_server();
 
     // Main loop
     let result = run_app(&mut terminal, &mut app);
 
-    // Cleanup embedded terminals before restoring
+    // Shutdown hook server
+    if let Some(ref server) = app.hook_server {
+        server.shutdown();
+    }
+
+    // Cleanup embedded terminals before restoring (also removes settings.local.json)
     if let Some(mgr) = &mut app.terminal_manager {
+        // Clean up hook settings files for all terminals
+        for term in &mgr.terminals {
+            if let Some(ref cwd) = term.hook_settings_cwd {
+                let settings_path = cwd.join(".claude").join("settings.local.json");
+                let _ = std::fs::remove_file(&settings_path);
+            }
+        }
         mgr.cleanup_all();
     }
 
@@ -267,6 +309,33 @@ fn run_app(
                 else if app.show_help {
                     app.show_help = false;
                 }
+                // Priority 0.5: Stats popup
+                else if app.stats_popup.is_some() {
+                    match key.code {
+                        KeyCode::Esc => { app.stats_popup = None; }
+                        KeyCode::PageUp => {
+                            if let Some(ref mut popup) = app.stats_popup {
+                                popup.scroll = popup.scroll.saturating_sub(10);
+                            }
+                        }
+                        KeyCode::PageDown => {
+                            if let Some(ref mut popup) = app.stats_popup {
+                                popup.scroll = popup.scroll.saturating_add(10);
+                            }
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if let Some(ref mut popup) = app.stats_popup {
+                                popup.scroll = popup.scroll.saturating_sub(1);
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if let Some(ref mut popup) = app.stats_popup {
+                                popup.scroll = popup.scroll.saturating_add(1);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 // Priority 0.6: Scroll-back mode
                 else if app.active_view == ActiveView::Terminals
                     && app.terminal_input_mode == TerminalInputMode::ScrollBack
@@ -337,6 +406,18 @@ fn run_app(
                     if key.code == KeyCode::F(12) {
                         app.terminal_input_mode = TerminalInputMode::Normal;
                     }
+                    // F5: previous terminal (bypass focused mode)
+                    else if key.code == KeyCode::F(5) {
+                        app.terminal_focus_prev_running();
+                    }
+                    // F6: next terminal (bypass focused mode)
+                    else if key.code == KeyCode::F(6) {
+                        app.terminal_focus_next_running();
+                    }
+                    // F7: jump to next attention terminal (bypass focused mode)
+                    else if key.code == KeyCode::F(7) {
+                        app.terminal_focus_next_attention();
+                    }
                     // Shift+F-keys: global view switching (even while focused)
                     else if key.modifiers.contains(KeyModifiers::SHIFT) {
                         match key.code {
@@ -359,13 +440,6 @@ fn run_app(
                             KeyCode::F(5) => {
                                 // Already in Terminals — just exit focus
                                 app.terminal_input_mode = TerminalInputMode::Normal;
-                            }
-                            // Shift+PgUp/PgDn: cycle terminals while staying focused
-                            KeyCode::PageUp => {
-                                app.terminal_focus_prev_running();
-                            }
-                            KeyCode::PageDown => {
-                                app.terminal_focus_next_running();
                             }
                             _ => {
                                 // Other Shift keys: forward to PTY
@@ -482,6 +556,15 @@ fn run_app(
                                 app.terminal_scroll_reset();
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
                             }
+                            KeyCode::F(6) => {
+                                // Ctrl+F6: toggle stats popup
+                                if app.stats_popup.is_some() {
+                                    app.stats_popup = None;
+                                } else {
+                                    app.stats_popup = Some(crate::ui::stats_popup::StatsPopup::new());
+                                }
+                                app.flash_modifier_bar(ModifierBarState::Ctrl);
+                            }
                             KeyCode::F(_) => {
                                 // Ctrl+F-keys: flash the layer for discovery
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
@@ -496,6 +579,29 @@ fn run_app(
                     }
                     // ── Base F-key layer (no modifier) ───────────────
                     else {
+                    // ── Activity Feed keys (View 6) ──
+                    if app.active_view == ActiveView::ActivityFeed {
+                        match key.code {
+                            KeyCode::Char('t') => { app.activity_cycle_terminal_filter(); continue; }
+                            KeyCode::Char('e') => { app.activity_cycle_event_filter(); continue; }
+                            KeyCode::Char('f') => { app.activity_cycle_tool_filter(); continue; }
+                            KeyCode::Char('a') => { app.activity_filter.auto_scroll = !app.activity_filter.auto_scroll; continue; }
+                            KeyCode::Char('g') => { app.activity_filter.timeline_mode = !app.activity_filter.timeline_mode; continue; }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if !app.activity_filter.auto_scroll {
+                                    app.activity_scroll = app.activity_scroll.saturating_sub(1);
+                                }
+                                continue;
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if !app.activity_filter.auto_scroll {
+                                    app.activity_scroll = app.activity_scroll.saturating_add(1);
+                                }
+                                continue;
+                            }
+                            _ => {} // Fall through to default handling
+                        }
+                    }
                     match (key.modifiers, key.code) {
                         // Quit (q and F10 show confirmation — Esc never quits)
                         (_, KeyCode::Char('q')) | (_, KeyCode::F(10)) => {
@@ -612,6 +718,7 @@ fn run_app(
                         (_, KeyCode::Char('3')) => app.set_view(ActiveView::Config),
                         (_, KeyCode::Char('4')) => app.set_view(ActiveView::CostSummary),
                         (_, KeyCode::Char('5')) => app.set_view(ActiveView::Terminals),
+                        (_, KeyCode::Char('6')) => app.set_view(ActiveView::ActivityFeed),
 
                         // Jump to next terminal needing attention
                         (_, KeyCode::F(7)) => app.terminal_focus_next_attention(),
@@ -707,6 +814,9 @@ fn run_app(
 
         // Check for background refresh completion each tick
         app.check_bg_refresh();
+
+        // Drain hook events from the HTTP server
+        app.drain_hook_events();
 
         // Poll embedded terminals for exit/attention status changes
         app.poll_terminals();
