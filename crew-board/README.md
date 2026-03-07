@@ -19,8 +19,8 @@ Monitor tasks, embed live terminals, detect permission prompts, and manage 10+ p
 │                  ││ [Y/n]                                                                     │
 │                  ││                                                                          │
 └──────────────────┘└──────────────────────────────────────────────────────────────────────────┘
-1:Tasks 2:Issues 3:Config 4:Cost [5:Terms]  ↑↓ crew  ! 1 attn  5 repos 12 tasks (3s)
- F1Help F2Launch F3Search F4New F5Rfrsh F6Clean F7Attn F8Perms F9Focus           F10Quit
+Tasks  Issues  Config  Cost  [Terms]  Activity    ↑↓ crew  ! 1 attn  5 repos 12 tasks (3s)
+ F1Help F2Launch F3Search F4Layot F5Rfrsh F6Dsmis F7Attn  F8Perms F9Focus           F10Quit
 ```
 
 ## Features
@@ -45,11 +45,11 @@ Monitor tasks, embed live terminals, detect permission prompts, and manage 10+ p
 
 **Mouse Support** — Click and drag to select text within terminal panels (constrained to panel boundaries). Scroll wheel for scrollback. Auto-copy to clipboard via OSC 52.
 
-**Four Layout Modes** — Focused (one large terminal), Tiled-2 (side-by-side), Tiled-4 (2x2 grid), Stacked (vertical). Cycle with `l`.
+**Four Layout Modes** — Focused (one large terminal), Tiled-2 (side-by-side), Tiled-4 (2x2 grid), Stacked (vertical). Cycle with `F4` in Terminals view.
 
 **Full Modifier Encoding** — Ctrl+Arrow (word jump), Ctrl+Enter (newline), Shift+Up/Down, and all other modifier+key combinations work correctly inside embedded terminals.
 
-**Six Dashboard Views** — Tasks, Issues, Config, Cost, Terminals, and Activity Feed. Switch instantly with number keys or Shift+F-keys (even while focused in a terminal).
+**Six Dashboard Views** — Tasks, Issues, Config, Cost, Terminals, and Activity Feed. Switch instantly with Shift+F1-F6 (even while focused in a terminal).
 
 **Hook-Based Communication** — HTTP hook server receives structured events from Claude Code hooks. Real-time visibility into tool usage, permission requests, and session lifecycle.
 
@@ -94,16 +94,16 @@ On first run with `--scan`, the path is saved to `~/.config/crew-board.toml` so 
 
 ## Views
 
-Switch views with number keys, backtick to cycle, or Shift+F1-F5:
+Switch views with Shift+F1-F6:
 
 | Key | View | Shows |
 |-----|------|-------|
-| `1` | Tasks | Tree of repos and tasks with detail pane |
-| `2` | Issues | Beads issue tracker (`.beads/issues.jsonl`) |
-| `3` | Config | Configuration cascade (global/project/task) |
-| `4` | Cost | Cost estimates and actuals from workflow state |
-| `5` | Terminals | Embedded terminal multiplexer with crew list |
-| `6` | Activity | Real-time hook event feed with Gantt timeline |
+| `Shift+F1` | Tasks | Tree of repos and tasks with detail pane |
+| `Shift+F2` | Issues | Beads issue tracker (`.beads/issues.jsonl`) |
+| `Shift+F3` | Config | Configuration cascade (global/project/task) |
+| `Shift+F4` | Cost | Cost estimates and actuals from workflow state |
+| `Shift+F5` | Terminals | Embedded terminal multiplexer with crew list |
+| `Shift+F6` | Activity | Real-time hook event feed with Gantt timeline |
 
 ## Key Bindings
 
@@ -111,22 +111,26 @@ Switch views with number keys, backtick to cycle, or Shift+F1-F5:
 
 The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a second layer for view switching:
 
-**Base layer:**
+**Global keys (same in every view):**
 
 | Key | Action |
 |-----|--------|
 | `F1` | Help overlay (all keybindings) |
 | `F2` | Launch terminal with AI host |
 | `F3` | Search across tasks & documents |
-| `F4` | Create new worktree (repo rows only) |
 | `F5` | Force refresh |
-| `F6` | Cleanup worktrees (repo rows only) |
-| `F7` | Jump to next terminal needing attention |
-| `F8` | Permission queue popup |
-| `F9`/`F12` | Focus terminal (Terminals view) |
 | `F10` | Quit |
 
-**Shift+F layer:**
+**Per-view keys (change with active view):**
+
+| View | F4 | F6 | F7 | F8 | F9 |
+|------|----|----|----|----|-----|
+| Tasks | New worktree | Documents | History | Permissions | — |
+| Tasks (DocList) | — | Open | Back | Permissions | — |
+| Terminals | Layout cycle | Dismiss | Attention | Permissions | Focus |
+| Others | — | — | — | Permissions | — |
+
+**Shift+F layer (always view switching):**
 
 | Key | Action |
 |-----|--------|
@@ -135,8 +139,16 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 | `Shift+F3` | Switch to Config view |
 | `Shift+F4` | Switch to Cost view |
 | `Shift+F5` | Switch to Terminals view |
-| `Shift+F6` | Browse task documents |
-| `Shift+F7` | View task history |
+| `Shift+F6` | Switch to Activity Feed |
+
+**Ctrl+F layer (view-specific extras):**
+
+| View | Ctrl+F4 | Ctrl+F5 | Ctrl+F6 | Ctrl+F7 | Ctrl+F8 |
+|------|---------|---------|---------|---------|---------|
+| Terminals | Dismiss All | Live view | Statistics | — | ScrollBack |
+| Activity | Crew filter | Event filter | Tool filter | Auto-scroll | Gantt |
+
+**Adaptive labels:** On wide terminals (>=130 cols), the F-key bar shows descriptive labels (e.g. "F6 Documents"). On narrow terminals, compact labels are used (e.g. "F6Docs").
 
 ### Navigation
 
@@ -146,7 +158,7 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 | `Enter`/`Space` | Expand/collapse repo |
 | `Tab` | Switch focus between panes |
 | `PgUp`/`PgDn` | Scroll detail pane |
-| `1`-`6` | Switch views |
+| `Shift+F1`-`F6` | Switch views |
 | `` ` `` | Cycle views |
 | `q` / `Ctrl+C` | Quit |
 
@@ -156,8 +168,8 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 
 | Key | Action |
 |-----|--------|
-| `d` | Browse task documents (architect.md, developer.md, etc.) |
-| `h` | View task history (decisions, phases, concerns) |
+| `F6` | Browse task documents (architect.md, developer.md, etc.) |
+| `F7` | View task history (decisions, phases, concerns) |
 | `Esc` | Back (reader → list → overview) |
 
 ### Embedded Terminals (View 5)
@@ -171,10 +183,10 @@ View 5 is a full terminal multiplexer with three input modes:
 | `↑`/`↓` or `j`/`k` | Focus previous/next terminal |
 | `F9` / `F12` | Enter focused mode (all keys go to PTY) |
 | `Enter` | Relaunch exited terminal |
-| `d` / `Delete` | Dismiss exited terminal |
-| `D` | Dismiss ALL exited terminals |
-| `l` / `Right` | Cycle layout (focused → tiled-2 → tiled-4 → stacked) |
-| `[` | Enter scroll-back mode |
+| `F6` / `Delete` | Dismiss exited terminal |
+| `Ctrl+F4` | Dismiss ALL exited terminals |
+| `F4` | Cycle layout (focused → tiled-2 → tiled-4 → stacked) |
+| `Ctrl+F8` | Enter scroll-back mode |
 
 **Focused Mode** — All keystrokes go to the active terminal:
 
@@ -222,11 +234,11 @@ View 5 is a full terminal multiplexer with three input modes:
 
 | Key | Action |
 |-----|--------|
-| `t` | Cycle terminal filter |
-| `e` | Cycle event type filter |
-| `f` | Cycle tool name filter |
-| `a` | Toggle auto-scroll |
-| `g` | Toggle Gantt timeline view |
+| `Ctrl+F4` | Cycle terminal filter |
+| `Ctrl+F5` | Cycle event type filter |
+| `Ctrl+F6` | Cycle tool name filter |
+| `Ctrl+F7` | Toggle auto-scroll |
+| `Ctrl+F8` | Toggle Gantt timeline view |
 | `↑`/`↓` | Manual scroll (when auto-scroll off) |
 
 ### Statistics Popup (Ctrl+F6)

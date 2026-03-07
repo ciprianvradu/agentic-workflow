@@ -538,35 +538,67 @@ fn run_app(
                                 app.flash_modifier_bar(ModifierBarState::Shift);
                             }
                             KeyCode::F(6) => {
-                                app.enter_doc_list();
+                                app.set_view(ActiveView::ActivityFeed);
                                 app.flash_modifier_bar(ModifierBarState::Shift);
                             }
-                            KeyCode::F(7) => {
-                                app.enter_history();
-                                app.flash_modifier_bar(ModifierBarState::Shift);
-                            }
-                            _ => {} // Shift+F8-F10 reserved
+                            _ => {} // Shift+F7-F10 reserved
                         }
                     }
-                    // ── Ctrl+F-key layer (reserved for expansion) ────
+                    // ── Ctrl+F-key layer ─────────────────────────────
                     else if key.modifiers.contains(KeyModifiers::CONTROL) {
                         match key.code {
+                            KeyCode::F(4) => {
+                                // Ctrl+F4: Terminals=Dismiss All, Activity=Crew filter
+                                match app.active_view {
+                                    ActiveView::Terminals    => app.terminal_dismiss_all_exited(),
+                                    ActiveView::ActivityFeed => app.activity_cycle_terminal_filter(),
+                                    _ => {}
+                                }
+                                app.flash_modifier_bar(ModifierBarState::Ctrl);
+                            }
                             KeyCode::F(5) => {
-                                // Ctrl+F5: go to live view (reset scroll offset)
-                                app.terminal_scroll_reset();
+                                // Ctrl+F5: Terminals=Live view, Activity=Event filter
+                                match app.active_view {
+                                    ActiveView::ActivityFeed => app.activity_cycle_event_filter(),
+                                    _ => app.terminal_scroll_reset(),
+                                }
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
                             }
                             KeyCode::F(6) => {
-                                // Ctrl+F6: toggle stats popup
-                                if app.stats_popup.is_some() {
+                                // Ctrl+F6: Activity=Tool filter, others=Stats popup
+                                if app.active_view == ActiveView::ActivityFeed {
+                                    app.activity_cycle_tool_filter();
+                                } else if app.stats_popup.is_some() {
                                     app.stats_popup = None;
                                 } else {
                                     app.stats_popup = Some(crate::ui::stats_popup::StatsPopup::new());
                                 }
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
                             }
+                            KeyCode::F(7) => {
+                                // Ctrl+F7: Activity=Auto-scroll toggle
+                                if app.active_view == ActiveView::ActivityFeed {
+                                    app.activity_filter.auto_scroll = !app.activity_filter.auto_scroll;
+                                }
+                                app.flash_modifier_bar(ModifierBarState::Ctrl);
+                            }
+                            KeyCode::F(8) => {
+                                // Ctrl+F8: Activity=Gantt toggle, Terminals=Scroll back
+                                match app.active_view {
+                                    ActiveView::ActivityFeed => {
+                                        app.activity_filter.timeline_mode = !app.activity_filter.timeline_mode;
+                                    }
+                                    ActiveView::Terminals => {
+                                        if app.terminal_manager.as_ref().is_some_and(|m| !m.terminals.is_empty()) {
+                                            app.terminal_input_mode = TerminalInputMode::ScrollBack;
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                                app.flash_modifier_bar(ModifierBarState::Ctrl);
+                            }
                             KeyCode::F(_) => {
-                                // Ctrl+F-keys: flash the layer for discovery
+                                // Other Ctrl+F-keys: flash the layer for discovery
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
                             }
                             // Fall through to existing Ctrl+key handlers below
@@ -579,29 +611,6 @@ fn run_app(
                     }
                     // ── Base F-key layer (no modifier) ───────────────
                     else {
-                    // ── Activity Feed keys (View 6) ──
-                    if app.active_view == ActiveView::ActivityFeed {
-                        match key.code {
-                            KeyCode::Char('t') => { app.activity_cycle_terminal_filter(); continue; }
-                            KeyCode::Char('e') => { app.activity_cycle_event_filter(); continue; }
-                            KeyCode::Char('f') => { app.activity_cycle_tool_filter(); continue; }
-                            KeyCode::Char('a') => { app.activity_filter.auto_scroll = !app.activity_filter.auto_scroll; continue; }
-                            KeyCode::Char('g') => { app.activity_filter.timeline_mode = !app.activity_filter.timeline_mode; continue; }
-                            KeyCode::Up | KeyCode::Char('k') => {
-                                if !app.activity_filter.auto_scroll {
-                                    app.activity_scroll = app.activity_scroll.saturating_sub(1);
-                                }
-                                continue;
-                            }
-                            KeyCode::Down | KeyCode::Char('j') => {
-                                if !app.activity_filter.auto_scroll {
-                                    app.activity_scroll = app.activity_scroll.saturating_add(1);
-                                }
-                                continue;
-                            }
-                            _ => {} // Fall through to default handling
-                        }
-                    }
                     match (key.modifiers, key.code) {
                         // Quit (q and F10 show confirmation — Esc never quits)
                         (_, KeyCode::Char('q')) | (_, KeyCode::F(10)) => {
@@ -626,34 +635,54 @@ fn run_app(
                         // Search
                         (_, KeyCode::F(3)) => app.open_search(),
 
-                        // New worktree
-                        (_, KeyCode::F(4)) => app.open_create_popup(),
+                        // F4: context-sensitive — Terminals=Layout cycle, others=New worktree
+                        (_, KeyCode::F(4)) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_layout = app.terminal_layout.next();
+                            } else {
+                                app.open_create_popup();
+                            }
+                        }
 
                         // Refresh
                         (_, KeyCode::F(5)) => app.refresh(),
 
-                        // Cleanup worktrees
-                        (_, KeyCode::F(6)) => app.open_cleanup_popup(),
-
-                        // Documents & History (right pane shortcuts)
-                        (_, KeyCode::Char('d')) => {
-                            if app.active_view == ActiveView::Terminals {
-                                // Dismiss exited terminal
-                                let is_exited = app
-                                    .terminal_manager
-                                    .as_ref()
-                                    .and_then(|m| m.focused_terminal())
-                                    .is_some_and(|t| {
-                                        matches!(t.status, terminal::TerminalStatus::Exited(_))
-                                    });
-                                if is_exited {
-                                    app.terminal_dismiss_focused();
+                        // F6: context-sensitive — Tasks=Docs (or Open if in DocList), Terminals=Dismiss, others=Cleanup worktrees
+                        (_, KeyCode::F(6)) => {
+                            match app.active_view {
+                                ActiveView::Tasks => {
+                                    match &app.detail_mode {
+                                        DetailMode::DocList { .. } => app.detail_open_doc(),
+                                        _ => app.enter_doc_list(),
+                                    }
                                 }
-                            } else {
-                                app.enter_doc_list();
+                                ActiveView::Terminals => {
+                                    let is_exited = app
+                                        .terminal_manager
+                                        .as_ref()
+                                        .and_then(|m| m.focused_terminal())
+                                        .is_some_and(|t| matches!(t.status, terminal::TerminalStatus::Exited(_)));
+                                    if is_exited {
+                                        app.terminal_dismiss_focused();
+                                    }
+                                }
+                                _ => app.open_cleanup_popup(),
                             }
                         }
-                        (_, KeyCode::Char('h')) => app.enter_history(),
+
+                        // F7: context-sensitive — Tasks=History/Back, others=Attention
+                        (_, KeyCode::F(7)) => {
+                            match app.active_view {
+                                ActiveView::Tasks => {
+                                    match &app.detail_mode {
+                                        DetailMode::Overview => app.enter_history(),
+                                        _ => app.detail_back(),
+                                    }
+                                }
+                                _ => app.terminal_focus_next_attention(),
+                            }
+                        }
+
 
                         // Tree: expand/collapse repo (Enter relaunch exited terminal in Terminals view)
                         (_, KeyCode::Enter) => {
@@ -678,7 +707,7 @@ fn run_app(
                                 app.tree_toggle();
                             }
                         }
-                        (_, KeyCode::Right) | (_, KeyCode::Char('l')) => {
+                        (_, KeyCode::Right) => {
                             if app.active_view == ActiveView::Terminals {
                                 app.terminal_layout = app.terminal_layout.next();
                             } else {
@@ -711,17 +740,6 @@ fn run_app(
 
                         // Pane focus
                         (_, KeyCode::Tab) => app.toggle_focus(),
-
-                        // View switching (number keys)
-                        (_, KeyCode::Char('1')) => app.set_view(ActiveView::Tasks),
-                        (_, KeyCode::Char('2')) => app.set_view(ActiveView::BeadsIssues),
-                        (_, KeyCode::Char('3')) => app.set_view(ActiveView::Config),
-                        (_, KeyCode::Char('4')) => app.set_view(ActiveView::CostSummary),
-                        (_, KeyCode::Char('5')) => app.set_view(ActiveView::Terminals),
-                        (_, KeyCode::Char('6')) => app.set_view(ActiveView::ActivityFeed),
-
-                        // Jump to next terminal needing attention
-                        (_, KeyCode::F(7)) => app.terminal_focus_next_attention(),
 
                         // Permission queue
                         (_, KeyCode::F(8)) => app.open_permission_popup(),

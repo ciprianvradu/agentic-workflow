@@ -48,7 +48,8 @@ src/
     ├── config_view.rs# View 3: config cascade display
     ├── cost_view.rs  # View 4: cost summary from workflow state
     ├── terminal_view.rs # View 5: embedded terminal multiplexer (list panel + PTY output + mouse hit rects)
-    ├── status_bar.rs # Bottom: view tabs + contextual keybinding hints + aggregate stats
+    ├── keybindings.rs # F-key binding registry: single source of truth for (view, sub_context, modifier) -> [FKeyBinding; 10]
+    ├── status_bar.rs # Bottom: view tabs + registry-driven F-key bar + aggregate stats
     ├── launch_popup.rs # F2 popup: terminal + AI host selection
     ├── permission_popup.rs # F8 popup: permission queue for pending approvals
     ├── create_popup.rs # F4 popup: multi-step worktree creation wizard
@@ -81,11 +82,11 @@ src/
 
 ### Detail Pane Modes
 ```
-Overview ──d──> DocList ──Enter──> DocReader
+Overview ──F6──> DocList ──Enter──> DocReader
     │                      │            │
     │<─────Esc────────────Esc──────Esc──┘
     │
-    │──h──> History
+    │──F7──> History
     │          │
     │<───Esc───┘
 ```
@@ -285,7 +286,7 @@ The event-loop poll timeout in `main.rs` is reduced to **50ms** when the Termina
 | `Tiled4` | Four terminals in 2x2 grid + 15-col crew list. |
 | `Stacked` | Up to 5 terminals stacked vertically + 20-col crew list. |
 
-Cycle with `l` / `Right` in Normal mode. Layout cannot be cycled while in TerminalFocused mode (all keys go to PTY). Persists from `terminal_layout` setting.
+Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused mode (all keys go to PTY). Persists from `terminal_layout` setting.
 
 #### Terminal View Key Bindings (View 5)
 
@@ -297,10 +298,11 @@ Cycle with `l` / `Right` in Normal mode. Layout cannot be cycled while in Termin
 | `↓` / `j` | Focus next terminal |
 | `F9` / `F12` | Enter `TerminalFocused` mode (running terminal required) |
 | `Enter` (exited) | Relaunch the exited terminal |
-| `d` / `Delete` (exited) | Dismiss (remove) the exited terminal |
-| `D` | Dismiss ALL exited terminals at once |
-| `l` / `Right` | Cycle layout mode (focused → tiled-2 → tiled-4 → stacked) |
-| `[` | Enter scroll-back mode |
+| `Delete` (exited) | Dismiss (remove) the exited terminal |
+| `F4` | Cycle layout mode (focused → tiled-2 → tiled-4 → stacked) |
+| `F6` (exited) | Dismiss the focused exited terminal |
+| `Ctrl+F4` | Dismiss ALL exited terminals at once |
+| `Ctrl+F8` | Enter scroll-back mode |
 | `F7` | Jump focus to next terminal needing attention |
 | `F8` | Open Permission Queue popup |
 
@@ -457,19 +459,30 @@ Two-line status bar:
 - **Line 1**: View tabs + contextual navigation hints + aggregate stats
 - **Line 2**: Context-adaptive F-key bar with modifier layers
 
-#### F-Key Bar Layers
+#### F-Key Bar: Context-Sensitive Keybinding Registry
 
-The bar supports three modifier layers, triggered by holding Shift or Ctrl:
+The F-key bar is driven by a **single keybinding registry** (`src/ui/keybindings.rs`). The `bindings_for(BindingContext)` function returns `[FKeyBinding; 10]` for any combination of `(ActiveView, SubContext, ModifierBarState)`. Both the status bar renderer and key routing in `main.rs` consume this registry, ensuring the bar display and actual key behavior are always in sync.
 
-**Base layer (no modifier):**
-`F1Help  F2Launch  F3Search  F4New  F5Rfrsh  F6Clean  F7Attn  F8Perms  F9Focus  F10Quit`
-(F9 Focus label only shows in Terminals view Normal mode; otherwise dimmed placeholder. F12 also enters focus.)
+**Global constants (same in every view):** F1=Help, F2=Launch, F3=Search, F5=Refresh, F10=Quit
 
-**Shift layer (view switching + detail):**
-`SHIFT▶ S+F1Tasks  S+F2Issues  S+F3Config  S+F4Cost  S+F5Terms  S+F6Docs  S+F7Hist`
+**Shift layer (always view switching):**
+`SHIFT▶ S+F1Tasks  S+F2Issues  S+F3Config  S+F4Cost  S+F5Terms  S+F6Actvty`
 
-**Ctrl layer (reserved for expansion):**
-`CTRL▶` (all F-key slots empty/reserved)
+**Per-view base layer (contextual slots F4, F6, F7, F8, F9):**
+- **Tasks**: F4=New, F6=Docs, F7=History, F8=Permissions
+- **Tasks (DocList)**: F6=Open, F7=Back, F8=Permissions
+- **Tasks (DocReader/History)**: F7=Back, F8=Permissions
+- **Issues/Config/Cost**: F8=Permissions (minimal)
+- **Terminals**: F4=Layout, F6=Dismiss, F7=Attention, F8=Permissions, F9=Focus
+- **Activity Feed**: Global keys only on base layer
+
+**Per-view Ctrl layer:**
+- **Terminals**: Ctrl+F4=Dismiss All, Ctrl+F5=Live, Ctrl+F6=Stats, Ctrl+F8=ScrollBack
+- **Activity Feed**: Ctrl+F4=Crew filter, Ctrl+F5=Event filter, Ctrl+F6=Tool filter, Ctrl+F7=Auto-scroll, Ctrl+F8=Gantt
+
+**Adaptive label width:** When terminal width >= 130 columns, the bar shows long labels (e.g. "F6 Documents", "F4 Layout"). Below 130, compact 9-char labels are used (e.g. "F6Docs", "F4Layot").
+
+**View switching:** Number keys 1-6 have been removed. Shift+F1-F6 is the sole mechanism for switching views.
 
 **Modifier detection:** At startup, crew-board enables the kitty keyboard protocol via `PushKeyboardEnhancementFlags` if supported. With kitty protocol, modifier-only key presses (Shift alone, Ctrl alone) are detected and the bar updates in real-time. On terminals without kitty support (e.g., Windows Terminal), pressing a Shift+F-key or Ctrl+F-key flashes the corresponding layer for 2 seconds, showing what else is available.
 
@@ -504,7 +517,7 @@ The "5:Terms" tab in line 1 carries a status badge when terminals need attention
 
 ### Activity Feed (View 6)
 
-View 6 (`6` key) shows a real-time stream of hook events from all embedded terminals. The view has two areas: a filter bar at the top and an event table below.
+View 6 (Shift+F6) shows a real-time stream of hook events from all embedded terminals. The view has two areas: a filter bar at the top and an event table below.
 
 **Filter bar** shows active filters, auto-scroll state, and global stats (total tool calls, errors, active terminals). Key hints appear on the right.
 
@@ -514,11 +527,11 @@ View 6 (`6` key) shows a real-time stream of hook events from all embedded termi
 
 | Key | Action |
 |-----|--------|
-| `t` | Cycle terminal filter (All -> T1 -> T2 -> ... -> All) |
-| `e` | Cycle event type filter (All -> PreToolUse -> PostToolUse -> ... -> All) |
-| `f` | Cycle tool name filter (All -> Edit -> Bash -> ... -> All) |
-| `a` | Toggle auto-scroll (on/off) |
-| `g` | Toggle Gantt timeline view |
+| `Ctrl+F4` | Cycle terminal filter (All -> T1 -> T2 -> ... -> All) |
+| `Ctrl+F5` | Cycle event type filter (All -> PreToolUse -> PostToolUse -> ... -> All) |
+| `Ctrl+F6` | Cycle tool name filter (All -> Edit -> Bash -> ... -> All) |
+| `Ctrl+F7` | Toggle auto-scroll (on/off) |
+| `Ctrl+F8` | Toggle Gantt timeline view |
 | `Up` / `Down` | Manual scroll (when auto-scroll is off) |
 
 When auto-scroll is enabled (default), the table always shows the most recent events. When disabled, Up/Down keys scroll through the event history. A scrollbar appears when events exceed the visible area.
@@ -675,8 +688,9 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 1. Create `src/ui/new_view.rs` with `pub fn draw(frame, app, area)`
 2. Register in `src/ui/mod.rs` — add `pub mod` and dispatch in `draw()`
 3. Add variant to `ActiveView` enum in `app.rs`
-4. Add number key binding in `main.rs`
-5. Add tab label in `status_bar.rs`
+4. Add Shift+Fn view-switching binding in `main.rs`
+5. Add keybinding entries in `src/ui/keybindings.rs` (base layer + any Ctrl layer)
+6. Add tab label in `status_bar.rs`
 
 ## Adding a New Data Source
 
@@ -697,7 +711,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **`F4`/`F6` key scope**: Only works on Repo rows — `open_create_popup()` and `open_cleanup_popup()` return early on Task rows.
 - **Search index free functions**: `build_search_index()` and `build_search_entry()` are module-level free functions, not `impl App` methods. This is required because they are called from the background thread closure (which cannot capture `&self`).
 - **`LoadedTask` construction sites**: When adding fields to `LoadedTask`, update all construction sites: 3 in `load_tasks()` (metadata fallback, normal state.json, gap-fill), plus the corresponding sites in `load_tasks_incremental()`. The `state_mtime` field must be `Some(mtime)` for normal tasks and `None` for archived/fallback tasks.
-- **Terminal `d` key conflict**: The `d` key normally opens the doc list (`enter_doc_list()`). In the Terminals view it dismisses an exited terminal instead. The event loop checks `app.active_view == ActiveView::Terminals` before deciding which action to take.
+- **Letter commands moved to Fn keys**: `d` (docs) is now F6 in Tasks view. `h` (history) is now F7. `l` (layout cycle) is now F4 in Terminals view. `d`/`D` (dismiss) are now F6/Ctrl+F4 in Terminals view. Activity Feed filters (`t`,`e`,`f`,`a`,`g`) are now Ctrl+F4-F8.
 - **Terminal `Enter` key conflict**: In the Terminals view `Enter` only relaunches exited terminals (not running ones). `F9`/`F12` is the focus toggle. Outside the Terminals view, `Enter` expands/collapses tree rows.
 - **`poll_terminals()` auto-exits focus mode**: If the user is in `TerminalFocused` mode and the terminal exits, `poll_terminals()` automatically resets `terminal_input_mode` to `Normal`. No manual key press is needed.
 - **Attention cleared on input**: `TerminalManager::send_input()` always sets `attention_signal` to `None`. This means typing in a terminal immediately clears any attention badge, even if the screen still shows the prompt.
@@ -724,7 +738,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Terminal search in scroll-back**: `/` enters search mode, query is matched case-insensitively against visible screen rows. Matches are stored as scroll offsets; `n`/`N` navigate between them. Search state (`terminal_search_query`, `terminal_search_matches`) persists until scroll-back is exited.
 - **Crew summary line**: In Focused layout with 2+ terminals, a one-line summary appears above the terminal panel showing all terminals' status icons and short IDs. Uses `●` (running), `◆` (attention), `✓`/`✗` (exited ok/failed).
 - **Phase+progress in terminal title**: `lookup_task_phase()` scans `app.repos` for a task matching the terminal's ID and appends `[phase]` or `[phase N%]` to the border title of running terminals.
-- **`D` key vs `d` key**: `D` (shift+d) dismisses ALL exited terminals at once via `dismiss_all_exited()`. Lowercase `d` dismisses only the focused exited terminal.
+- **Terminal dismiss via Fn keys**: F6 dismisses the focused exited terminal. Ctrl+F4 dismisses ALL exited terminals at once via `dismiss_all_exited()`.
 - **Hook server port is dynamic**: `HookServer::start()` binds to `127.0.0.1:0`, so the OS assigns the port. The port is stored in `App.hook_server.port` and written into each terminal's `settings.local.json` and env vars at spawn time. There is no fixed port to configure.
 - **`settings.local.json` cleanup is best-effort**: On terminal dismiss or app exit, crew-board removes the file at `{worktree}/.claude/settings.local.json`. If crew-board crashes, the file is left behind and must be removed manually. It does not persist any user settings — it is solely crew-board's hook injection file.
 - **Hook events only flow for Claude Code terminals**: `generate_hook_config()` checks the `command` value and only writes hook config when the command is `claude`. Non-Claude terminals (Copilot, Gemini, OpenCode) get no hook injection and `hook_state` remains `None`.

@@ -6,6 +6,7 @@ pub mod cost_view;
 pub mod create_popup;
 pub mod detail_pane;
 pub mod help_popup;
+pub mod keybindings;
 pub mod launch_popup;
 pub mod permission_popup;
 pub mod search_popup;

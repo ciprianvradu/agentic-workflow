@@ -333,7 +333,19 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         task_id=task_id,
     )
 
-    # 2. Complete phase
+    # 2. Complete phase — ensure the agent that just finished is tracked
+    #    workflow_complete_phase() only completes state["phase"], which may differ
+    #    from the agent (e.g., custom/specialized agents like accessibility_reviewer
+    #    may run while state["phase"] still points to a different phase).
+    task_dir = find_task_dir(task_id)
+    if task_dir:
+        state = _load_state(task_dir)
+        phases_completed = state.get("phases_completed", [])
+        agent_normalized = agent.lower().replace("-", "_")
+        if agent_normalized not in [p.lower().replace("-", "_") for p in phases_completed]:
+            phases_completed.append(agent)
+            state["phases_completed"] = phases_completed
+            _save_state(task_dir, state)
     complete_result = workflow_complete_phase(task_id=task_id)
 
     # 3. Record cost if provided

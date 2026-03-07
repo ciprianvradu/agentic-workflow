@@ -333,6 +333,9 @@ pub struct App {
     pub detail_scroll: u16,
     /// Max scroll offset computed during rendering (clamping target).
     pub detail_scroll_max: Cell<u16>,
+    /// True when the terminal is wide enough for long F-key labels (>= 130 cols).
+    /// Updated each draw cycle by `status_bar::draw()`.
+    pub wide_labels: Cell<bool>,
 
     // Detail pane state
     pub detail_mode: DetailMode,
@@ -665,6 +668,7 @@ impl App {
             last_refresh: std::time::Instant::now(),
             detail_scroll: 0,
             detail_scroll_max: Cell::new(0),
+            wide_labels: Cell::new(false),
             detail_mode: DetailMode::Overview,
             cached_artifacts: Vec::new(),
             cached_task_dir: None,

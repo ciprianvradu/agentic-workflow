@@ -43,17 +43,6 @@ fn to_win_path(path: &Path) -> String {
     s.into_owned()
 }
 
-/// Returns a path suitable for passing to the git command.
-/// When using git.exe, converts WSL paths to Windows paths.
-#[cfg(test)]
-fn git_path(git: &str, path: &Path) -> String {
-    if git == "git.exe" {
-        to_win_path(path)
-    } else {
-        path.to_string_lossy().into_owned()
-    }
-}
-
 /// Preview of what will be created (shown before executing).
 #[derive(Clone)]
 pub struct WorktreePreview {

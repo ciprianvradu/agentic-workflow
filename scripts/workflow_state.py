@@ -344,7 +344,11 @@ class WorkflowState:
             Tuple of (is_complete, missing_phase or None)
         """
         # Check explicit completion status first
-        if self._state.get("status") == "completed":
+        if self._state.get("status") in ("completed", "complete"):
+            return True, None
+
+        # Phase set to "complete" means the workflow finished
+        if self.phase in ("complete", "completed"):
             return True, None
 
         completed = set(normalize_phase(p) for p in self.phases_completed)

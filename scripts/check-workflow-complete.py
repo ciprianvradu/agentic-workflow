@@ -42,32 +42,75 @@ def check_env_skip():
 def _find_session_task():
     """Find the task for THIS session only.
 
-    1. .tasks/.active_task file (written by crew_orchestrator on init/resume)
-    2. Worktree detection (match cwd to worktree paths)
-    3. None — no crew workflow in this session
+    1. Worktree detection (match cwd to worktree paths) — most reliable
+    2. .tasks/.active_task file (written by crew_orchestrator on init/resume)
+    3. Scan all task dirs for recently active incomplete workflows
+    4. None — no crew workflow in this session
+
+    Note: .active_task can be stale when multiple workflows run in parallel
+    (each init overwrites it). The scan fallback handles this.
     """
     tasks_dir = _resolve_tasks_dir()
 
-    # 1. Check .active_task file
-    active_file = tasks_dir / ".active_task"
-    if active_file.exists():
-        try:
-            task_id = active_file.read_text().strip()
-            if task_id:
-                task_dir = tasks_dir / task_id
-                if task_dir.exists() and (task_dir / "state.json").exists():
-                    return str(task_dir)
-        except OSError:
-            pass
-
-    # 2. Worktree detection
+    # 1. Worktree detection (most reliable — tied to cwd)
     wt_task_id = _detect_worktree_task_id(tasks_dir)
     if wt_task_id:
         task_dir = tasks_dir / wt_task_id
         if task_dir.exists():
             return str(task_dir)
 
-    # 3. No crew workflow in this session
+    # 2. Check .active_task file
+    active_file = tasks_dir / ".active_task"
+    if active_file.exists():
+        try:
+            task_id = active_file.read_text().strip()
+            if task_id:
+                task_dir = tasks_dir / task_id
+                state_file = task_dir / "state.json"
+                if state_file.exists():
+                    # Validate task is actually incomplete before returning
+                    try:
+                        with open(state_file) as f:
+                            state = json.load(f)
+                        status = state.get("status", "")
+                        if status not in ("completed", "complete"):
+                            return str(task_dir)
+                    except (json.JSONDecodeError, OSError):
+                        pass
+        except OSError:
+            pass
+
+    # 3. Scan for any recently active incomplete workflow in this .tasks/ dir
+    #    This handles the case where .active_task was overwritten by another session
+    if tasks_dir.exists():
+        import time
+        candidates = []
+        for entry in tasks_dir.iterdir():
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+            state_file = entry / "state.json"
+            if not state_file.exists():
+                continue
+            try:
+                mtime = state_file.stat().st_mtime
+                # Only consider tasks modified in the last 2 hours
+                if time.time() - mtime > 7200:
+                    continue
+                with open(state_file) as f:
+                    state = json.load(f)
+                status = state.get("status", "")
+                phase = state.get("phase", "")
+                if status in ("completed", "complete") or not phase:
+                    continue
+                candidates.append((mtime, str(entry)))
+            except (json.JSONDecodeError, OSError):
+                continue
+        if candidates:
+            # Return the most recently modified incomplete task
+            candidates.sort(reverse=True)
+            return candidates[0][1]
+
+    # 4. No crew workflow in this session
     return None
 
 

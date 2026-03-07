@@ -2,6 +2,7 @@ use crate::app::{
     ActiveView, App, CleanupStep, CreateStep, DetailMode, FocusPane, LaunchStep,
     ModifierBarState, TerminalInputMode,
 };
+use crate::ui::keybindings::{self, BindingContext, FKeyBinding};
 use crate::ui::styles;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -131,18 +132,21 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_fkey_bar(frame: &mut Frame, app: &App, area: Rect) {
-    // When a popup is active, show popup-specific hints in the bar
+    // Update wide-label flag from current terminal width.
+    app.wide_labels.set(area.width >= 130);
+    let wide = app.wide_labels.get();
+
+    // When a popup is active, show popup-specific hints.
     if let Some(hints) = popup_hints(app) {
         let line = Line::from(vec![Span::styled(
             hints,
             Style::default().fg(Color::Black).bg(Color::Cyan),
         )]);
-        let paragraph = Paragraph::new(line);
-        frame.render_widget(paragraph, area);
+        frame.render_widget(Paragraph::new(line), area);
         return;
     }
 
-    // Terminal mode-specific bars (override modifier layers)
+    // Terminal mode-specific bars (override modifier layers).
     if app.active_view == ActiveView::Terminals {
         match app.terminal_input_mode {
             TerminalInputMode::TerminalFocused | TerminalInputMode::PrefixPending => {
@@ -157,75 +161,83 @@ fn draw_fkey_bar(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // Modifier layer bars
-    match app.modifier_bar_state {
-        ModifierBarState::Normal => draw_base_fkey_bar(frame, app, area),
-        ModifierBarState::Shift => draw_shift_fkey_bar(frame, area),
-        ModifierBarState::Ctrl => draw_ctrl_fkey_bar(frame, app, area),
-        ModifierBarState::Alt => draw_reserved_layer(frame, area, "ALT"),
-        ModifierBarState::ShiftCtrl => draw_reserved_layer(frame, area, "S+C"),
-        ModifierBarState::AltShift => draw_reserved_layer(frame, area, "A+S"),
-        ModifierBarState::CtrlAlt => draw_reserved_layer(frame, area, "C+A"),
+    // Reserved modifier layers (Alt, Shift+Ctrl, etc.) keep their current rendering.
+    use ModifierBarState::*;
+    if matches!(app.modifier_bar_state, Alt | ShiftCtrl | AltShift | CtrlAlt) {
+        let label = match app.modifier_bar_state {
+            Alt => "ALT",
+            ShiftCtrl => "S+C",
+            AltShift => "A+S",
+            CtrlAlt => "C+A",
+            _ => unreachable!(),
+        };
+        draw_reserved_layer(frame, area, label);
+        return;
     }
+
+    // All other states (Normal, Shift, Ctrl) → registry.
+    let sub_ctx = keybindings::sub_context_for(app.active_view, &app.detail_mode);
+    let ctx = BindingContext {
+        view: app.active_view,
+        sub_ctx,
+        modifier: app.modifier_bar_state,
+        terminal_mode: app.terminal_input_mode,
+    };
+    let bindings = keybindings::bindings_for(&ctx);
+    draw_registry_bar(frame, area, &bindings, wide, app.modifier_bar_state);
 }
 
-/// Base F-key bar (no modifier held).
-fn draw_base_fkey_bar(frame: &mut Frame, app: &App, area: Rect) {
+/// Render the Fn bar from a registry binding array.
+fn draw_registry_bar(
+    frame: &mut Frame,
+    area: Rect,
+    bindings: &[FKeyBinding; 10],
+    wide: bool,
+    modifier: ModifierBarState,
+) {
     let mut spans: Vec<Span> = Vec::new();
-    spans.push(indicator_pad());
-    spans.extend(fkey_cell(1, "Help"));
-    spans.extend(fkey_cell(2, "Launch"));
-    spans.extend(fkey_cell(3, "Search"));
-    spans.extend(fkey_cell(4, "New"));
-    spans.extend(fkey_cell(5, "Rfrsh"));
-    spans.extend(fkey_cell(6, "Clean"));
-    spans.extend(fkey_cell(7, "Attn"));
-    spans.extend(fkey_cell(8, "Perms"));
-    if app.active_view == ActiveView::Terminals
-        && app.terminal_input_mode == TerminalInputMode::Normal
-    {
-        spans.extend(fkey_cell(9, "Focus"));
-    } else {
-        spans.extend(fkey_cell_empty(9));
+
+    // Indicator: blank pad for base layer, coloured label for modifier layers.
+    match modifier {
+        ModifierBarState::Shift => spans.push(layer_indicator_fixed("SHIFT")),
+        ModifierBarState::Ctrl  => spans.push(layer_indicator_fixed("CTRL")),
+        _                       => spans.push(indicator_pad()),
     }
-    spans.extend(fkey_cell(10, "Quit"));
-    let paragraph = Paragraph::new(Line::from(spans));
-    frame.render_widget(paragraph, area);
-}
 
-/// Shift+F-key bar (view switching layer).
-fn draw_shift_fkey_bar(frame: &mut Frame, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(layer_indicator_fixed("SHIFT"));
-    spans.extend(fkey_cell(1, "Tasks"));
-    spans.extend(fkey_cell(2, "Issues"));
-    spans.extend(fkey_cell(3, "Config"));
-    spans.extend(fkey_cell(4, "Cost"));
-    spans.extend(fkey_cell(5, "Terms"));
-    spans.extend(fkey_cell(6, "Docs"));
-    spans.extend(fkey_cell(7, "Hist"));
-    spans.extend(fkey_cell_empty(8));
-    spans.extend(fkey_cell_empty(9));
-    spans.extend(fkey_cell_empty(10));
-    let paragraph = Paragraph::new(Line::from(spans));
-    frame.render_widget(paragraph, area);
-}
-
-/// Ctrl+F-key bar (admin/context layer).
-fn draw_ctrl_fkey_bar(frame: &mut Frame, _app: &App, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(layer_indicator_fixed("CTRL"));
-    for n in 1..=10 {
-        if n == 5 {
-            spans.extend(fkey_cell(n, "Live"));
-        } else if n == 6 {
-            spans.extend(fkey_cell(n, "Stats"));
+    for b in bindings {
+        if b.active {
+            let label = if wide { b.label_long } else { b.label_short };
+            if wide {
+                spans.extend(fkey_cell_wide(b.slot, label));
+            } else {
+                spans.extend(fkey_cell(b.slot, label));
+            }
         } else {
-            spans.extend(fkey_cell_empty(n));
+            spans.extend(fkey_cell_empty(b.slot));
         }
     }
-    let paragraph = Paragraph::new(Line::from(spans));
-    frame.render_widget(paragraph, area);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Wide F-key cell for terminals >= 130 cols (up to 20 chars total per cell).
+fn fkey_cell_wide(num: u8, label: &str) -> Vec<Span<'static>> {
+    // Wide cell: "F{n} {label:<14} " — F-number + space + 14-char label + gap.
+    let fnum = format!("F{}", num);
+    let padded = format!("{:<14}", label);
+    vec![
+        Span::styled(
+            fnum,
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {}", padded),
+            Style::default().fg(Color::Black).bg(Color::Cyan),
+        ),
+        Span::styled(" ", Style::default().bg(Color::Black)),
+    ]
 }
 
 /// Bar shown when in TerminalFocused mode (input goes to PTY).
@@ -272,7 +284,7 @@ fn draw_terminal_focused_bar(frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::styled(
-            "F2",
+            "S+F2",
             Style::default()
                 .fg(Color::White)
                 .bg(Color::DarkGray)
@@ -283,7 +295,7 @@ fn draw_terminal_focused_bar(frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::styled(
-            "F3",
+            "S+F3",
             Style::default()
                 .fg(Color::White)
                 .bg(Color::DarkGray)
@@ -294,7 +306,7 @@ fn draw_terminal_focused_bar(frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::Black).bg(Color::Cyan),
         ),
         Span::styled(
-            "F4",
+            "S+F4",
             Style::default()
                 .fg(Color::White)
                 .bg(Color::DarkGray)
