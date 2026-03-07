@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 use tui_input::Input;
 
 /// Send a desktop notification (best-effort, non-blocking).
+#[allow(unused_variables)]
 fn send_desktop_notification(title: &str, body: &str) {
     let title = title.to_string();
     let body = body.to_string();
