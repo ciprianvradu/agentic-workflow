@@ -160,7 +160,7 @@ TOOLS = [
                 "to_phase": {
                     "type": "string",
                     "description": "Target phase to transition to",
-                    "enum": ["architect", "planner", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"]
+                    "enum": ["architect", "planner", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"]
                 }
             },
             "required": ["to_phase"]
@@ -271,7 +271,7 @@ TOOLS = [
                 "to_phase": {
                     "type": "string",
                     "description": "Target phase to check",
-                    "enum": ["architect", "planner", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"]
+                    "enum": ["architect", "planner", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"]
                 }
             },
             "required": ["to_phase"]
@@ -458,7 +458,7 @@ TOOLS = [
                 "source": {
                     "type": "string",
                     "description": "Agent that raised the concern",
-                    "enum": ["architect", "developer", "reviewer", "skeptic", "feedback"]
+                    "enum": ["architect", "developer", "reviewer", "skeptic"]
                 },
                 "severity": {
                     "type": "string",
@@ -840,7 +840,7 @@ TOOLS = [
             "properties": {
                 "agent": {
                     "type": "string",
-                    "description": "Agent name (architect, developer, reviewer, skeptic, implementer, feedback, technical_writer)"
+                    "description": "Agent name (architect, developer, reviewer, skeptic, implementer, technical_writer)"
                 },
                 "task_id": {
                     "type": "string",

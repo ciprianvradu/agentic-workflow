@@ -74,7 +74,7 @@ When hooks are configured in the project (e.g., PostToolUse, Stop hooks), use th
 - **After running tests**: If tests fail, analyze failures and fix before moving to the next step.
 - **Build errors**: Treat hook feedback as authoritative. Fix issues inline rather than flagging for later review.
 
-Hooks replace the need for a separate Reviewer pass on routine tasks. The Reviewer agent in "reviewed" and "thorough" modes catches architectural issues that hooks cannot — but for formatting, linting, and type errors, hooks are faster and more reliable.
+Hooks replace the need for a separate Reviewer pass on routine tasks. The Reviewer agent in "standard" and "thorough" modes catches architectural issues that hooks cannot — but for formatting, linting, and type errors, hooks are faster and more reliable.
 
 ## When to STOP and Report
 

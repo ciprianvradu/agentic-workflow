@@ -25,7 +25,7 @@ Complex development tasks require multiple perspectives: architecture considerat
 
 - **Multi-agent architecture** - 8 specialized agents for different concerns (including the new planner agent)
 - **Single agent consultation** - Quick `/crew ask` for second opinions without full workflow
-- **Workflow modes** - Full, turbo, fast, minimal modes for different task complexity (`--mode`)
+- **Workflow modes** - Quick, standard, thorough modes for different task complexity (`--mode`)
 - **Human checkpoints** - Control points for review and approval at each phase
 - **Loop mode** - Autonomous iteration until tests/build pass (Ralph Wiggum-style)
 - **Effort levels** - Per-agent thinking depth calibration mapped to Anthropic API parameters
@@ -240,7 +240,7 @@ For small tweaks, you can always make direct edits without using the crew.
 
 | Agent | Phase | Role | Output |
 |-------|-------|------|--------|
-| **Planner** | Planning (micro mode) | Combined architect+developer for simple tasks — brief plan, no separate review | Compact implementation plan |
+| **Planner** | Planning (quick mode) | Combined architect+developer for simple tasks — brief plan, no separate review | Compact implementation plan |
 | **Architect** | Planning | System design, boundaries, risks, integration points | Architectural analysis |
 | **Developer** | Planning | Detailed step-by-step implementation plan | `TASK_XXX.md` with checkboxes |
 | **Reviewer** | Planning | Plan validation, security review, pattern compliance | Review findings |
@@ -313,7 +313,7 @@ Main command for starting or resuming workflows.
 
 | Option | Description |
 |--------|-------------|
-| `--mode <mode>` | Workflow mode: `full`, `turbo`, `fast`, `minimal`, `auto` (default: auto) |
+| `--mode <mode>` | Workflow mode: `quick`, `standard`, `thorough`, `auto` (default: auto) |
 | `--loop-mode` | Enable autonomous looping until verification passes |
 | `--no-loop` | Disable loop mode |
 | `--max-iterations <n>` | Max attempts per step (default: 10) |
@@ -556,17 +556,17 @@ beads:
 
 ```yaml
 workflow_modes:
-  default: auto                  # auto | full | turbo | fast | minimal
+  default: auto                  # auto | quick | standard | thorough
 ```
 
 | Mode | Agents | Use Case | Est. Cost |
 |------|--------|----------|-----------|
-| **full** | All 8 (Arch, Dev, Rev, Skeptic, Impl, Feedback, TW, Planner) | Complex features, critical changes | $0.50+ |
-| **turbo** | Developer, Implementer, Technical Writer | Standard features (Opus 4.6 single-pass) | $0.15 |
-| **fast** | Skip Skeptic and Feedback | Standard changes needing review | $0.25 |
-| **minimal** | Developer, Implementer, Technical Writer | Simple fixes, typos | $0.10 |
-| **micro** | Planner, Implementer | Trivial one-shot changes | $0.05 |
+| **quick** | Implementer only | Typos, one-line fixes, trivial changes | $0.03 |
+| **standard** | Architect, Developer, Implementer, Quality Guard | Routine features, fixes, refactors | $0.12 |
+| **thorough** | All agents (Arch, Dev, Rev, Skeptic, Impl, QG, Feedback, TW) | Security, migrations, breaking changes | $0.40+ |
 | **auto** | Auto-detect based on task description | Default | varies |
+
+Legacy aliases (backward-compatible): `micro`/`minimal`/`turbo` map to standard, `fast`/`reviewed` map to standard, `full` maps to thorough.
 
 #### Effort Levels
 
@@ -574,19 +574,21 @@ Per-agent thinking depth, mapped to Anthropic API parameters (`thinking: {"type"
 
 ```yaml
 effort_levels:
-  full:
+  quick:
+    implementer: low
+  standard:
+    architect: high
+    developer: high
+    implementer: high
+    quality_guard: medium
+  thorough:
     architect: max               # Deep analysis with edge cases
     developer: max
     reviewer: high
     skeptic: max
     implementer: high
-    feedback: high
+    quality_guard: high
     technical_writer: medium
-  turbo:
-    developer: max
-    implementer: high
-    technical_writer: medium
-  # ... fast, minimal modes also defined
 ```
 
 Values: `low` | `medium` | `high` | `max` (`max` is Opus 4.6 only; other models cap at `high`).
@@ -1007,7 +1009,7 @@ All uninstallers preserve task state in `.tasks/`.
 | **MCP Tools** | 69 tools | 69 tools | 69 tools | 69 tools |
 | **State Management** | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` |
 | **Config Cascade** | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task |
-| **Workflow Modes** | full/turbo/fast/minimal/auto | full/turbo/fast/minimal/auto | full/turbo/fast/minimal/auto | full/turbo/fast/minimal/auto |
+| **Workflow Modes** | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto |
 | **Cost Tracking** | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown |
 | **Memory/Discoveries** | Persistent | Persistent | Persistent | Persistent |
 | **Orchestration** | `/crew` command (automated) | `/agent crew-orchestrator` (sub-agent chaining) | Autonomous routing (description-based) | `@crew` agent (@mention delegation) |

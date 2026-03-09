@@ -675,7 +675,7 @@ worktree:
 #
 # Conditions (all optional, omit for always-run):
 #   task_has: "keyword"            — task description contains keyword (case-insensitive)
-#   mode_in: [fast, full]          — only in certain workflow modes
+#   mode_in: [standard, thorough]  — only in certain workflow modes
 #   file_patterns: ["**/*.cpp"]    — file glob matching
 #   always: true                   — unconditional (explicit)
 #

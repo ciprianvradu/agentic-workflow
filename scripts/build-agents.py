@@ -59,6 +59,7 @@ UTILITY_AGENTS = {
     "crew-worktree",
     "crew-stats",
     "crew-status",
+    "implementer-loop-mode-ref",
 }
 
 # Gemini sub-agent tool restrictions per agent role

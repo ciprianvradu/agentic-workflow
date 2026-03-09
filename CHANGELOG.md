@@ -8,7 +8,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.8.0] - 2026-03-09
 
 ### Added
-- **Micro workflow mode** — auto-detected for typos, whitespace, spelling fixes; runs implementer only (~$0.03)
+- **Quick workflow mode** — auto-detected for typos, whitespace, spelling fixes; runs implementer only (~$0.03)
 - **Planner agent** — combined architect+developer for standard/turbo mode single-pass planning
 - **Unified config** — single `workflow-config.yaml` with essential settings at top and advanced settings below separator; loaded via 4-level cascade (global → project → task → CLI)
 - **Config caching** — `config_get_effective()` caches merged config with 5-minute TTL, invalidated by file mtime changes
@@ -26,7 +26,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - MCP enum validation rejecting `quality_guard` and `feedback` phase transitions
-- Auto-detection correctly routes "typo" tasks to micro mode instead of standard
+- Auto-detection correctly routes "typo" tasks to quick mode instead of standard
 
 ## [0.7.0] - 2026-03-02
 
