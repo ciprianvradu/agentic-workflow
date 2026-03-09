@@ -13,7 +13,7 @@ The hook:
 - Reads the Task tool input from stdin (JSON)
 - Finds the session-local task (.active_task → worktree → allow)
 - Checks the agent being spawned against current workflow state
-- Respects workflow modes (turbo/fast/minimal skip phases)
+- Respects workflow modes (quick/standard/thorough skip phases)
 - Allows single-agent consultations without blocking
 - Blocks invalid transitions (exit 2)
 - Allows valid transitions (exit 0)
@@ -49,7 +49,8 @@ AGENT_TO_PHASE = {
     "reviewer": "reviewer",
     "skeptic": "skeptic",
     "implementer": "implementer",
-    "feedback": "feedback",
+    "quality-guard": "quality_guard",
+    "quality_guard": "quality_guard",
     "technical-writer": "technical_writer",
     "technical_writer": "technical_writer",
     # Optional specialist agents — not part of the main pipeline

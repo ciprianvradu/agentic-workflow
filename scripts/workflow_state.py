@@ -6,7 +6,7 @@ Manages state for the enforced multi-agent workflow. State is stored in JSON fil
 within each task directory (.tasks/TASK_XXX/state.json).
 
 The workflow follows this phase order:
-    architect -> developer -> reviewer -> skeptic -> implementer -> technical_writer
+    architect -> developer -> reviewer -> skeptic -> implementer -> quality_guard -> technical_writer
 
 Usage:
     from workflow_state import WorkflowState
@@ -31,16 +31,15 @@ PHASE_ORDER = [
     "reviewer",
     "skeptic",
     "implementer",
-    "feedback",
+    "quality_guard",
     "technical_writer"
 ]
 
 REQUIRED_PHASES = [
     "architect",
     "developer",
-    "reviewer",
     "implementer",
-    "technical_writer"
+    "quality_guard"
 ]
 
 
@@ -144,9 +143,8 @@ class WorkflowState:
         """
         Check if transition to given phase is valid.
 
-        Respects workflow_mode.phases if set — in turbo mode the sequence
-        is developer→implementer→technical_writer, so skipping architect/
-        reviewer/skeptic is expected.
+        Respects workflow_mode.phases if set — in quick mode the sequence
+        is implementer only, so skipping other phases is expected.
 
         Returns:
             Tuple of (can_transition, reason)
@@ -337,7 +335,7 @@ class WorkflowState:
         """
         Check if workflow is complete (all required phases done).
 
-        Respects workflow_mode phases if set (turbo/fast/minimal skip some phases).
+        Respects workflow_mode phases if set (quick/standard skip some phases).
         Falls back to REQUIRED_PHASES for workflows without a mode.
 
         Returns:

@@ -205,7 +205,7 @@ def main():
         "reviewer": "Reviewer",
         "skeptic": "Skeptic",
         "implementer": "Implementer",
-        "feedback": "Feedback",
+        "quality_guard": "Quality Guard",
         "technical_writer": "Technical Writer",
         "technical-writer": "Technical Writer",
     }
