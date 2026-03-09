@@ -303,41 +303,16 @@ Accessibility isn't a feature - it's a requirement. 1 billion people have disabi
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save accessibility findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="Modal has no focus trap - keyboard users can tab outside")
-workflow_save_discovery(category="gotcha", content="Error messages only use color - add icon for colorblind users")
-workflow_save_discovery(category="pattern", content="Existing buttons use aria-describedby for help text")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | WCAG A/AA violations that must be fixed |
-| `gotcha` | Accessibility traps or confusing patterns |
-| `pattern` | Existing accessibility patterns to follow |
+Save WCAG A/AA violations that must be fixed, accessibility traps or confusing patterns, and existing accessibility patterns to follow.
 
 ---
 
 ## Completion Signals
 
-When your review is complete, output:
-```
-<promise>ACCESSIBILITY_REVIEWER_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical accessibility barriers found:
-```
-<promise>BLOCKED: [accessibility violation requiring design change]</promise>
-```
-
-If accessibility issues need design decision:
-```
-<promise>ESCALATE: [accessibility concern requiring UX decision]</promise>
-```
+When your review is complete: `<promise>ACCESSIBILITY_REVIEWER_COMPLETE</promise>`
+If critical accessibility barriers found: `<promise>BLOCKED: [accessibility violation requiring design change]</promise>`
+If accessibility issues need design decision: `<promise>ESCALATE: [accessibility concern requiring UX decision]</promise>`

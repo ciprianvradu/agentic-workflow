@@ -30,6 +30,7 @@ AGENT_DESCRIPTIONS = {
     "developer": "Senior Developer — creates detailed implementation plans",
     "reviewer": "Plan Reviewer — validates completeness and correctness",
     "skeptic": "Devil's Advocate — stress-tests plans for failure modes",
+    "planner": "Combined architect and developer — system analysis + step-by-step planning in one pass",
     "implementer": "Implementer — executes plans step-by-step",
     "feedback": "Feedback Analyst — compares implementation vs plan",
     "quality-guard": "Quality Guard — reviews and fixes code quality, reuse, efficiency, and convention adherence",
@@ -57,6 +58,7 @@ GEMINI_AGENT_TOOLS = {
     "developer":             ["read_file", "search_file_content", "list_directory"],
     "reviewer":              ["read_file", "search_file_content", "list_directory"],
     "skeptic":               ["read_file", "search_file_content", "list_directory"],
+    "planner":               ["read_file", "search_file_content", "list_directory"],
     "implementer":           ["read_file", "write_file", "search_file_content", "list_directory", "run_shell_command"],
     "feedback":              ["read_file", "search_file_content", "list_directory", "run_shell_command"],
     "quality-guard":         ["read_file", "write_file", "search_file_content", "list_directory", "run_shell_command"],
@@ -76,6 +78,7 @@ OPENCODE_AGENT_TOOLS = {
     "developer":             {"write": False, "edit": False, "patch": False},
     "reviewer":              {"write": False, "edit": False, "patch": False},
     "skeptic":               {"write": False, "edit": False, "patch": False},
+    "planner":               {"write": False, "edit": False, "patch": False},
     "implementer":           {},  # All tools enabled
     "feedback":              {"write": False, "edit": False, "patch": False},
     "quality-guard":         {},  # All tools enabled
@@ -138,6 +141,7 @@ OPENCODE_AGENT_PERMISSIONS: dict[str, dict | None] = {
     "developer":             {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
     "reviewer":              {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
     "skeptic":               {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
+    "planner":               {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
     "implementer":           {"bash": _IMPLEMENTER_BASH},
     "feedback":              {"edit": "deny", "bash": _FEEDBACK_BASH, "webfetch": "deny"},
     "quality-guard":         {"bash": _IMPLEMENTER_BASH},
@@ -293,10 +297,7 @@ def build_claude(output_dir: Path):
             print(f"  + commands/{agent_path.name}")
             cmd_count += 1
         else:
-            if name == "orchestrator":
-                content = body
-            else:
-                content = preamble + "\n" + body
+            content = preamble + "\n" + body
             content = _substitute_platform(content, "claude")
 
             dest = agents_out / agent_path.name
@@ -516,6 +517,7 @@ GEMINI_MAX_TURNS = {
     "developer": 30,
     "reviewer": 30,
     "skeptic": 30,
+    "planner": 30,
     "implementer": 50,
     "feedback": 30,
     "quality-guard": 30,
@@ -535,6 +537,7 @@ GEMINI_AGENT_MODELS = {
     "developer":              "gemini-2.5-pro",
     "reviewer":               "gemini-2.5-pro",
     "skeptic":                "gemini-2.5-pro",
+    "planner":                "gemini-2.5-pro",
     "implementer":            "gemini-2.5-pro",
     "feedback":               "gemini-2.5-pro",
     "quality-guard":          "gemini-2.5-pro",
@@ -651,6 +654,7 @@ OPENCODE_AGENT_MODELS: dict[str, str] = {
     "developer":              "",
     "reviewer":               "",
     "skeptic":                "",
+    "planner":                "",
     "implementer":            "",
     "feedback":               "",
     "quality-guard":          "",

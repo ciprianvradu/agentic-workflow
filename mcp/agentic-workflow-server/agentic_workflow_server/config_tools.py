@@ -6,6 +6,9 @@ Handles YAML configuration cascade merge:
   2. Project config:   <repo>/.claude/ or .copilot/ or .gemini/ or .opencode/workflow-config.yaml
   3. Task config:      <repo>/.tasks/TASK_XXX/config.yaml
 
+At each cascade level, workflow-config-advanced.yaml is loaded first (if present),
+then workflow-config.yaml overlays on top so essential settings take precedence.
+
 Each level overrides the previous. Platform directories are checked
 in order (.claude first, then .copilot, then .gemini, then .config/opencode),
 using whichever exists.
@@ -13,8 +16,15 @@ using whichever exists.
 
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any, Optional
+
+# Module-level cache: cache_key → (result, timestamp)
+# cache_key is a tuple of (file_path, mtime) pairs for all config files in the cascade.
+# Per-process only — no cross-session leaking.
+_config_cache: dict[tuple, tuple] = {}
+_CACHE_TTL = 300  # seconds
 
 try:
     import yaml
@@ -43,7 +53,9 @@ DEFAULT_CONFIG = {
             "on_deviation": True,
             "on_test_failure": True,
             "on_major_change": True
-        }
+        },
+        "concern_threshold": 0,
+        "concern_severity_threshold": "low",
     },
     "knowledge_base": "docs/ai-context/",
     "task_directory": ".tasks/",
@@ -53,14 +65,34 @@ DEFAULT_CONFIG = {
         "feedback": 2
     },
     "models": {
+        "default": "opus",
         "orchestrator": "opus",
         "architect": "opus",
         "developer": "opus",
+        "planner": "opus",
         "reviewer": "opus",
         "skeptic": "opus",
         "implementer": "opus",
         "feedback": "opus",
-        "technical-writer": "opus"
+        "technical-writer": "opus",
+        # Mode-specific sub-dicts (standard/reviewed/thorough/micro) are user-defined
+        "standard": {},
+        "reviewed": {},
+        "thorough": {},
+        "micro": {},
+    },
+    "workflow_modes": {
+        "default": "auto",
+        "modes": {},
+        "auto_detection": {},
+    },
+    "effort_levels": {},
+    "beads": {
+        "enabled": False,
+        "auto_create_issue": False,
+        "auto_link": True,
+        "sync_status": True,
+        "add_comments": True,
     },
     "worktree": {
         "base_path": "../{repo_name}-worktrees",
@@ -226,55 +258,110 @@ def _get_project_config_path(project_dir: Optional[str] = None) -> Path:
     return base / ".claude" / "workflow-config.yaml"
 
 
+ADVANCED_CONFIG_FILENAME = "workflow-config-advanced.yaml"
+
+
+def _get_advanced_sibling(config_path: Path) -> Path:
+    """Return the advanced config path next to the given config path."""
+    return config_path.parent / ADVANCED_CONFIG_FILENAME
+
+
 def _get_task_config_path(task_id: str, project_dir: Optional[str] = None) -> Path:
     base = Path(project_dir) if project_dir else Path.cwd()
     return base / ".tasks" / task_id / "config.yaml"
+
+
+def _get_file_mtime(path: Path) -> Optional[float]:
+    """Return the mtime of a file, or None if it does not exist."""
+    try:
+        return os.path.getmtime(path)
+    except FileNotFoundError:
+        return None
 
 
 def config_get_effective(
     task_id: Optional[str] = None,
     project_dir: Optional[str] = None
 ) -> dict[str, Any]:
+    global _config_cache
+
+    # Resolve candidate paths before checking the cache so we can build the key.
+    global_path = _get_global_config_path()
+    project_path = _get_project_config_path(project_dir)
+    task_path = _get_task_config_path(task_id, project_dir) if task_id else None
+
+    # Advanced config siblings (loaded first at each level, so essential overlays on top).
+    global_adv_path = _get_advanced_sibling(global_path)
+    project_adv_path = _get_advanced_sibling(project_path)
+
+    # Build a cache key from (path, mtime) for every config file in the cascade.
+    # Files that do not exist contribute a mtime of None, which is still stable
+    # unless the file is later created (mtime would then differ).
+    cache_key = (
+        (str(global_adv_path), _get_file_mtime(global_adv_path)),
+        (str(global_path), _get_file_mtime(global_path)),
+        (str(project_adv_path), _get_file_mtime(project_adv_path)),
+        (str(project_path), _get_file_mtime(project_path)),
+        (str(task_path), _get_file_mtime(task_path)) if task_path is not None else None,
+    )
+
+    now = time.monotonic()
+    if cache_key in _config_cache:
+        cached_result, cached_at = _config_cache[cache_key]
+        if now - cached_at < _CACHE_TTL:
+            return cached_result
+
+    # Cache miss or expired — perform the full merge.
     config = DEFAULT_CONFIG.copy()
     warnings = []
+    sources = []
 
-    global_path = _get_global_config_path()
+    # --- Global level: advanced first, then essential ---
+    global_adv_config = _load_yaml(global_adv_path)
+    if global_adv_config:
+        config = _deep_merge(config, global_adv_config)
+        sources.append(str(global_adv_path))
+
     global_config = _load_yaml(global_path)
     if global_config:
         warnings.extend(_validate_config(global_config, DEFAULT_CONFIG))
         config = _deep_merge(config, global_config)
+        sources.append(str(global_path))
 
-    project_path = _get_project_config_path(project_dir)
+    # --- Project level: advanced first, then essential ---
+    project_adv_config = _load_yaml(project_adv_path)
+    if project_adv_config:
+        config = _deep_merge(config, project_adv_config)
+        sources.append(str(project_adv_path))
+
     project_config = _load_yaml(project_path)
     if project_config:
         warnings.extend(_validate_config(project_config, DEFAULT_CONFIG))
         config = _deep_merge(config, project_config)
+        sources.append(str(project_path))
 
-    if task_id:
-        task_path = _get_task_config_path(task_id, project_dir)
+    # --- Task level (no advanced file for tasks — they use a single config.yaml) ---
+    task_config = None
+    if task_id and task_path is not None:
         task_config = _load_yaml(task_path)
         if task_config:
             warnings.extend(_validate_config(task_config, DEFAULT_CONFIG))
             config = _deep_merge(config, task_config)
 
-    sources = []
-    if global_config:
-        sources.append(str(global_path))
-    if project_config:
-        sources.append(str(project_path))
-    if task_id:
-        task_path = _get_task_config_path(task_id, project_dir)
-        if task_path.exists():
-            sources.append(str(task_path))
+    if task_path is not None and task_path.exists():
+        sources.append(str(task_path))
 
-    return {
+    result = {
         "config": config,
         "sources": sources,
         "warnings": warnings,
-        "has_global": global_config is not None,
-        "has_project": project_config is not None,
-        "has_task": task_id is not None and _get_task_config_path(task_id, project_dir).exists()
+        "has_global": global_config is not None or global_adv_config is not None,
+        "has_project": project_config is not None or project_adv_config is not None,
+        "has_task": task_path is not None and task_path.exists(),
     }
+
+    _config_cache[cache_key] = (result, now)
+    return result
 
 
 def config_get_checkpoint(

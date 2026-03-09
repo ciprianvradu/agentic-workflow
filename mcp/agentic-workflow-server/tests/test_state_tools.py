@@ -586,7 +586,7 @@ class TestWorkflowModes:
     def test_detect_mode_minimal_typo(self, clean_tasks_dir):
         result = workflow_detect_mode("Fix typo in README")
 
-        assert result["mode"] == "standard"
+        assert result["mode"] == "micro"
         assert result["confidence"] >= 0.7
         assert "typo" in result["matched_keywords"]
 
@@ -621,7 +621,7 @@ class TestWorkflowModes:
 
         assert result["success"] is True
         assert result["workflow_mode"]["requested"] == "auto"
-        assert result["workflow_mode"]["effective"] == "standard"
+        assert result["workflow_mode"]["effective"] == "micro"
 
     def test_get_mode(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_102")
@@ -2854,13 +2854,13 @@ class TestDetectModeWithFiles:
         # Keywords have "auth" → already thorough, but scope confirms
         assert result["mode"] == "thorough"
 
-    def test_standard_not_escalated_for_safe_files(self):
-        """A routine task touching only safe files stays standard."""
+    def test_micro_not_escalated_for_safe_files(self):
+        """A trivial task touching only safe files stays micro."""
         result = workflow_detect_mode(
             "Fix typo in utils",
             files_affected=["src/utils.py"]
         )
-        assert result["mode"] == "standard"
+        assert result["mode"] == "micro"
         assert result.get("scope_analysis") is not None
         assert result["scope_analysis"]["escalation"] is None
 

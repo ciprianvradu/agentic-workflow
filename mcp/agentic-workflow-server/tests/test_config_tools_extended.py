@@ -540,14 +540,17 @@ class TestDefaultConfig:
         assert expected.issubset(set(DEFAULT_CONFIG.keys()))
 
     def test_models_has_all_agents(self):
-        expected_agents = {
-            "orchestrator", "architect", "developer", "reviewer",
-            "skeptic", "implementer", "feedback", "technical-writer"
+        expected_keys = {
+            "default", "orchestrator",
+            "architect", "developer", "planner", "reviewer",
+            "skeptic", "implementer", "feedback", "technical-writer",
+            "micro", "standard", "reviewed", "thorough"
         }
-        assert expected_agents == set(DEFAULT_CONFIG["models"].keys())
+        assert expected_keys == set(DEFAULT_CONFIG["models"].keys())
 
     def test_checkpoints_has_all_categories(self):
-        expected = {"planning", "implementation", "documentation", "feedback"}
+        expected = {"planning", "implementation", "documentation", "feedback",
+                    "concern_threshold", "concern_severity_threshold"}
         assert expected == set(DEFAULT_CONFIG["checkpoints"].keys())
 
 

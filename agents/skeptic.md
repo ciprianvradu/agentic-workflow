@@ -88,6 +88,8 @@ Assumptions that might not hold:
 ## Summary
 [1-2 sentences: How robust is this plan against real-world chaos?]
 
+See `{knowledge_base}/severity-scale.md` for severity definitions.
+
 ## Critical Concerns (Could cause outage/data loss)
 
 ### Concern 1: [Title]
@@ -210,61 +212,22 @@ Your paranoia now saves debugging at 3 AM later.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `gotcha`, `blocker`, `pattern`.
 
-### When to Save Discoveries
-
-Save edge cases and failure modes you've identified:
-
-```
-workflow_save_discovery(category="gotcha", content="Race condition possible if user submits form twice rapidly - Step 3.2 needs debounce")
-workflow_save_discovery(category="gotcha", content="External API has 5s timeout but code uses 30s - will hang on failure")
-workflow_save_discovery(category="blocker", content="No rollback plan for database migration - critical risk")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `gotcha` | Edge cases, race conditions, failure modes |
-| `blocker` | Critical risks that must be mitigated |
-| `pattern` | Missing defensive patterns |
-
-### What to Preserve
-
-Save discoveries that the Implementer must handle:
-- **Edge cases** that need defensive code
-- **Failure modes** that need error handling
-- **Race conditions** that need synchronization
-- **External dependencies** that need timeouts/retries
+Save edge cases that need defensive code, failure modes that need error handling, race conditions that need synchronization, and external dependencies that need timeouts/retries.
 
 ---
 
 ## Documentation Gap Flagging
 
-While stress-testing the plan, if you notice code that contradicts existing documentation or important patterns/classes that are undocumented, flag them for the Technical Writer:
-
-```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-or-outdated.md"])
-```
-
-The Technical Writer runs after every workflow and will address these gaps.
+See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented or outdated code.
 
 ---
 
 ## Completion Signals
 
-When your analysis is complete, output:
-```
-<promise>SKEPTIC_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical risks require human decision:
-```
-<promise>BLOCKED: [risk requiring business decision]</promise>
-```
-
-If you find unacceptable security/data risks:
-```
-<promise>ESCALATE: [critical risk that must be addressed]</promise>
-```
+When your analysis is complete: `<promise>SKEPTIC_COMPLETE</promise>`
+If critical risks require human decision: `<promise>BLOCKED: [risk requiring business decision]</promise>`
+If you find unacceptable security/data risks: `<promise>ESCALATE: [critical risk that must be addressed]</promise>`

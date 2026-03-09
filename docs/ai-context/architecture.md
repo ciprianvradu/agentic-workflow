@@ -94,11 +94,14 @@ This is the largest and most important module. It manages all persistent workflo
 **Workflow Modes:**
 | Mode | Agents | Use case |
 |------|--------|----------|
+| **micro** | planner → implementer | One-shot tasks, quick fixes, trivial changes |
 | **standard** | developer → implementer → technical_writer | Routine features, fixes, refactors |
 | **reviewed** | architect → developer → reviewer → implementer → technical_writer | Non-trivial changes needing review |
 | **thorough** | architect → developer → reviewer → skeptic → implementer → feedback → technical_writer | Security, migrations, breaking changes |
 
 Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+
+The **technical_writer** phase is conditional in standard mode: it is skipped when no documentation gaps have been flagged (via `workflow_mark_docs_needed`) and the mode is `standard` or lower.
 
 **Model Routing:** `_build_phase_action()` returns a `model` field resolved from config:
 - Fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
@@ -242,12 +245,18 @@ Each agent writes its output to `.tasks/TASK_XXX/<agent>.md`. These accumulate a
 
 ## Configuration Pattern
 
+### Config File Split
+
+The configuration is split into two files:
+- `config/workflow-config.yaml` — Essential settings needed for a basic workflow run (checkpoints, models, modes, worktree basics). This is the file most users copy and customize.
+- `config/workflow-config-advanced.yaml` — Advanced and rarely-changed settings (effort levels, compaction, agent teams, subagent limits, Gemini integration, cost tracking). `config_tools.py` loads both files and merges them; the advanced file provides defaults that can be overridden in either config file.
+
 ### Adding a New Setting
 
 Follow this checklist:
 
 1. **Default**: Add to `DEFAULT_CONFIG` in `config_tools.py`
-2. **Reference**: Add to `config/workflow-config.yaml` with inline comment
+2. **Reference**: Add to `config/workflow-config.yaml` (if essential) or `config/workflow-config-advanced.yaml` (if advanced/optional) with inline comment
 3. **Usage**: Read via `config_get_effective()` in the consuming code
 4. **Schema**: If exposed as MCP tool parameter, add to `server.py` Tool schema
 5. **Tests**: Add to `tests/test_config_tools.py`
@@ -258,6 +267,24 @@ Follow this checklist:
 `config_get_effective()` warns about unknown keys but doesn't reject them. The `_get_valid_keys()` helper recursively collects valid keys from `DEFAULT_CONFIG`.
 
 ## Agent System Pattern
+
+### Agent Roster
+
+| Agent | Mode(s) | Role |
+|-------|---------|------|
+| **planner** | micro | Combined architect+developer for simple tasks — produces a brief plan and immediately hands off to implementer |
+| **architect** | reviewed, thorough | System design, boundaries, risks |
+| **developer** | standard, reviewed, thorough | Detailed step-by-step implementation plan |
+| **reviewer** | reviewed, thorough | Plan validation, security review |
+| **skeptic** | thorough | Edge cases, failure modes |
+| **implementer** | all | Executes the plan |
+| **feedback** | thorough | Deviation detection, plan vs reality |
+| **quality_guard** | standard+ | Quality gate — enforces concern severity threshold (see [severity-scale.md](severity-scale.md)) |
+| **technical_writer** | standard+ (conditional) | Updates `docs/ai-context/` with discovered patterns |
+
+The orchestrator spec lives in `docs/orchestrator-spec.md` (moved from `agents/orchestrator.md`).
+
+Severity levels used by reviewer, skeptic, feedback, quality_guard, and security_auditor are defined in [docs/ai-context/severity-scale.md](severity-scale.md).
 
 ### Agent Definition Structure
 

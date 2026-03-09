@@ -352,61 +352,17 @@ Your documentation helps future AI agents work effectively with this codebase wi
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to access and preserve learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `pattern`, `decision`, `preference`.
 
-### Load Discoveries from Previous Phases
-
-Before writing documentation, load all discoveries from the workflow:
-
-```
-workflow_flush_context()  # Get all discoveries
-```
-
-These discoveries contain valuable information for documentation:
-- **Patterns** discovered by Architect/Developer
-- **Gotchas** identified by Reviewer/Skeptic
-- **Blockers** encountered by Implementer
-- **Decisions** made throughout the workflow
-
-### When to Save Discoveries
-
-Save documentation-related discoveries:
-
-```
-workflow_save_discovery(category="pattern", content="Documented the BaseService pattern - agents should check patterns.md before implementing services")
-workflow_save_discovery(category="decision", content="Added new AI-context section for error handling patterns")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `pattern` | New patterns documented for future reference |
-| `decision` | Documentation structure decisions |
-| `preference` | User preferences for documentation style |
-
-### What to Preserve
-
-Save discoveries that help future documentation tasks:
-- **New patterns** added to the knowledge base
-- **Documentation structure** decisions
-- **Knowledge gaps** that still need filling
+At start: call `workflow_flush_context()` to load all discoveries from the workflow (patterns, gotchas, blockers, decisions from all phases).
+Save new patterns added to the knowledge base, documentation structure decisions, and knowledge gaps that still need filling.
 
 ---
 
 ## Completion Signals
 
-When your documentation updates are ready, output:
-```
-<promise>TECHNICAL_WRITER_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-With your assessment:
-```
-<promise>DOCS: NO_CHANGES|MINOR_UPDATES|NEW_DOCUMENTATION|MAJOR_REVISION</promise>
-```
-
-If existing documentation has critical errors:
-```
-<promise>ESCALATE: [documentation accuracy concern]</promise>
-```
+When your documentation updates are ready: `<promise>TECHNICAL_WRITER_COMPLETE</promise>`
+With your assessment: `<promise>DOCS: NO_CHANGES|MINOR_UPDATES|NEW_DOCUMENTATION|MAJOR_REVISION</promise>`
+If existing documentation has critical errors: `<promise>ESCALATE: [documentation accuracy concern]</promise>`

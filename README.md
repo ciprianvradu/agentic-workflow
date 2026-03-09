@@ -23,7 +23,7 @@ Complex development tasks require multiple perspectives: architecture considerat
 
 ## Features
 
-- **Multi-agent architecture** - 7 specialized agents for different concerns
+- **Multi-agent architecture** - 8 specialized agents for different concerns (including the new planner agent)
 - **Single agent consultation** - Quick `/crew ask` for second opinions without full workflow
 - **Workflow modes** - Full, turbo, fast, minimal modes for different task complexity (`--mode`)
 - **Human checkpoints** - Control points for review and approval at each phase
@@ -240,6 +240,7 @@ For small tweaks, you can always make direct edits without using the crew.
 
 | Agent | Phase | Role | Output |
 |-------|-------|------|--------|
+| **Planner** | Planning (micro mode) | Combined architect+developer for simple tasks — brief plan, no separate review | Compact implementation plan |
 | **Architect** | Planning | System design, boundaries, risks, integration points | Architectural analysis |
 | **Developer** | Planning | Detailed step-by-step implementation plan | `TASK_XXX.md` with checkboxes |
 | **Reviewer** | Planning | Plan validation, security review, pattern compliance | Review findings |
@@ -440,6 +441,10 @@ Command-line args                                                            ←
 
 Platform directories are checked in order: `.claude` → `.copilot` → `.gemini` → `.opencode`, using whichever exists first.
 
+The default configuration is split into two files:
+- `config/workflow-config.yaml` — Essential settings (checkpoints, models, modes, worktree). Copy and customize this for most projects.
+- `config/workflow-config-advanced.yaml` — Advanced settings (effort levels, compaction, agent teams, Gemini integration). Only copy this if you need to override advanced defaults.
+
 ### Configuration Reference
 
 #### Checkpoints
@@ -557,10 +562,11 @@ workflow_modes:
 
 | Mode | Agents | Use Case | Est. Cost |
 |------|--------|----------|-----------|
-| **full** | All 7 (Arch, Dev, Rev, Skeptic, Impl, Feedback, TW) | Complex features, critical changes | $0.50+ |
+| **full** | All 8 (Arch, Dev, Rev, Skeptic, Impl, Feedback, TW, Planner) | Complex features, critical changes | $0.50+ |
 | **turbo** | Developer, Implementer, Technical Writer | Standard features (Opus 4.6 single-pass) | $0.15 |
 | **fast** | Skip Skeptic and Feedback | Standard changes needing review | $0.25 |
 | **minimal** | Developer, Implementer, Technical Writer | Simple fixes, typos | $0.10 |
+| **micro** | Planner, Implementer | Trivial one-shot changes | $0.05 |
 | **auto** | Auto-detect based on task description | Default | varies |
 
 #### Effort Levels
@@ -998,8 +1004,8 @@ All uninstallers preserve task state in `.tasks/`.
 
 | Feature | Claude Code | Copilot CLI | Gemini CLI | OpenCode |
 |---------|:-----------:|:-----------:|:----------:|:--------:|
-| **Agents** | All 12 | All 12 | All 12 | All 12 |
-| **MCP Tools** | 56 tools | 56 tools | 56 tools | 56 tools |
+| **Agents** | All 16 | All 16 | All 16 | All 16 |
+| **MCP Tools** | 69 tools | 69 tools | 69 tools | 69 tools |
 | **State Management** | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` |
 | **Config Cascade** | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task |
 | **Workflow Modes** | full/turbo/fast/minimal/auto | full/turbo/fast/minimal/auto | full/turbo/fast/minimal/auto | full/turbo/fast/minimal/auto |
@@ -1057,7 +1063,7 @@ All uninstallers preserve task state in `.tasks/`.
 | Component | Path | Description |
 |-----------|------|-------------|
 | Agent prompts | `agents/*.md` | Source of truth for all agent and command behavior |
-| MCP server | `mcp/agentic-workflow-server/` | 56 workflow management tools |
+| MCP server | `mcp/agentic-workflow-server/` | 69 workflow management tools (29 core + 40 extra; see [docs/mcp-tool-categories.md](docs/mcp-tool-categories.md)) |
 | Task state | `.tasks/TASK_XXX/` | Phase tracking, discoveries, progress |
 | Config | `workflow-config.yaml` | Checkpoints, models, modes, limits |
 | Build script | `scripts/build-agents.py` | Transforms agents for each platform (substitutes `{__scripts_dir__}` etc.) |

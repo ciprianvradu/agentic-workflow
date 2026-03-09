@@ -361,8 +361,26 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         )
         cost_recorded = True
 
-    # 4. Get next action
-    next_action = crew_get_next_phase(task_id=task_id)
+    # 4. Handle REVISE loopback — if reviewer recommends REVISE, route back
+    #    to developer instead of advancing to the next phase
+    recommendation = parse_result.get("extracted", {}).get("recommendation", "")
+    if agent == "reviewer" and recommendation == "REVISE":
+        # Remove reviewer from phases_completed so it runs again after developer
+        if task_dir:
+            state = _load_state(task_dir)
+            phases_completed = state.get("phases_completed", [])
+            phases_completed = [
+                p for p in phases_completed
+                if p.lower().replace("-", "_") != "reviewer"
+            ]
+            state["phases_completed"] = phases_completed
+            _save_state(task_dir, state)
+        # Transition back to developer
+        workflow_transition(to_phase="developer", task_id=task_id)
+        next_action = crew_get_next_phase(task_id=task_id)
+    else:
+        # 4b. Normal forward progression
+        next_action = crew_get_next_phase(task_id=task_id)
 
     # 5. Pre-transition to next phase
     transition_result = None

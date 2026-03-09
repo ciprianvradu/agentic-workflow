@@ -71,6 +71,8 @@ Think like a senior engineer doing a thorough PR review, but for a plan instead 
 ## Summary
 [1-2 sentences: Is this plan ready for implementation or does it need work?]
 
+See `{knowledge_base}/severity-scale.md` for severity definitions.
+
 ## Critical Issues (Must Fix Before Proceeding)
 
 ### Issue 1: [Title]
@@ -183,59 +185,22 @@ Your review helps ensure the plan is solid before we invest in implementation.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `gotcha`, `blocker`, `pattern`.
 
-### When to Save Discoveries
-
-Save important findings from your review:
-
-```
-workflow_save_discovery(category="gotcha", content="Step 2.3 has incorrect import path - should be @/lib not @/utils")
-workflow_save_discovery(category="blocker", content="Missing error handling for network timeouts in Step 4.1")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `gotcha` | Issues found that were corrected |
-| `blocker` | Critical issues that must be fixed |
-| `pattern` | Pattern violations discovered |
-
-### What to Preserve
-
-Save discoveries that would affect implementation:
-- **Critical issues** found in the plan
-- **Pattern violations** that must be addressed
-- **Missing pieces** that the Developer needs to add
+Save critical issues found in the plan, pattern violations that must be addressed, and missing pieces the Developer needs to add.
 
 ---
 
 ## Documentation Gap Flagging
 
-While reviewing the plan, if you notice code that contradicts existing documentation or important patterns/classes that are undocumented, flag them for the Technical Writer:
-
-```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-or-outdated.md"])
-```
-
-The Technical Writer runs after every workflow and will address these gaps.
+See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented or outdated code.
 
 ---
 
 ## Completion Signals
 
-When your review is complete, output:
-```
-<promise>REVIEWER_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical issues prevent approval:
-```
-<promise>BLOCKED: [specific issues that must be fixed]</promise>
-```
-
-If you discover security vulnerabilities or architectural violations:
-```
-<promise>ESCALATE: [security/architecture concern]</promise>
-```
+When your review is complete: `<promise>REVIEWER_COMPLETE</promise>`
+If critical issues prevent approval: `<promise>BLOCKED: [specific issues that must be fixed]</promise>`
+If you discover security vulnerabilities or architectural violations: `<promise>ESCALATE: [security/architecture concern]</promise>`

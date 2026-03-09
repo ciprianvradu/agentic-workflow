@@ -174,62 +174,23 @@ You may **NOT**:
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `pattern`, `gotcha`, `decision`, `preference`.
 
-### Load Previous Discoveries
-
-At the start of your review, load discoveries from all phases:
-
-```
-workflow_flush_context()  # Get all discoveries to understand context
-```
-
-### When to Save Discoveries
-
-Save important findings from your review:
-
-```
-workflow_save_discovery(category="pattern", content="Found existing utility at src/utils/retry.ts — reuse instead of reimplementing")
-workflow_save_discovery(category="gotcha", content="Project uses barrel exports in src/index.ts — new modules must be added there")
-workflow_save_discovery(category="decision", content="Quality guard fixed 3 convention violations in naming — aligned with project's camelCase pattern")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `pattern` | Existing utilities/patterns discovered for reuse |
-| `gotcha` | Non-obvious conventions or project quirks found |
-| `decision` | Fix decisions made and rationale |
-| `preference` | Team style preferences discovered from codebase |
+At start: call `workflow_flush_context()` to load discoveries from all phases.
+Save existing utilities/patterns discovered for reuse, non-obvious conventions or project quirks, and fix decisions with rationale.
 
 ---
 
 ## Documentation Gap Flagging
 
-While reviewing code quality, if you notice important patterns, utilities, or conventions that are undocumented in the knowledge base, flag them for the Technical Writer:
-
-```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-pattern.md"])
-```
-
-The Technical Writer runs after every workflow and will address these gaps.
+See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented patterns, utilities, or conventions.
 
 ---
 
 ## Completion Signals
 
-When your review and fixes are complete, output:
-```
-<promise>QUALITY_GUARD_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-With a summary of what was done:
-```
-<promise>FIXES_APPLIED: N fixes, M flagged</promise>
-```
-
-If critical quality issues require human review:
-```
-<promise>ESCALATE: [quality concern requiring human decision]</promise>
-```
+When your review and fixes are complete: `<promise>QUALITY_GUARD_COMPLETE</promise>`
+With a summary: `<promise>FIXES_APPLIED: N fixes, M flagged</promise>`
+If critical quality issues require human review: `<promise>ESCALATE: [quality concern requiring human decision]</promise>`

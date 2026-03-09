@@ -210,70 +210,23 @@ Your plan becomes the contract that the Implementer will execute step-by-step.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `decision`, `pattern`, `gotcha`, `preference`.
 
-### Load Previous Discoveries
-
-At the start of your work, check for relevant discoveries from the Architect:
-
-```
-workflow_get_discoveries()  # Get all discoveries
-workflow_get_discoveries(category="decision")  # Get only decisions
-```
-
-### When to Save Discoveries
-
-At the end of your planning, save important decisions:
-
-```
-workflow_save_discovery(category="decision", content="Splitting implementation into 3 phases: setup, core logic, tests")
-workflow_save_discovery(category="pattern", content="Using factory pattern for creating auth handlers - see Step 2.3")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `decision` | Key planning decisions and trade-offs |
-| `pattern` | Patterns the Implementer should follow |
-| `gotcha` | Tricky parts of the implementation to watch out for |
-| `preference` | Human preferences noted during planning |
-
-### What to Preserve
-
-Save discoveries that the Implementer needs if context compacts:
-- **Critical decisions** about implementation approach
-- **Patterns** that must be followed consistently
-- **Dependencies** between steps
-- **Warning signs** to watch for
+At start: call `workflow_get_discoveries()` to load discoveries from the Architect phase.
+At end: save critical decisions, patterns the Implementer must follow, dependencies between steps, and warning signs.
 
 ---
 
 ## Documentation Gap Flagging
 
-While analyzing the codebase, if you notice code that contradicts existing documentation or important patterns/classes that are undocumented, flag them for the Technical Writer:
-
-```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-or-outdated.md"])
-```
-
-The Technical Writer runs after every workflow and will address these gaps.
+See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented or outdated code.
 
 ---
 
 ## Completion Signals
 
-When your plan is complete, output:
-```
-<promise>DEVELOPER_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If you cannot create a plan without clarification:
-```
-<promise>BLOCKED: [specific missing information]</promise>
-```
-
-If the Architect's guidance has unresolvable conflicts:
-```
-<promise>ESCALATE: [architectural clarification needed]</promise>
-```
+When your plan is complete: `<promise>DEVELOPER_COMPLETE</promise>`
+If you cannot create a plan without clarification: `<promise>BLOCKED: [specific missing information]</promise>`
+If the Architect's guidance has unresolvable conflicts: `<promise>ESCALATE: [architectural clarification needed]</promise>`

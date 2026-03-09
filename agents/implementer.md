@@ -221,7 +221,7 @@ For current step:
 
 ### Completion Promises
 
-Output these signals for the orchestrator:
+See `{knowledge_base}/completion-signals.md` for the full promise protocol. Output these signals for the orchestrator:
 
 | Signal | When | Example |
 |--------|------|---------|
@@ -301,63 +301,17 @@ Your discipline ensures the carefully-designed plan gets executed correctly.
 
 ## Documentation Gap Flagging
 
-While implementing, if you notice code that contradicts existing documentation or important patterns/classes that are undocumented, flag them for the Technical Writer:
-
-```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-or-outdated.md"])
-```
-
-The Technical Writer runs after every workflow and will address these gaps.
+See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented or outdated code.
 
 ---
 
 ## Memory Preservation
 
-During long implementations, context may be compacted. Use the discovery tools to preserve and recover critical learnings.
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`, `decision`.
 
-### At Start: Load Previous Discoveries
-
-Before beginning implementation, load discoveries from previous phases:
-
-```
-workflow_flush_context()  # Get all discoveries with category counts
-```
-
-This returns decisions, patterns, gotchas, and blockers from Architect, Developer, Reviewer, and Skeptic phases. **Review these before starting** - they contain critical context that may have compacted.
-
-### During Implementation: Save Discoveries
-
-Save important findings as you work:
-
-```
-workflow_save_discovery(category="blocker", content="Test database not seeded - had to run migrations first")
-workflow_save_discovery(category="gotcha", content="Import path uses @/ alias - resolved to src/ in tsconfig")
-workflow_save_discovery(category="pattern", content="Existing handlers use try-catch with custom ErrorHandler class")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | Issues that blocked progress and how they were resolved |
-| `gotcha` | Non-obvious things that took time to figure out |
-| `pattern` | Patterns discovered during implementation |
-| `decision` | Decisions made during implementation (deviations) |
-
-### When to Save
-
-- **After resolving a blocker** - save what went wrong and how you fixed it
-- **After discovering something non-obvious** - save it before you forget
-- **At checkpoints (25%, 50%, 75%)** - save any important context
-- **Before a complex step** - save key context that would be needed if restarted
-
-### If Context Compacts Mid-Implementation
-
-If you notice you've lost context (can't remember why a decision was made):
-
-1. Call `workflow_flush_context()` to reload all discoveries
-2. Review the discoveries relevant to your current step
-3. Continue implementation with restored context
+At start: call `workflow_flush_context()` to load discoveries from Architect, Developer, Reviewer, and Skeptic phases.
+During implementation: save blockers and how they were resolved, non-obvious findings, and patterns discovered.
+At checkpoints (25%, 50%, 75%): save any important context. If context compacts mid-implementation, call `workflow_flush_context()` to reload.
 
 ---
 

@@ -2308,6 +2308,11 @@ def workflow_clear_model_cooldown(
 # ============================================================================
 
 WORKFLOW_MODES = {
+    "micro": {
+        "description": "Implementer only — typos, one-line fixes, trivial changes",
+        "phases": ["implementer"],
+        "estimated_cost": "$0.03"
+    },
     "standard": {
         "description": "Developer plans and implements — routine features, fixes, refactors",
         "phases": ["developer", "implementer", "quality_guard", "technical_writer"],
@@ -2335,6 +2340,9 @@ MODE_ALIASES = {
 
 # Recommended thinking effort levels per mode and agent
 EFFORT_LEVELS = {
+    "micro": {
+        "implementer": "low"
+    },
     "standard": {
         "developer": "high",
         "implementer": "high",
@@ -2363,6 +2371,13 @@ EFFORT_LEVELS = {
 
 # Keywords for auto-detection
 AUTO_DETECT_RULES = {
+    "micro": {
+        "keywords": ["typo", "fix typo", "spelling", "whitespace", "one-line",
+                    "trivial", "rename variable", "update comment", "fix import"],
+        "exclude_keywords": ["security", "auth", "database", "migration", "api", "breaking",
+                           "authentication", "authorization", "password", "token", "critical",
+                           "add feature", "implement", "refactor", "create", "build"]
+    },
     "standard": {
         "keywords": ["typo", "fix typo", "simple fix", "rename", "update comment",
                     "fix import", "add feature", "implement", "update", "refactor",
@@ -2534,7 +2549,7 @@ def workflow_detect_mode(
 ) -> dict[str, Any]:
     """Auto-detect the appropriate workflow mode based on task description and file scope.
 
-    Three modes: standard (routine), reviewed (non-trivial), thorough (critical).
+    Four modes: micro (trivial), standard (routine), reviewed (non-trivial), thorough (critical).
 
     Detection uses two signals that are combined (highest wins):
       1. **Keyword analysis** — matches description against known patterns
@@ -2587,6 +2602,26 @@ def workflow_detect_mode(
                 keyword_reason = f"Routine task ({', '.join(standard_matches)}) without critical patterns"
                 matched_keywords = standard_matches
 
+                # Check if this could be micro mode (subset of standard keywords,
+                # no broader feature keywords that would require planning)
+                micro_excluded = False
+                for exclude_keyword in AUTO_DETECT_RULES["micro"]["exclude_keywords"]:
+                    if exclude_keyword in desc_lower:
+                        micro_excluded = True
+                        break
+
+                if not micro_excluded:
+                    micro_matches = []
+                    for kw in AUTO_DETECT_RULES["micro"]["keywords"]:
+                        if kw in desc_lower:
+                            micro_matches.append(kw)
+
+                    if micro_matches:
+                        keyword_mode = "micro"
+                        keyword_confidence = 0.85
+                        keyword_reason = f"Trivial task ({', '.join(micro_matches)}) — micro mode"
+                        matched_keywords = micro_matches
+
     # --- Signal 2: file scope analysis (when files provided) ---
     scope_analysis = None
     scope_mode = None
@@ -2595,7 +2630,7 @@ def workflow_detect_mode(
         scope_mode = scope_analysis.get("escalation")
 
     # --- Combine signals: highest mode wins ---
-    mode_rank = {"standard": 0, "reviewed": 1, "thorough": 2}
+    mode_rank = {"micro": 0, "standard": 1, "reviewed": 2, "thorough": 3}
     final_mode = keyword_mode
     final_reason = keyword_reason
     final_confidence = keyword_confidence
@@ -2626,7 +2661,7 @@ def workflow_set_mode(
 ) -> dict[str, Any]:
     """Set the workflow mode for a task.
 
-    Supports built-in modes (standard, reviewed, thorough), legacy aliases
+    Supports built-in modes (micro, standard, reviewed, thorough), legacy aliases
     (full, turbo, fast, minimal), and custom modes defined in workflow-config.yaml.
 
     Args:

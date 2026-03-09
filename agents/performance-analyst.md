@@ -84,6 +84,8 @@ This agent runs automatically when the task involves:
 ## Summary
 [1-2 sentences: Overall performance assessment and primary concerns]
 
+See `{knowledge_base}/severity-scale.md` for severity definitions.
+
 ## Critical Issues (Will cause production problems)
 
 ### Issue 1: [Title]
@@ -224,41 +226,16 @@ Performance debt compounds - fix it early or pay later with downtime.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save performance findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="N+1 query in getOrdersWithItems - Step 3.1 makes DB call per order")
-workflow_save_discovery(category="gotcha", content="UserCache has no eviction policy - will grow unbounded")
-workflow_save_discovery(category="pattern", content="Existing code uses connection pool size 20 - maintain for consistency")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | Critical performance issues that will cause production problems |
-| `gotcha` | Performance traps or scaling concerns |
-| `pattern` | Existing performance patterns to follow |
+Save critical performance issues, performance traps or scaling concerns, and existing performance patterns to follow.
 
 ---
 
 ## Completion Signals
 
-When your analysis is complete, output:
-```
-<promise>PERFORMANCE_ANALYST_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical performance issues require architecture changes:
-```
-<promise>BLOCKED: [performance issue requiring design change]</promise>
-```
-
-If you find scaling issues that need business decision:
-```
-<promise>ESCALATE: [scaling concern requiring capacity planning]</promise>
-```
+When your analysis is complete: `<promise>PERFORMANCE_ANALYST_COMPLETE</promise>`
+If critical performance issues require architecture changes: `<promise>BLOCKED: [performance issue requiring design change]</promise>`
+If you find scaling issues that need business decision: `<promise>ESCALATE: [scaling concern requiring capacity planning]</promise>`

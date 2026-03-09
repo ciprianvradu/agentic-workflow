@@ -35,7 +35,7 @@ Compare planned vs actual:
 
 ### 2. Deviation Classification
 
-For each deviation found, classify using standard severity levels:
+For each deviation found, classify using standard severity levels (see `{knowledge_base}/severity-scale.md`):
 
 **Low (Acceptable) Deviations:**
 - Minor formatting differences
@@ -223,41 +223,10 @@ Your analysis keeps the workflow on track and catches problems before they compo
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `decision`, `gotcha`, `pattern`, `preference`.
 
-### Load Previous Discoveries
-
-At the start of your analysis, load discoveries from all phases:
-
-```
-workflow_flush_context()  # Get all discoveries to understand context
-```
-
-### When to Save Discoveries
-
-Save important findings from your analysis:
-
-```
-workflow_save_discovery(category="gotcha", content="Deviation in Step 2.3 was acceptable - used equivalent pattern")
-workflow_save_discovery(category="decision", content="ADJUST: Added retry logic not in original plan due to API instability")
-workflow_save_discovery(category="pattern", content="Implementer discovered better pattern for error handling - document for future")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `decision` | Adjustments made to the plan |
-| `gotcha` | Unexpected issues encountered |
-| `pattern` | New patterns discovered during implementation |
-| `preference` | Human decisions at checkpoints |
-
-### What to Preserve
-
-Save discoveries for future reference:
-- **Lessons learned** for similar tasks
-- **Plan adjustments** and why they were made
-- **Human decisions** at checkpoints
+At start: call `workflow_flush_context()` to load discoveries from all phases.
+Save lessons learned, plan adjustments and their rationale, and human decisions at checkpoints.
 
 ---
 
@@ -308,29 +277,14 @@ Use `workflow_get_agent_performance()` to see precision trends.
 
 ## Documentation Gap Flagging
 
-While comparing implementation against the plan, if you notice code that contradicts existing documentation or important patterns/classes that are undocumented, flag them for the Technical Writer:
-
-```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-or-outdated.md"])
-```
-
-The Technical Writer runs after every workflow and will address these gaps.
+See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented or outdated code.
 
 ---
 
 ## Completion Signals
 
-When your analysis is complete, output:
-```
-<promise>FEEDBACK_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-With your verdict:
-```
-<promise>VERDICT: CONTINUE|ADJUST|RESTART</promise>
-```
-
-If critical issues require human decision:
-```
-<promise>ESCALATE: [security/scope/architecture concern]</promise>
-```
+When your analysis is complete: `<promise>FEEDBACK_COMPLETE</promise>`
+With your verdict: `<promise>VERDICT: CONTINUE|ADJUST|RESTART</promise>`
+If critical issues require human decision: `<promise>ESCALATE: [security/scope/architecture concern]</promise>`

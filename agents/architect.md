@@ -106,6 +106,8 @@ Produce a structured analysis covering:
 
 ## Risks
 
+See `{knowledge_base}/severity-scale.md` for severity definitions.
+
 ### High Priority
 1. **[Risk Name]**: [Description and potential impact]
 
@@ -203,51 +205,16 @@ Your output becomes input for the Developer agent, who will create the detailed 
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `decision`, `pattern`, `gotcha`, `blocker`, `preference`.
 
-### When to Save Discoveries
-
-At the end of your analysis, save important findings using `workflow_save_discovery`:
-
-```
-workflow_save_discovery(category="decision", content="Chose event-driven over polling due to real-time requirements")
-workflow_save_discovery(category="pattern", content="Existing auth uses middleware pattern in src/auth/middleware.ts")
-workflow_save_discovery(category="gotcha", content="Database has eventual consistency - reads may be stale for 100ms")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `decision` | Architectural choices made and their rationale |
-| `pattern` | Existing patterns discovered in the codebase |
-| `gotcha` | Quirks, edge cases, or non-obvious constraints |
-| `blocker` | Issues that must be resolved before proceeding |
-| `preference` | Human preferences or constraints discovered |
-
-### What to Preserve
-
-Save discoveries that would be costly to re-learn:
-- **Key architectural decisions** and why they were made
-- **Existing patterns** the Developer must follow
-- **Constraints** discovered in the codebase
-- **Documentation gaps** that need to be noted
+At the end of your analysis, save architectural decisions, existing patterns the Developer must follow, codebase constraints, and documentation gaps.
 
 ---
 
 ## Completion Signals
 
-When your analysis is complete, output:
-```
-<promise>ARCHITECT_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If you cannot proceed without human input:
-```
-<promise>BLOCKED: [specific question or missing information]</promise>
-```
-
-If you discover a critical concern requiring immediate attention:
-```
-<promise>ESCALATE: [security/architecture concern]</promise>
-```
+When your analysis is complete: `<promise>ARCHITECT_COMPLETE</promise>`
+If you cannot proceed without human input: `<promise>BLOCKED: [specific question or missing information]</promise>`
+If you discover a critical concern requiring immediate attention: `<promise>ESCALATE: [security/architecture concern]</promise>`

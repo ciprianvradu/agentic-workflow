@@ -1040,6 +1040,7 @@ def crew_detect_optional_agents(
 AGENT_PROMPT_FILES = {
     "architect": "architect.md",
     "developer": "developer.md",
+    "planner": "planner.md",
     "reviewer": "reviewer.md",
     "skeptic": "skeptic.md",
     "implementer": "implementer.md",
@@ -1064,6 +1065,7 @@ SUBAGENT_LIMITS = {
 AGENT_LIMIT_CATEGORY = {
     "architect": "planning_agents",
     "developer": "planning_agents",
+    "planner": "planning_agents",
     "reviewer": "planning_agents",
     "skeptic": "planning_agents",
     "implementer": "implementation_agents",
@@ -1211,6 +1213,12 @@ def crew_get_next_phase(
     while next_idx < len(full_sequence):
         candidate = full_sequence[next_idx]
         if candidate not in phases_completed:
+            # Skip technical_writer in standard mode when no docs are needed
+            if candidate == "technical_writer" and effective_mode == "standard":
+                docs_needed = state.get("docs_needed", [])
+                if not docs_needed:
+                    next_idx += 1
+                    continue
             break
         next_idx += 1
 
@@ -1361,6 +1369,9 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         review = task_dir / "reviewer.md"
         if review.exists():
             files.append(str(review))
+        skeptic_output = task_dir / "skeptic.md"
+        if skeptic_output.exists():
+            files.append(str(skeptic_output))
 
     if agent == "quality_guard":
         arch_output = task_dir / "architect.md"

@@ -243,41 +243,16 @@ API contracts are promises - breaking them breaks trust.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save API findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="Removing 'status' field from User response - breaks mobile app v1")
-workflow_save_discovery(category="gotcha", content="New endpoint uses camelCase but existing API uses snake_case")
-workflow_save_discovery(category="pattern", content="Existing pagination uses cursor-based with 'next_token' param")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | Breaking changes that require versioning or rejection |
-| `gotcha` | Consistency issues or risky patterns |
-| `pattern` | Existing API conventions to follow |
+Save breaking changes that require versioning, consistency issues, and existing API conventions to follow.
 
 ---
 
 ## Completion Signals
 
-When your review is complete, output:
-```
-<promise>API_GUARDIAN_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If breaking changes require business decision:
-```
-<promise>BLOCKED: [breaking change requiring stakeholder approval]</promise>
-```
-
-If API contract issues need architect review:
-```
-<promise>ESCALATE: [API design issue requiring architecture decision]</promise>
-```
+When your review is complete: `<promise>API_GUARDIAN_COMPLETE</promise>`
+If breaking changes require business decision: `<promise>BLOCKED: [breaking change requiring stakeholder approval]</promise>`
+If API contract issues need architect review: `<promise>ESCALATE: [API design issue requiring architecture decision]</promise>`

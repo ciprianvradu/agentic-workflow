@@ -10,15 +10,17 @@ For project context and architecture, see [docs/ai-context/](./docs/ai-context/)
 A multi-agent orchestration framework for AI-augmented software development. Supports Claude Code, GitHub Copilot, Gemini CLI, and OpenCode from a single source of agent definitions.
 
 **Key components:**
-- `agents/` — Agent prompt sources (15 agents, compiled to 4 platforms via `scripts/build-agents.py`)
+- `agents/` — Agent prompt sources (16 agents, compiled to 4 platforms via `scripts/build-agents.py`)
 - `mcp/agentic-workflow-server/` — MCP server (state, config, orchestration tools)
-- `config/workflow-config.yaml` — Default configuration (4-level cascade: global → project → task → CLI)
+- `config/workflow-config.yaml` — Essential configuration (4-level cascade: global → project → task → CLI); advanced options in `config/workflow-config-advanced.yaml`
+- `docs/orchestrator-spec.md` — Orchestrator agent specification (formerly `agents/orchestrator.md`)
 - `.tasks/` — Per-task state persistence (survives session crashes and context compaction)
 
 ## Workflow Modes
 
 | Mode | Agents | When to use | Default models |
 |------|--------|-------------|----------------|
+| **micro** | planner → implementer | One-shot tasks, quick fixes, trivial changes | Sonnet |
 | **standard** | developer → implementer → quality-guard → writer | Routine features, fixes, refactors | Sonnet |
 | **reviewed** | architect → developer → reviewer → implementer → quality-guard → writer | Non-trivial changes needing review | Opus (planning) + Sonnet (execution) |
 | **thorough** | architect → developer → reviewer → skeptic → implementer → quality-guard → feedback → writer | Security, migrations, breaking changes | Opus (planning) + Sonnet (execution) |

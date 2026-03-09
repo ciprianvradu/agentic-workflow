@@ -815,7 +815,7 @@ class TestModeDetectionEdgeCases:
 
     def test_case_insensitive(self):
         result = workflow_detect_mode("FIX TYPO in README")
-        assert result["mode"] == "standard"
+        assert result["mode"] == "micro"
 
 
 # ============================================================================

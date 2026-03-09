@@ -11,6 +11,9 @@ This directory helps AI agents understand and work with this codebase. Read this
 | [cross-platform.md](./cross-platform.md) | Cross-platform patterns: 4 AI hosts, Windows/WSL/macOS, fallbacks |
 | [custom-phases.md](./custom-phases.md) | Custom phases (lifecycle hooks): inject skills, scripts, or agents into the workflow |
 | [memory-preservation.md](./memory-preservation.md) | How to save/retrieve discoveries across context compaction |
+| [severity-scale.md](./severity-scale.md) | Unified severity levels (Critical/High/Medium/Low) used by all agents |
+| [completion-signals.md](./completion-signals.md) | Promise protocol for agent completion, blocking, and escalation signals |
+| [doc-gap-flagging.md](./doc-gap-flagging.md) | How agents flag undocumented or outdated code for the Technical Writer |
 
 ---
 

@@ -121,6 +121,7 @@ server = Server("agentic-workflow-server")
 
 
 TOOLS = [
+    # --- CORE: State Management ---
     Tool(
         name="workflow_initialize",
         description="Initialize a new workflow task with initial state. Creates a .tasks/TASK_XXX directory and state.json.",
@@ -152,7 +153,7 @@ TOOLS = [
                 "to_phase": {
                     "type": "string",
                     "description": "Target phase to transition to",
-                    "enum": ["architect", "developer", "reviewer", "skeptic", "implementer", "technical_writer"]
+                    "enum": ["architect", "planner", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"]
                 }
             },
             "required": ["to_phase"]
@@ -263,7 +264,7 @@ TOOLS = [
                 "to_phase": {
                     "type": "string",
                     "description": "Target phase to check",
-                    "enum": ["architect", "developer", "reviewer", "skeptic", "implementer", "technical_writer"]
+                    "enum": ["architect", "planner", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"]
                 }
             },
             "required": ["to_phase"]
@@ -283,6 +284,7 @@ TOOLS = [
             "required": []
         }
     ),
+    # --- CORE: Configuration ---
     Tool(
         name="config_get_effective",
         description="Get the fully merged effective configuration for the current context. Merges global, project, and task configs.",
@@ -342,6 +344,7 @@ TOOLS = [
             "required": []
         }
     ),
+    # --- CORE: Implementation Progress ---
     Tool(
         name="workflow_set_implementation_progress",
         description="Set the total number of implementation steps and optionally current step.",
@@ -382,6 +385,7 @@ TOOLS = [
             "required": ["step_id"]
         }
     ),
+    # --- CORE: Concerns & Decisions ---
     Tool(
         name="workflow_add_human_decision",
         description="Record a human decision at a checkpoint for audit trail.",
@@ -409,6 +413,7 @@ TOOLS = [
             "required": ["checkpoint", "decision"]
         }
     ),
+    # --- CORE: Planning & Knowledge ---
     Tool(
         name="workflow_set_kb_inventory",
         description="Store knowledge base path and file inventory in state.",
@@ -432,6 +437,7 @@ TOOLS = [
             "required": ["path", "files"]
         }
     ),
+    # --- CORE: Concerns ---
     Tool(
         name="workflow_add_concern",
         description="Add a concern from an agent (Architect, Reviewer, Skeptic) for cross-agent tracking.",
@@ -504,6 +510,7 @@ TOOLS = [
             "required": []
         }
     ),
+    # --- CORE: Discoveries & Context ---
     Tool(
         name="workflow_save_discovery",
         description="Save a discovery (decision, pattern, gotcha, blocker, preference) to persistent memory. Use this to preserve critical learnings that should survive context compaction.",
@@ -560,6 +567,7 @@ TOOLS = [
             "required": []
         }
     ),
+    # --- EXTRA: Context Management ---
     Tool(
         name="workflow_get_context_usage",
         description="Estimate context usage for the task based on files in the task directory. Returns file sizes, token estimates, and recommendations for managing context pressure.",
@@ -622,6 +630,7 @@ TOOLS = [
             "required": ["query"]
         }
     ),
+    # --- EXTRA: Task Linking ---
     Tool(
         name="workflow_link_tasks",
         description="Link related tasks for context inheritance. Creates bidirectional links so agents can reference prior related work.",
@@ -666,6 +675,7 @@ TOOLS = [
             "required": []
         }
     ),
+    # --- EXTRA: Model Resilience ---
     Tool(
         name="workflow_record_model_error",
         description="Record a model API error for cooldown tracking. Enables intelligent failover with exponential backoff.",
@@ -744,7 +754,7 @@ TOOLS = [
             "required": ["model"]
         }
     ),
-    # Workflow Modes
+    # --- EXTRA: Mode & Effort ---
     Tool(
         name="workflow_detect_mode",
         description="Auto-detect the appropriate workflow mode based on task description. Analyzes keywords and patterns to suggest standard, reviewed, or thorough mode.",
@@ -815,7 +825,6 @@ TOOLS = [
             "required": ["phase"]
         }
     ),
-    # Effort Levels
     Tool(
         name="workflow_get_effort_level",
         description="Get recommended thinking effort level (low/medium/high/max) for an agent based on the current workflow mode. Use this before spawning each agent to set the appropriate effort parameter.",
@@ -834,7 +843,6 @@ TOOLS = [
             "required": ["agent"]
         }
     ),
-    # Agent Teams
     Tool(
         name="workflow_get_agent_team_config",
         description="Get agent team configuration for a feature. Returns whether real agent teams are enabled for parallel review or parallel implementation.",
