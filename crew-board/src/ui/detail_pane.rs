@@ -338,7 +338,7 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
             ),
         ]));
         lines.push(Line::from(Span::styled(
-            "  Press 'd' to browse documents",
+            "  Press F6 to browse documents",
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -352,7 +352,7 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
                 styles::dim_style(),
             ),
             Span::styled(
-                "  Press 'h' for history",
+                "  Press F7 for history",
                 Style::default().fg(Color::DarkGray),
             ),
         ]));
