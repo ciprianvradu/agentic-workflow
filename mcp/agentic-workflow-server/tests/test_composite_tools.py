@@ -279,19 +279,20 @@ class TestWorkflowQuery:
 
     def test_query_linked_tasks_empty(self, task_with_state):
         result = workflow_query(aspect="linked_tasks", task_id=task_with_state)
-        assert result["linked_tasks"] == []
+        # linked_tasks is a dict keyed by relationship type; empty when no links
+        assert result["linked_tasks"] == {}
 
     def test_query_linked_tasks_with_data(self, two_tasks):
         task_a, task_b = two_tasks
         workflow_link_tasks(
-            source_task_id=task_a,
-            target_task_id=task_b,
-            relationship="depends_on",
+            task_id=task_a,
+            related_task_ids=[task_b],
+            relationship="builds_on",
         )
 
         result = workflow_query(aspect="linked_tasks", task_id=task_a)
-        assert len(result["linked_tasks"]) == 1
-        assert result["linked_tasks"][0]["target_task_id"] == task_b
+        assert "builds_on" in result["linked_tasks"]
+        assert task_b in result["linked_tasks"]["builds_on"]
 
     # ── optional_phases ──
 
@@ -301,13 +302,13 @@ class TestWorkflowQuery:
 
     def test_query_optional_phases_with_data(self, task_with_state):
         workflow_enable_optional_phase(
-            phase="security_review",
+            phase="security_auditor",
             reason="Handles user auth",
             task_id=task_with_state,
         )
 
         result = workflow_query(aspect="optional_phases", task_id=task_with_state)
-        assert "security_review" in result["optional_phases"]
+        assert "security_auditor" in result["optional_phases"]
 
     # ── agent_performance ──
 
