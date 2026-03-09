@@ -626,6 +626,10 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
         # Allow starting with any phase if mode doesn't include architect
         if mode_phases and to_phase == mode_phases[0]:
             return True, f"Starting workflow with {to_phase} (mode skips architect)"
+        # Allow starting with custom phases that run before mode phases
+        custom_in_seq = state.get("custom_phases_in_sequence", [])
+        if to_phase in custom_in_seq:
+            return True, f"Starting workflow with custom phase {to_phase}"
         return False, "Workflow must start with architect phase"
 
     if to_phase == current:
@@ -655,6 +659,14 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
     elif current not in ordering and to_phase in ordering:
         # Current phase is custom/unknown, allow transition to any mode phase
         return True, f"Transition from custom phase {current} to {to_phase}"
+    elif current not in ordering and to_phase not in ordering:
+        # Both are custom/optional phases - allow transition between them
+        if to_phase in valid_phases:
+            return True, f"Transition between custom phases {current} to {to_phase}"
+    elif current in ordering and to_phase not in ordering:
+        # Current phase is standard, transitioning to a custom/optional phase
+        if to_phase in valid_phases:
+            return True, f"Transition from standard phase {current} to custom phase {to_phase}"
 
     if to_phase == "developer" and current in ("reviewer", "skeptic"):
         return True, f"Valid loop-back from {current} to developer"

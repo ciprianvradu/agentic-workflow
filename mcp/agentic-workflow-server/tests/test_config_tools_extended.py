@@ -305,7 +305,7 @@ class TestConfigGetCheckpoint:
     def test_all_checkpoint_categories(self, tmp_path):
         with patch("agentic_workflow_server.config_tools.Path.home", return_value=tmp_path / "nohome"), \
              patch("agentic_workflow_server.config_tools.Path.cwd", return_value=tmp_path / "noproject"):
-            for category in ["planning", "implementation", "documentation", "feedback"]:
+            for category in ["planning", "implementation", "documentation", "quality_guard"]:
                 checkpoints = DEFAULT_CONFIG["checkpoints"][category]
                 for cp_name in checkpoints:
                     result = config_get_checkpoint(cp_name, category)
@@ -347,6 +347,66 @@ class TestConfigGetModel:
             result = config_get_model("architect", project_dir=str(project_dir))
 
         assert result["model"] == "sonnet"
+
+
+# ============================================================================
+# Mode-specific model routing defaults
+# ============================================================================
+
+class TestModeSpecificModelRouting:
+    """Verify DEFAULT_CONFIG mode sub-dicts produce correct model routing."""
+
+    def test_standard_developer_uses_sonnet(self):
+        """developer should be sonnet in standard mode (not opus)."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        standard_models = DEFAULT_CONFIG["models"]["standard"]
+        assert standard_models.get("developer") == "sonnet"
+
+    def test_standard_quality_guard_uses_sonnet(self):
+        """quality_guard should be sonnet in standard mode."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        standard_models = DEFAULT_CONFIG["models"]["standard"]
+        assert standard_models.get("quality_guard") == "sonnet"
+
+    def test_thorough_developer_uses_sonnet(self):
+        """developer should be sonnet in thorough mode."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        thorough_models = DEFAULT_CONFIG["models"]["thorough"]
+        assert thorough_models.get("developer") == "sonnet"
+
+    def test_thorough_architect_uses_opus(self):
+        """architect stays opus in thorough mode."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        thorough_models = DEFAULT_CONFIG["models"]["thorough"]
+        assert thorough_models.get("architect") == "opus"
+
+    def test_thorough_skeptic_uses_opus(self):
+        """skeptic stays opus in thorough mode."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        thorough_models = DEFAULT_CONFIG["models"]["thorough"]
+        assert thorough_models.get("skeptic") == "opus"
+
+    def test_user_override_wins_over_default(self, tmp_path):
+        """A project config override must win over DEFAULT_CONFIG mode defaults."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "workflow-config.yaml").write_text(
+            "models:\n  standard:\n    developer: opus\n"
+        )
+        with patch("agentic_workflow_server.config_tools.Path.home", return_value=tmp_path / "nohome"):
+            result = config_get_effective(project_dir=str(project_dir))
+        standard = result["config"]["models"]["standard"]
+        # User set developer=opus, overriding the default sonnet
+        assert standard.get("developer") == "opus"
+
+    def test_parallelization_defaults_exist(self):
+        """DEFAULT_CONFIG should include parallelization section."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        para = DEFAULT_CONFIG.get("parallelization", {})
+        assert para.get("reviewer_skeptic", {}).get("enabled") is True
+        assert para.get("quality_guard_technical_writer", {}).get("enabled") is True
 
 
 # ============================================================================
@@ -543,13 +603,13 @@ class TestDefaultConfig:
         expected_keys = {
             "default", "orchestrator",
             "architect", "developer", "planner", "reviewer",
-            "skeptic", "implementer", "feedback", "technical-writer",
-            "micro", "standard", "reviewed", "thorough"
+            "skeptic", "implementer", "quality_guard", "technical-writer",
+            "quick", "standard", "thorough"
         }
         assert expected_keys == set(DEFAULT_CONFIG["models"].keys())
 
     def test_checkpoints_has_all_categories(self):
-        expected = {"planning", "implementation", "documentation", "feedback",
+        expected = {"planning", "implementation", "documentation", "quality_guard",
                     "concern_threshold", "concern_severity_threshold"}
         assert expected == set(DEFAULT_CONFIG["checkpoints"].keys())
 

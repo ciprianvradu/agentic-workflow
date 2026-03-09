@@ -131,11 +131,11 @@ class TestCrewStatsScript:
     def test_mode_distribution(self, tmp_path):
         tasks_dir = tmp_path / ".tasks"
         _create_task(tasks_dir, "TASK_001",
-                     workflow_mode={"effective": "standard", "phases": ["developer", "implementer", "technical_writer"]})
+                     workflow_mode={"effective": "standard", "phases": ["architect", "developer", "implementer", "quality_guard"]})
         _create_task(tasks_dir, "TASK_002",
-                     workflow_mode={"effective": "thorough", "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "feedback", "technical_writer"]})
+                     workflow_mode={"effective": "thorough", "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"]})
         _create_task(tasks_dir, "TASK_003",
-                     workflow_mode={"effective": "standard", "phases": ["developer", "implementer", "technical_writer"]})
+                     workflow_mode={"effective": "standard", "phases": ["architect", "developer", "implementer", "quality_guard"]})
         (tmp_path / ".git").mkdir()
 
         result = _run_script("crew-stats.py", cwd=str(tmp_path))

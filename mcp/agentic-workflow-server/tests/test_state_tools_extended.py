@@ -471,6 +471,67 @@ class TestCanTransitionEdgeCases:
         assert result["can_transition"] is False
         assert "error" in result
 
+    def test_standard_to_custom_transition(self):
+        """Bug 3d: standard phase -> custom phase must be allowed."""
+        state = {
+            "phase": "architect",
+            "phases_completed": [],
+            "workflow_mode": {"phases": ["architect", "developer"]},
+            "optional_phases": [],
+            "custom_phases_in_sequence": ["triage"],
+        }
+        ok, reason = _can_transition(state, "triage")
+        assert ok is True, f"Expected True, got False: {reason}"
+        assert "custom phase" in reason
+
+    def test_standard_to_unknown_phase_rejected(self):
+        """standard -> unknown (not in valid_phases) must still be rejected."""
+        state = {
+            "phase": "architect",
+            "phases_completed": [],
+            "workflow_mode": {"phases": ["architect", "developer"]},
+            "optional_phases": [],
+            "custom_phases_in_sequence": [],
+        }
+        ok, reason = _can_transition(state, "totally_unknown_phase")
+        assert ok is False
+
+    def test_custom_to_custom_transition(self):
+        """custom phase -> custom phase must be allowed."""
+        state = {
+            "phase": "ba_designer",
+            "phases_completed": [],
+            "workflow_mode": {"phases": ["architect", "developer"]},
+            "optional_phases": [],
+            "custom_phases_in_sequence": ["ba_designer", "product_manager"],
+        }
+        ok, reason = _can_transition(state, "product_manager")
+        assert ok is True, f"Expected True, got False: {reason}"
+
+    def test_custom_to_standard_transition(self):
+        """custom phase -> standard phase must be allowed."""
+        state = {
+            "phase": "product_manager",
+            "phases_completed": ["ba_designer"],
+            "workflow_mode": {"phases": ["architect", "developer"]},
+            "optional_phases": [],
+            "custom_phases_in_sequence": ["ba_designer", "product_manager"],
+        }
+        ok, reason = _can_transition(state, "architect")
+        assert ok is True, f"Expected True, got False: {reason}"
+
+    def test_start_with_custom_phase(self):
+        """Starting workflow with a custom phase must be allowed."""
+        state = {
+            "phase": None,
+            "phases_completed": [],
+            "workflow_mode": {"phases": ["architect", "developer"]},
+            "optional_phases": [],
+            "custom_phases_in_sequence": ["ba_designer"],
+        }
+        ok, reason = _can_transition(state, "ba_designer")
+        assert ok is True, f"Expected True, got False: {reason}"
+
 
 # ============================================================================
 # workflow_can_stop edge cases

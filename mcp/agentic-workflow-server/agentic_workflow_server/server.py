@@ -323,7 +323,7 @@ TOOLS = [
                 "category": {
                     "type": "string",
                     "description": "Checkpoint category",
-                    "enum": ["planning", "implementation", "documentation", "feedback"]
+                    "enum": ["planning", "implementation", "documentation", "quality_guard"]
                 },
                 "task_id": {
                     "type": "string",

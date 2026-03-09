@@ -50,7 +50,7 @@ task_directory: .tasks/
 max_iterations:
   planning: 3                  # Architect -> Developer -> Reviewer -> Skeptic cycles
   implementation: 5            # Retries per major step
-  feedback: 2                  # Adjustment attempts before suggesting restart
+  quality_guard: 2              # Adjustment attempts before suggesting restart
 
 # Model configuration per workflow mode
 # Claude: opus, sonnet, haiku  |  Gemini: gemini-2.0-flash  |  Copilot: uses provider default  |  OpenCode: uses configured provider
@@ -65,17 +65,17 @@ models:
   quick:
     implementer: sonnet
 
-  # Standard mode: routine to non-trivial — Opus for planning, Sonnet for execution
+  # Standard mode: routine to non-trivial — Opus for architecture, Sonnet for everything else
   standard:
     architect: opus
-    developer: opus
+    developer: sonnet
     implementer: sonnet
     quality_guard: sonnet
 
-  # Thorough mode: critical changes — Opus for deep analysis, Sonnet for execution
+  # Thorough mode: critical changes — Opus for architecture + skeptic, Sonnet for execution
   thorough:
     architect: opus
-    developer: opus
+    developer: sonnet
     reviewer: sonnet
     skeptic: opus
     implementer: sonnet
@@ -463,6 +463,11 @@ parallelization:
     enabled: true
     timeout_seconds: 300
     merge_strategy: deduplicate     # deduplicate | combine | prioritize_reviewer
+
+  # Run Quality Guard and Technical Writer in parallel (post-implementation)
+  quality_guard_technical_writer:
+    enabled: true
+    timeout_seconds: 300
 
 # Agent Teams (experimental)
 # Enables real multi-agent collaboration via CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS

@@ -525,6 +525,68 @@ class TestCrewGetNextPhase:
         result = crew_get_next_phase(task_id="TASK_NONEXISTENT")
         assert "error" in result
 
+    def test_quality_guard_parallel_with_technical_writer(self, clean_tasks_dir):
+        """quality_guard should carry parallel_with=technical_writer when config enables it."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_009", description="Test parallel QG+TW")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_009")
+
+        # Complete all phases up to quality_guard
+        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_009")
+            workflow_complete_phase(task_id="TASK_ORCH_009")
+
+        mock_config = {
+            "parallelization": {
+                "reviewer_skeptic": {"enabled": True},
+                "quality_guard_technical_writer": {"enabled": True},
+            },
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"quality_guard": {}},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_009")
+
+        assert result.get("action") == "spawn_agent"
+        assert result.get("agent") == "quality_guard"
+        assert result.get("parallel_with") == "technical_writer"
+
+    def test_quality_guard_no_parallel_when_disabled(self, clean_tasks_dir):
+        """When quality_guard_technical_writer disabled, no parallel_with is set."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_010", description="Test QG no parallel")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_010")
+
+        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_010")
+            workflow_complete_phase(task_id="TASK_ORCH_010")
+
+        mock_config = {
+            "parallelization": {
+                "reviewer_skeptic": {"enabled": True},
+                "quality_guard_technical_writer": {"enabled": False},
+            },
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"quality_guard": {}},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_010")
+
+        assert result.get("agent") == "quality_guard"
+        assert result.get("parallel_with") is None
+
 
 # ============================================================================
 # crew_get_implementation_action tests (requires filesystem)

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-03-09
+
+### Added
+- **Quality-guard + technical-writer parallelization** — new parallel pair runs QG and TW concurrently in thorough mode, controlled by `parallelization.quality_guard_technical_writer.enabled` config key (default: true)
+- **Parallelization defaults in DEFAULT_CONFIG** — `reviewer_skeptic` and `quality_guard_technical_writer` parallel pairs now have defaults, so parallelization works without a YAML config file
+- **Mode-specific model defaults in DEFAULT_CONFIG** — `quick`, `standard`, and `thorough` sub-dicts populated with sensible defaults (previously empty, relying solely on YAML)
+- 17 new tests for model routing, parallelization, and phase transitions (759 total)
+
+### Changed
+- **Developer agent uses Sonnet** in standard and thorough modes (was Opus) — Opus reserved for architect and skeptic where deep reasoning matters most
+- Updated mode comments in `workflow-config.yaml` to reflect routing philosophy
+
+### Fixed
+- **crew-board: checkpoint notifications** — `AskUserQuestion` hook events now trigger `[PROMPT]` attention with visual bell and desktop notification, so users are alerted when `/crew` checkpoints need input (crew-board 0.6.1)
+- **`crew_get_next_phase` stuck after custom phases** — `is_fresh_start` incorrectly treated `phase=null` with completed phases as a fresh start, causing infinite loops on custom phases like `ba_designer` and `product_manager`
+- **`crew_get_next_phase` null phase with completions** — added fallback to use last completed phase as reference when `current_phase` is null but phases exist
+- **`_can_transition` rejected custom-to-custom transitions** — workflows with multiple custom phases (e.g., `ba_designer` → `product_manager`) could not advance
+- **`_can_transition` rejected standard-to-custom transitions** — transitioning from a standard phase (e.g., `architect`) to a custom phase was silently rejected
+- **`_can_transition` rejected starting with custom phases** — workflows configured to begin with custom phases before `architect` could not start
+
 ## [0.8.0] - 2026-03-09
 
 ### Added

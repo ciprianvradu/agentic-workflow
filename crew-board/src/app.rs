@@ -778,8 +778,20 @@ impl App {
             HookEvent::Notification { terminal_id, message } => {
                 (terminal_id.clone(), true, Some(message.clone()))
             }
-            HookEvent::PreToolUse { terminal_id, .. }
-            | HookEvent::PostToolUse { terminal_id, .. }
+            HookEvent::PreToolUse { terminal_id, tool_name, tool_input_summary } => {
+                // AskUserQuestion means the terminal is waiting for user input
+                if tool_name == "AskUserQuestion" {
+                    let msg = if tool_input_summary.is_empty() {
+                        "Waiting for user input".to_string()
+                    } else {
+                        tool_input_summary.clone()
+                    };
+                    (terminal_id.clone(), true, Some(msg))
+                } else {
+                    (terminal_id.clone(), false, None)
+                }
+            }
+            HookEvent::PostToolUse { terminal_id, .. }
             | HookEvent::SessionStart { terminal_id, .. }
             | HookEvent::SessionEnd { terminal_id }
             | HookEvent::Stop { terminal_id, .. }
@@ -894,10 +906,14 @@ impl App {
             state.activity_label = warning.clone();
         }
 
-        // Trigger attention for Notification events
+        // Trigger attention for Notification and AskUserQuestion events
         if trigger_attention {
             if let Some(msg) = attention_msg {
-                let reason = AttentionReason::HookNotification { message: msg };
+                let reason = if matches!(&event, HookEvent::PreToolUse { tool_name, .. } if tool_name == "AskUserQuestion") {
+                    AttentionReason::PermissionPrompt { context: msg }
+                } else {
+                    AttentionReason::HookNotification { message: msg }
+                };
                 if !matches!(&term.status, TerminalStatus::Exited(_)) {
                     term.status = TerminalStatus::NeedsAttention(reason);
                 }

@@ -3,6 +3,23 @@
 All notable changes to crew-board are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] - 2026-03-09
+
+### Added
+- **AskUserQuestion attention detection** — `PreToolUse` hook events for `AskUserQuestion` now trigger `PermissionPrompt` attention, so crew-board notifies users when a `/crew` checkpoint or any agent question is waiting for input. Shows `[PROMPT]` badge, fires visual bell and desktop notification.
+
+## [0.6.0] - 2026-03-09
+
+### Changed
+- **F-key binding registry** — single source of truth for all keybindings via `keybindings.rs`. Context-adaptive bars driven by `(ActiveView, SubContext, ModifierBarState)`.
+- **View switching via Shift+F-keys only** — number keys 1-6 removed; Shift+F1-F6 is the sole mechanism.
+- **Modifier bar** — real-time Shift/Ctrl layer display with kitty protocol support; 2-second flash fallback on terminals without kitty.
+- **Adaptive label width** — long labels at >=130 columns, compact 9-char labels below.
+
+### Fixed
+- String truncation edge cases in multiple UI components
+- Missing `#[allow(unused)]` on `send_desktop_notification` platform-specific code
+
 ## [0.5.0] - 2026-03-07
 
 ### Added

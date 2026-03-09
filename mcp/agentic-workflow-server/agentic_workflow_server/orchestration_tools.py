@@ -802,12 +802,12 @@ def crew_init_task(
     if mode_result.get("success"):
         effective_mode = mode_result["workflow_mode"]["effective"]
 
-    # Step 4.5: Transition to the correct first phase for this mode
-    # workflow_initialize sets phase=None; we now set it to the mode's first phase.
-    # This fixes the bug where standard mode (developer-first) got stuck on architect.
+    # Note: We do NOT pre-transition to the first phase here.
+    # workflow_initialize sets phase=None; crew_get_next_phase will detect
+    # the fresh start (phase=None) and return the correct first phase action.
+    # Pre-transitioning caused a bug where checkpoints fired before the first
+    # agent actually ran (phase was set but no output existed yet).
     mode_phases = mode_result.get("workflow_mode", {}).get("phases", [])
-    first_phase = mode_phases[0] if mode_phases else "architect"
-    workflow_transition(to_phase=first_phase, task_id=task_id)
 
     # Step 5: Inventory knowledge base (with timeout to prevent stalling)
     # knowledge_base can be a string (single path) or list of paths/globs
@@ -1113,10 +1113,11 @@ def crew_get_next_phase(
     config = effective.get("config", {})
 
     # Determine what phase comes next
-    # Treat as "not started" if phase is None, OR if phase is the first mode phase
-    # with no completions AND there are custom phases that go before it
+    # Treat as "not started" if phase is None AND no phases completed,
+    # OR if phase is the first mode phase with no completions AND there are
+    # custom phases that go before it
     # (crew_init_task pre-transitions to mode_phases[0] before custom phases are evaluated)
-    is_fresh_start = current_phase is None
+    is_fresh_start = current_phase is None and not phases_completed
     if not is_fresh_start and not phases_completed and mode_phases and current_phase == mode_phases[0]:
         # Check if there are custom phases with "after: init" that should run first
         custom_phases_check = _load_custom_phases(config)
@@ -1144,6 +1145,12 @@ def crew_get_next_phase(
                 _save_state(task_dir, state)
         next_agent = first_sequence[0] if first_sequence else "architect"
         return _build_phase_action(next_agent, state, config, task_dir)
+
+    # If current_phase is None but phases have been completed (e.g., after
+    # custom phase completion that didn't set current_phase), jump to the
+    # "find next" logic below instead of treating None as a running phase.
+    if current_phase is None and phases_completed:
+        current_phase = phases_completed[-1]  # Use last completed as reference
 
     # Check if current phase is complete
     if current_phase not in phases_completed:
@@ -1241,6 +1248,15 @@ def crew_get_next_phase(
         skeptic_idx = full_sequence.index("skeptic")
         if "skeptic" not in phases_completed and skeptic_idx > next_idx:
             parallel_with = "skeptic"
+
+    # Check for parallel execution (quality_guard + technical_writer)
+    if parallel_with is None:
+        qg_tw_config = config.get("parallelization", {}).get("quality_guard_technical_writer", {})
+        qg_tw_enabled = qg_tw_config.get("enabled", False)
+        if qg_tw_enabled and next_agent == "quality_guard" and "technical_writer" in full_sequence:
+            tw_idx = full_sequence.index("technical_writer")
+            if "technical_writer" not in phases_completed and tw_idx > next_idx:
+                parallel_with = "technical_writer"
 
     return _build_phase_action(next_agent, state, config, task_dir, parallel_with=parallel_with)
 

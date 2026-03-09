@@ -47,7 +47,7 @@ DEFAULT_CONFIG = {
         "documentation": {
             "after_technical_writer": True
         },
-        "feedback": {
+        "quality_guard": {
             "on_deviation": True,
             "on_test_failure": True,
             "on_major_change": True
@@ -60,7 +60,7 @@ DEFAULT_CONFIG = {
     "max_iterations": {
         "planning": 3,
         "implementation": 5,
-        "feedback": 2
+        "quality_guard": 2
     },
     "models": {
         "default": "opus",
@@ -71,13 +71,27 @@ DEFAULT_CONFIG = {
         "reviewer": "opus",
         "skeptic": "opus",
         "implementer": "opus",
-        "feedback": "opus",
+        "quality_guard": "opus",
         "technical-writer": "opus",
-        # Mode-specific sub-dicts (standard/reviewed/thorough/micro) are user-defined
-        "standard": {},
-        "reviewed": {},
-        "thorough": {},
-        "micro": {},
+        # Mode-specific overrides (user config always wins via deep-merge)
+        "quick": {
+            "implementer": "sonnet",
+        },
+        "standard": {
+            "architect": "opus",
+            "developer": "sonnet",
+            "implementer": "sonnet",
+            "quality_guard": "sonnet",
+        },
+        "thorough": {
+            "architect": "opus",
+            "developer": "sonnet",
+            "reviewer": "sonnet",
+            "skeptic": "opus",
+            "implementer": "sonnet",
+            "quality_guard": "sonnet",
+            "technical_writer": "sonnet",
+        },
     },
     "workflow_modes": {
         "default": "auto",
@@ -156,6 +170,17 @@ DEFAULT_CONFIG = {
         }
     },
     "custom_phases": {},
+    "parallelization": {
+        "reviewer_skeptic": {
+            "enabled": True,
+            "timeout_seconds": 300,
+            "merge_strategy": "deduplicate",
+        },
+        "quality_guard_technical_writer": {
+            "enabled": True,
+            "timeout_seconds": 300,
+        },
+    },
 }
 
 

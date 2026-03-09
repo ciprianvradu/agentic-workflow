@@ -745,7 +745,8 @@ def main():
     # checkpoint-done
     p_ckpt = subparsers.add_parser("checkpoint-done", help="Record decision, get next")
     p_ckpt.add_argument("--task-id", required=True, help="Task identifier")
-    p_ckpt.add_argument("--decision", required=True, choices=["approve", "revise", "restart", "skip"])
+    p_ckpt.add_argument("--decision", required=True, choices=["approve", "revise", "restart", "skip"],
+                        type=str.lower)
     p_ckpt.add_argument("--notes", help="Optional decision notes")
     p_ckpt.add_argument("--question", help="Checkpoint question that was presented to user")
 

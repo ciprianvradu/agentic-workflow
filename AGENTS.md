@@ -21,11 +21,10 @@ A multi-agent orchestration framework for AI-augmented software development. Sup
 | Mode | Agents | When to use | Default models |
 |------|--------|-------------|----------------|
 | **quick** | implementer | Typos, one-line fixes, trivial changes | Sonnet |
-| **standard** | developer → implementer → quality-guard → writer | Routine features, fixes, refactors | Sonnet |
-| **reviewed** | architect → developer → reviewer → implementer → quality-guard → writer | Non-trivial changes needing review | Opus (planning) + Sonnet (execution) |
-| **thorough** | architect → developer → reviewer → skeptic → implementer → quality-guard → feedback → writer | Security, migrations, breaking changes | Opus (planning) + Sonnet (execution) |
+| **standard** | architect → developer → implementer → quality-guard | Routine features, fixes, refactors | Sonnet |
+| **thorough** | architect → developer → reviewer → skeptic → implementer → quality-guard → writer | Security, migrations, breaking changes | Opus (planning) + Sonnet (execution) |
 
-Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
 
 ## Development Setup
 
