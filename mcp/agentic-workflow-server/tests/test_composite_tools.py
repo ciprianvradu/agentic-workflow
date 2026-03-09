@@ -317,28 +317,47 @@ class TestWorkflowQuery:
         assert result["total_concerns"] == 0
 
     def test_query_agent_performance_with_data(self, task_with_state):
+        # Must add a concern first so record_concern_outcome can find it
+        workflow_add_concern(
+            source="reviewer",
+            severity="high",
+            description="Potential bug in auth",
+            concern_id="C001",
+            task_id=task_with_state,
+        )
         workflow_record_concern_outcome(
-            concern_id="c1",
-            agent="reviewer",
+            concern_id="C001",
             outcome="valid",
-            concern_type="bug",
+            task_id=task_with_state,
         )
 
         result = workflow_query(aspect="agent_performance")
         assert result["total_concerns"] >= 1
 
     def test_query_agent_performance_filtered_by_agent(self, task_with_state):
-        workflow_record_concern_outcome(
-            concern_id="c1",
-            agent="reviewer",
-            outcome="valid",
-            concern_type="bug",
+        workflow_add_concern(
+            source="reviewer",
+            severity="high",
+            description="Bug in auth",
+            concern_id="C001",
+            task_id=task_with_state,
+        )
+        workflow_add_concern(
+            source="skeptic",
+            severity="low",
+            description="Style issue",
+            concern_id="C002",
+            task_id=task_with_state,
         )
         workflow_record_concern_outcome(
-            concern_id="c2",
-            agent="skeptic",
+            concern_id="C001",
+            outcome="valid",
+            task_id=task_with_state,
+        )
+        workflow_record_concern_outcome(
+            concern_id="C002",
             outcome="false_positive",
-            concern_type="style",
+            task_id=task_with_state,
         )
 
         result = workflow_query(
@@ -1129,8 +1148,9 @@ class TestCompositeIntegration:
 
     def test_query_concerns_matches_direct_call(self, task_with_state):
         workflow_add_concern(
-            concern="Test concern",
+            source="reviewer",
             severity="medium",
+            description="Test concern",
             task_id=task_with_state,
         )
 
@@ -1141,8 +1161,9 @@ class TestCompositeIntegration:
         assert direct["concerns"] == composite["concerns"]
 
     def test_query_discoveries_matches_direct_call(self, task_with_state):
+        valid_category = DISCOVERY_CATEGORIES[0]
         workflow_save_discovery(
-            category="architecture",
+            category=valid_category,
             content="Service mesh topology",
             task_id=task_with_state,
         )
