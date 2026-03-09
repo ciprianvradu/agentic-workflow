@@ -93,8 +93,15 @@ from .state_tools import (
     workflow_get_worktree_info,
     workflow_cleanup_worktree,
     workflow_get_launch_command,
+    # Outcome tracking
+    workflow_record_outcome,
+    workflow_get_outcome_stats,
     # Interaction logging
     workflow_log_interaction,
+    # Composite tools
+    workflow_query,
+    workflow_manage_model,
+    workflow_parallel,
 )
 from .config_tools import (
     config_get_effective,
@@ -1335,6 +1342,70 @@ TOOLS = [
             "required": []
         }
     ),
+    # Outcome Tracking
+    Tool(
+        name="workflow_record_outcome",
+        description="Record the final outcome of a completed task. Stores to .task_outcomes.jsonl for aggregate analysis.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "Identifier of the completed task"
+                },
+                "success": {
+                    "type": "boolean",
+                    "description": "Whether the task completed successfully"
+                },
+                "rework_cycles": {
+                    "type": "integer",
+                    "description": "Number of rework/iteration cycles required",
+                    "default": 0
+                },
+                "files_changed": {
+                    "type": "integer",
+                    "description": "Number of files modified",
+                    "default": 0
+                },
+                "tests_passed": {
+                    "type": "integer",
+                    "description": "Number of tests that passed",
+                    "default": 0
+                },
+                "tests_failed": {
+                    "type": "integer",
+                    "description": "Number of tests that failed",
+                    "default": 0
+                },
+                "duration_seconds": {
+                    "type": "number",
+                    "description": "Total wall-clock time in seconds",
+                    "default": 0
+                },
+                "notes": {
+                    "type": "string",
+                    "description": "Free-form notes about the outcome",
+                    "default": ""
+                }
+            },
+            "required": ["task_id", "success"]
+        }
+    ),
+    Tool(
+        name="workflow_get_outcome_stats",
+        description="Get aggregate statistics from recorded task outcomes: success rate, rework cycles, duration, and breakdowns by mode.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days to look back (default 30)",
+                    "default": 30
+                }
+            },
+            "required": []
+        }
+    ),
     # Interaction Logging
     Tool(
         name="workflow_log_interaction",
@@ -1379,6 +1450,153 @@ TOOLS = [
             },
             "required": ["role", "content"]
         }
+    ),
+    # --- COMPOSITE: Unified Query ---
+    Tool(
+        name="workflow_query",
+        description=(
+            "Unified read-only query tool. Replaces 7 narrow query tools. "
+            "Set 'aspect' to one of: concerns, assertions, discoveries, "
+            "context_usage, linked_tasks, optional_phases, agent_performance. "
+            "Pass aspect-specific options via 'filters' dict."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "aspect": {
+                    "type": "string",
+                    "description": "What to query",
+                    "enum": [
+                        "concerns",
+                        "assertions",
+                        "discoveries",
+                        "context_usage",
+                        "linked_tasks",
+                        "optional_phases",
+                        "agent_performance",
+                    ],
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task identifier. If not provided, uses active task.",
+                },
+                "filters": {
+                    "type": "object",
+                    "description": (
+                        "Aspect-specific filters. "
+                        "concerns: {unaddressed_only: bool}. "
+                        "assertions: {step_id: str, status: 'pending'|'passed'|'failed'}. "
+                        "discoveries: {category: 'decision'|'pattern'|'gotcha'|'blocker'|'preference'}. "
+                        "linked_tasks: {include_memories: bool}. "
+                        "agent_performance: {agent: str, time_range_days: int}."
+                    ),
+                    "additionalProperties": True,
+                },
+            },
+            "required": ["aspect"],
+        },
+    ),
+    # --- COMPOSITE: Model Resilience ---
+    Tool(
+        name="workflow_manage_model",
+        description=(
+            "Unified model resilience tool. Replaces 5 narrow model tools. "
+            "Set 'action' to one of: record_error, record_success, get_available, "
+            "get_status, clear_cooldown."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "What to do",
+                    "enum": [
+                        "record_error",
+                        "record_success",
+                        "get_available",
+                        "get_status",
+                        "clear_cooldown",
+                    ],
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model identifier (required for record_error, record_success, clear_cooldown)",
+                },
+                "error_type": {
+                    "type": "string",
+                    "description": "Error type (required for record_error)",
+                    "enum": [
+                        "rate_limit",
+                        "overloaded",
+                        "timeout",
+                        "server_error",
+                        "billing",
+                        "auth",
+                        "unknown",
+                    ],
+                },
+                "error_message": {
+                    "type": "string",
+                    "description": "Optional error message (for record_error)",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional task context (for record_error)",
+                },
+                "preferred_model": {
+                    "type": "string",
+                    "description": "Optional preferred model (for get_available)",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
+    # --- COMPOSITE: Parallel Execution ---
+    Tool(
+        name="workflow_parallel",
+        description=(
+            "Unified parallel execution tool. Replaces 3 narrow parallel tools. "
+            "Set 'action' to one of: start, complete, merge."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "What to do",
+                    "enum": ["start", "complete", "merge"],
+                },
+                "phases": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Phase names to run in parallel (required for start)",
+                },
+                "phase": {
+                    "type": "string",
+                    "description": "Phase name that completed (required for complete)",
+                },
+                "result_summary": {
+                    "type": "string",
+                    "description": "Summary of the phase's output (for complete)",
+                },
+                "concerns": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Concerns raised by phase (for complete)",
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task identifier. If not provided, uses active task.",
+                },
+                "merge_strategy": {
+                    "type": "string",
+                    "description": "How to merge results (for merge)",
+                    "enum": ["deduplicate", "combine", "prioritize_first"],
+                    "default": "deduplicate",
+                },
+            },
+            "required": ["action"],
+        },
     ),
     # Orchestration Tools (crew.md extraction)
     Tool(
@@ -1640,8 +1858,15 @@ TOOL_DISPATCH_TABLE = {
     "workflow_get_worktree_info": workflow_get_worktree_info,
     "workflow_cleanup_worktree": workflow_cleanup_worktree,
     "workflow_get_launch_command": workflow_get_launch_command,
+    # Outcome tracking
+    "workflow_record_outcome": workflow_record_outcome,
+    "workflow_get_outcome_stats": workflow_get_outcome_stats,
     # Interaction logging
     "workflow_log_interaction": workflow_log_interaction,
+    # Composite tools
+    "workflow_query": workflow_query,
+    "workflow_manage_model": workflow_manage_model,
+    "workflow_parallel": workflow_parallel,
     # Orchestration tools
     "crew_parse_args": crew_parse_args,
     "crew_init_task": crew_init_task,

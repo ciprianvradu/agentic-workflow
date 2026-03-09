@@ -441,9 +441,8 @@ Command-line args                                                            ←
 
 Platform directories are checked in order: `.claude` → `.copilot` → `.gemini` → `.opencode`, using whichever exists first.
 
-The default configuration is split into two files:
-- `config/workflow-config.yaml` — Essential settings (checkpoints, models, modes, worktree). Copy and customize this for most projects.
-- `config/workflow-config-advanced.yaml` — Advanced settings (effort levels, compaction, agent teams, Gemini integration). Only copy this if you need to override advanced defaults.
+The default configuration lives in a single file:
+- `config/workflow-config.yaml` — All settings (checkpoints, models, modes, worktree, and advanced options). Essential settings are at the top; advanced/power-user settings are below a separator line. Copy and customize this for your projects.
 
 ### Configuration Reference
 

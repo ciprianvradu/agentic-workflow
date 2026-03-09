@@ -6,9 +6,7 @@ Handles YAML configuration cascade merge:
   2. Project config:   <repo>/.claude/ or .copilot/ or .gemini/ or .opencode/workflow-config.yaml
   3. Task config:      <repo>/.tasks/TASK_XXX/config.yaml
 
-At each cascade level, workflow-config-advanced.yaml is loaded first (if present),
-then workflow-config.yaml overlays on top so essential settings take precedence.
-
+workflow-config.yaml is the single configuration file at each cascade level.
 Each level overrides the previous. Platform directories are checked
 in order (.claude first, then .copilot, then .gemini, then .config/opencode),
 using whichever exists.
@@ -258,14 +256,6 @@ def _get_project_config_path(project_dir: Optional[str] = None) -> Path:
     return base / ".claude" / "workflow-config.yaml"
 
 
-ADVANCED_CONFIG_FILENAME = "workflow-config-advanced.yaml"
-
-
-def _get_advanced_sibling(config_path: Path) -> Path:
-    """Return the advanced config path next to the given config path."""
-    return config_path.parent / ADVANCED_CONFIG_FILENAME
-
-
 def _get_task_config_path(task_id: str, project_dir: Optional[str] = None) -> Path:
     base = Path(project_dir) if project_dir else Path.cwd()
     return base / ".tasks" / task_id / "config.yaml"
@@ -290,17 +280,11 @@ def config_get_effective(
     project_path = _get_project_config_path(project_dir)
     task_path = _get_task_config_path(task_id, project_dir) if task_id else None
 
-    # Advanced config siblings (loaded first at each level, so essential overlays on top).
-    global_adv_path = _get_advanced_sibling(global_path)
-    project_adv_path = _get_advanced_sibling(project_path)
-
     # Build a cache key from (path, mtime) for every config file in the cascade.
     # Files that do not exist contribute a mtime of None, which is still stable
     # unless the file is later created (mtime would then differ).
     cache_key = (
-        (str(global_adv_path), _get_file_mtime(global_adv_path)),
         (str(global_path), _get_file_mtime(global_path)),
-        (str(project_adv_path), _get_file_mtime(project_adv_path)),
         (str(project_path), _get_file_mtime(project_path)),
         (str(task_path), _get_file_mtime(task_path)) if task_path is not None else None,
     )
@@ -316,31 +300,21 @@ def config_get_effective(
     warnings = []
     sources = []
 
-    # --- Global level: advanced first, then essential ---
-    global_adv_config = _load_yaml(global_adv_path)
-    if global_adv_config:
-        config = _deep_merge(config, global_adv_config)
-        sources.append(str(global_adv_path))
-
+    # --- Global level ---
     global_config = _load_yaml(global_path)
     if global_config:
         warnings.extend(_validate_config(global_config, DEFAULT_CONFIG))
         config = _deep_merge(config, global_config)
         sources.append(str(global_path))
 
-    # --- Project level: advanced first, then essential ---
-    project_adv_config = _load_yaml(project_adv_path)
-    if project_adv_config:
-        config = _deep_merge(config, project_adv_config)
-        sources.append(str(project_adv_path))
-
+    # --- Project level ---
     project_config = _load_yaml(project_path)
     if project_config:
         warnings.extend(_validate_config(project_config, DEFAULT_CONFIG))
         config = _deep_merge(config, project_config)
         sources.append(str(project_path))
 
-    # --- Task level (no advanced file for tasks — they use a single config.yaml) ---
+    # --- Task level ---
     task_config = None
     if task_id and task_path is not None:
         task_config = _load_yaml(task_path)
@@ -355,8 +329,8 @@ def config_get_effective(
         "config": config,
         "sources": sources,
         "warnings": warnings,
-        "has_global": global_config is not None or global_adv_config is not None,
-        "has_project": project_config is not None or project_adv_config is not None,
+        "has_global": global_config is not None,
+        "has_project": project_config is not None,
         "has_task": task_path is not None and task_path.exists(),
     }
 

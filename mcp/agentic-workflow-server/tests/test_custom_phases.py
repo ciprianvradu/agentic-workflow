@@ -318,7 +318,7 @@ class TestCustomPhaseIntegration:
         """A custom phase after init should appear before the first mode phase."""
         task_id = "TASK_CP_001"
         workflow_initialize(task_id=task_id, description="Fix jira_key issue SAD-123")
-        workflow_set_mode(mode="fast", task_id=task_id)
+        workflow_set_mode(mode="standard", task_id=task_id)
 
         # Inject custom_phases into the task's config
         task_dir = clean_tasks_dir / task_id
@@ -354,7 +354,7 @@ class TestCustomPhaseIntegration:
         """A script phase before complete should run after all standard phases."""
         task_id = "TASK_CP_002"
         workflow_initialize(task_id=task_id, description="Add caching layer")
-        workflow_set_mode(mode="minimal", task_id=task_id)
+        workflow_set_mode(mode="standard", task_id=task_id)
 
         task_dir = clean_tasks_dir / task_id
         config_path = task_dir / "config.yaml"
@@ -376,8 +376,8 @@ class TestCustomPhaseIntegration:
         with open(config_path, "w") as f:
             yaml.dump(existing, f)
 
-        # Complete all standard minimal phases
-        for phase in ["developer", "implementer", "quality_guard", "technical_writer"]:
+        # Complete all standard mode phases
+        for phase in ["architect", "developer", "implementer", "quality_guard"]:
             workflow_transition(to_phase=phase, task_id=task_id)
             workflow_complete_phase(task_id=task_id)
 
@@ -390,7 +390,7 @@ class TestCustomPhaseIntegration:
         """When condition is not met, custom phase is not in sequence."""
         task_id = "TASK_CP_004"
         workflow_initialize(task_id=task_id, description="Fix typo in README")
-        workflow_set_mode(mode="minimal", task_id=task_id)
+        workflow_set_mode(mode="standard", task_id=task_id)
 
         task_dir = clean_tasks_dir / task_id
         config_path = task_dir / "config.yaml"
@@ -414,15 +414,15 @@ class TestCustomPhaseIntegration:
             yaml.dump(existing, f)
 
         result = crew_get_next_phase(task_id=task_id)
-        # Should skip triage (condition not met) and go straight to developer
+        # Should skip triage (condition not met) and go straight to architect
         assert result.get("action") == "spawn_agent"
-        assert result.get("agent") == "developer"
+        assert result.get("agent") == "architect"
 
     def test_custom_phase_after_init_with_pretransition(self, clean_tasks_dir):
         """Custom phase after init works even when crew_init_task pre-transitions to first mode phase."""
         task_id = "TASK_CP_005"
         workflow_initialize(task_id=task_id, description="Fix jira_key issue SAD-123")
-        workflow_set_mode(mode="fast", task_id=task_id)
+        workflow_set_mode(mode="standard", task_id=task_id)
 
         # Simulate what crew_init_task does: pre-transition to first mode phase
         workflow_transition(to_phase="architect", task_id=task_id)

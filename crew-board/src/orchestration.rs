@@ -64,8 +64,10 @@ impl CircuitBreaker {
         let now = Instant::now();
         self.failure_timestamps.push(now);
         // Remove old entries
-        let cutoff = now - std::time::Duration::from_secs(self.window_secs);
-        self.failure_timestamps.retain(|t| *t >= cutoff);
+        let cutoff = now.checked_sub(std::time::Duration::from_secs(self.window_secs));
+        if let Some(cutoff) = cutoff {
+            self.failure_timestamps.retain(|t| *t >= cutoff);
+        }
         if self.failure_timestamps.len() >= self.threshold as usize {
             self.tripped = true;
         }

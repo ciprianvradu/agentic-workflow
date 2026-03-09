@@ -419,7 +419,7 @@ def _build_custom_phase_action(
     variables = {
         "task_id": task_id,
         "task_dir": str(task_dir),
-        "mode": state.get("workflow_mode", {}).get("effective", "reviewed"),
+        "mode": state.get("workflow_mode", {}).get("effective", "standard"),
     }
 
     if phase_type == "skill":
@@ -464,7 +464,7 @@ def _build_custom_phase_action(
 
         models_config = config.get("models", {})
         default_model = models_config.get("default", "opus")
-        effective_mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+        effective_mode = state.get("workflow_mode", {}).get("effective", "standard")
         mode_models = models_config.get(effective_mode, {})
         model = mode_models.get(phase_name) or models_config.get(phase_name) or default_model
 
@@ -589,10 +589,11 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
 
         if token == "--mode" and i + 1 < len(tokens):
             mode_val = tokens[i + 1]
-            if mode_val in ("standard", "reviewed", "thorough", "full", "turbo", "fast", "minimal", "auto"):
+            if mode_val in ("quick", "standard", "thorough", "auto",
+                           "micro", "minimal", "reviewed", "full", "turbo", "fast"):
                 options["mode"] = mode_val
             else:
-                errors.append(f"Invalid mode '{mode_val}'. Must be: standard, reviewed, thorough, auto (legacy: full, turbo, fast, minimal)")
+                errors.append(f"Invalid mode '{mode_val}'. Must be: quick, standard, thorough, auto (legacy: micro, minimal, reviewed, full, turbo, fast)")
             i += 2
         elif token == "--loop-mode":
             options["loop_mode"] = True
@@ -667,9 +668,10 @@ def _parse_ask_args(text: str, errors: list) -> dict[str, Any]:
 
     agent = tokens[0].lower()
     valid_agents = [
-        "architect", "developer", "reviewer", "skeptic", "feedback",
-        "implementer", "technical-writer", "security-auditor",
-        "api-guardian", "accessibility-reviewer", "performance-analyst",
+        "architect", "developer", "reviewer", "skeptic",
+        "implementer", "quality-guard", "technical-writer",
+        "security-auditor", "api-guardian", "accessibility-reviewer",
+        "performance-analyst",
     ]
     if agent not in valid_agents:
         errors.append(f"Unknown agent '{agent}'. Available: {', '.join(valid_agents)}")
@@ -796,7 +798,7 @@ def crew_init_task(
     # Step 4: Determine and set mode
     mode_to_set = options.get("mode", "auto")
     mode_result = workflow_set_mode(mode=mode_to_set, task_id=task_id)
-    effective_mode = "reviewed"
+    effective_mode = "standard"
     if mode_result.get("success"):
         effective_mode = mode_result["workflow_mode"]["effective"]
 
@@ -1045,7 +1047,6 @@ AGENT_PROMPT_FILES = {
     "skeptic": "skeptic.md",
     "implementer": "implementer.md",
     "quality_guard": "quality-guard.md",
-    "feedback": "feedback.md",
     "technical_writer": "technical-writer.md",
     "security_auditor": "security-auditor.md",
     "performance_analyst": "performance-analyst.md",
@@ -1070,7 +1071,6 @@ AGENT_LIMIT_CATEGORY = {
     "skeptic": "planning_agents",
     "implementer": "implementation_agents",
     "quality_guard": "implementation_agents",
-    "feedback": "planning_agents",
     "technical_writer": "documentation_agents",
     "security_auditor": "planning_agents",
     "performance_analyst": "planning_agents",
@@ -1104,8 +1104,8 @@ def crew_get_next_phase(
     current_phase = state.get("phase")
     phases_completed = [p.lower().replace("-", "_") for p in state.get("phases_completed", [])]
     mode_config = state.get("workflow_mode", {})
-    effective_mode = mode_config.get("effective", "reviewed")
-    mode_phases = mode_config.get("phases", WORKFLOW_MODES.get(effective_mode, WORKFLOW_MODES["reviewed"])["phases"])
+    effective_mode = mode_config.get("effective", "standard")
+    mode_phases = mode_config.get("phases", WORKFLOW_MODES.get(effective_mode, WORKFLOW_MODES["standard"])["phases"])
     optional_phases = state.get("optional_phases", [])
 
     # Get effective config for checkpoint/parallel settings
@@ -1272,7 +1272,7 @@ def _build_phase_action(
     # Get model for this agent (mode-specific → agent-specific flat → default)
     models_config = config.get("models", {})
     default_model = models_config.get("default", "opus")
-    effective_mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    effective_mode = state.get("workflow_mode", {}).get("effective", "standard")
     mode_models = models_config.get(effective_mode, {})
     # Fallback chain: mode-specific → flat agent-specific → default
     model = mode_models.get(agent) or models_config.get(agent) or default_model
@@ -1322,7 +1322,7 @@ def _build_phase_action(
     }
 
     # Provide git diff commands for agents that need code change context
-    if agent in ("technical_writer", "feedback", "quality_guard"):
+    if agent in ("technical_writer", "quality_guard"):
         wt = state.get("worktree") or {}
         base_branch = wt.get("base_branch", "main")
         result["git_diff_command"] = f"git diff {base_branch}...HEAD"
@@ -1352,12 +1352,12 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         files.append(str(task_md))
 
     # Agent-specific context
-    if agent in ("developer", "reviewer", "skeptic", "feedback"):
+    if agent in ("developer", "reviewer", "skeptic"):
         arch_output = task_dir / "architect.md"
         if arch_output.exists():
             files.append(str(arch_output))
 
-    if agent in ("reviewer", "skeptic", "feedback", "implementer"):
+    if agent in ("reviewer", "skeptic", "implementer"):
         dev_output = task_dir / "developer.md"
         if dev_output.exists():
             files.append(str(dev_output))
@@ -1374,6 +1374,7 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
             files.append(str(skeptic_output))
 
     if agent == "quality_guard":
+        # Quality guard now also handles plan-vs-reality validation (absorbed from feedback)
         arch_output = task_dir / "architect.md"
         if arch_output.exists():
             files.append(str(arch_output))
@@ -1383,14 +1384,9 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         plan = task_dir / "plan.md"
         if plan.exists():
             files.append(str(plan))
-
-    if agent == "feedback":
         impl_output = task_dir / "implementer.md"
         if impl_output.exists():
             files.append(str(impl_output))
-        qg_output = task_dir / "quality-guard.md"
-        if qg_output.exists():
-            files.append(str(qg_output))
 
     if agent == "technical_writer":
         # Technical writer needs all prior agent outputs to capture
@@ -1398,7 +1394,7 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         for name in [
             "task.md", "architect.md", "developer.md",
             "reviewer.md", "skeptic.md", "implementer.md",
-            "quality-guard.md", "feedback.md",
+            "quality-guard.md",
         ]:
             f = task_dir / name
             if f.exists():
@@ -1848,7 +1844,7 @@ def crew_format_completion(
 
     # Generate commit message
     description = state.get("description", "workflow task")
-    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    mode = state.get("workflow_mode", {}).get("effective", "standard")
     file_summary = f"{len(files_changed)} files changed" if files_changed else "files changed"
     commit_message = f"{description}\n\nCompleted via /crew ({mode} mode), {file_summary}"
 
@@ -1934,7 +1930,7 @@ def crew_get_resume_state(
     state = _load_state(task_dir)
     current_phase = state.get("phase")
     phases_completed = state.get("phases_completed", [])
-    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    mode = state.get("workflow_mode", {}).get("effective", "standard")
     progress = state.get("implementation_progress", {})
 
     # Determine resume point

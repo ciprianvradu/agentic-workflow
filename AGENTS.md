@@ -12,7 +12,7 @@ A multi-agent orchestration framework for AI-augmented software development. Sup
 **Key components:**
 - `agents/` — Agent prompt sources (16 agents, compiled to 4 platforms via `scripts/build-agents.py`)
 - `mcp/agentic-workflow-server/` — MCP server (state, config, orchestration tools)
-- `config/workflow-config.yaml` — Essential configuration (4-level cascade: global → project → task → CLI); advanced options in `config/workflow-config-advanced.yaml`
+- `config/workflow-config.yaml` — Single configuration file (4-level cascade: global → project → task → CLI); essential settings at top, advanced settings below separator
 - `docs/orchestrator-spec.md` — Orchestrator agent specification (formerly `agents/orchestrator.md`)
 - `.tasks/` — Per-task state persistence (survives session crashes and context compaction)
 

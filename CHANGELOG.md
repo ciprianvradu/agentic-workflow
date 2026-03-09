@@ -10,7 +10,7 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - **Micro workflow mode** — auto-detected for typos, whitespace, spelling fixes; runs implementer only (~$0.03)
 - **Planner agent** — combined architect+developer for standard/turbo mode single-pass planning
-- **Config split** — essential settings in `workflow-config.yaml`, advanced/power-user settings in `workflow-config-advanced.yaml`; loaded via cascade (advanced first, essential overlays)
+- **Unified config** — single `workflow-config.yaml` with essential settings at top and advanced settings below separator; loaded via 4-level cascade (global → project → task → CLI)
 - **Config caching** — `config_get_effective()` caches merged config with 5-minute TTL, invalidated by file mtime changes
 - **Global severity scale** — unified 4-level scale (Critical/High/Medium/Low) in `docs/ai-context/severity-scale.md`, referenced by all agents
 - **Shared prompt sections** — extracted Memory Preservation, Completion Signals, and Doc Gap Flagging into `docs/ai-context/` reference docs (~428 lines removed from agents)

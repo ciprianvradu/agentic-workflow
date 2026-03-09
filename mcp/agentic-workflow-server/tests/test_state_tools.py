@@ -583,10 +583,10 @@ class TestHumanDecisions:
 class TestWorkflowModes:
     """Test workflow mode detection and management."""
 
-    def test_detect_mode_minimal_typo(self, clean_tasks_dir):
+    def test_detect_mode_quick_typo(self, clean_tasks_dir):
         result = workflow_detect_mode("Fix typo in README")
 
-        assert result["mode"] == "micro"
+        assert result["mode"] == "quick"
         assert result["confidence"] >= 0.7
         assert "typo" in result["matched_keywords"]
 
@@ -607,12 +607,12 @@ class TestWorkflowModes:
     def test_set_mode_explicit(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_100")
 
-        result = workflow_set_mode("minimal", task_id="TASK_TEST_100")
+        result = workflow_set_mode("standard", task_id="TASK_TEST_100")
 
         assert result["success"] is True
         assert result["workflow_mode"]["effective"] == "standard"
         assert "developer" in result["workflow_mode"]["phases"]
-        assert "architect" not in result["workflow_mode"]["phases"]
+        assert "architect" in result["workflow_mode"]["phases"]
 
     def test_set_mode_auto(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_101", description="Fix typo in docs")
@@ -621,37 +621,36 @@ class TestWorkflowModes:
 
         assert result["success"] is True
         assert result["workflow_mode"]["requested"] == "auto"
-        assert result["workflow_mode"]["effective"] == "micro"
+        assert result["workflow_mode"]["effective"] == "quick"
 
     def test_get_mode(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_102")
-        workflow_set_mode("fast", task_id="TASK_TEST_102")
+        workflow_set_mode("standard", task_id="TASK_TEST_102")
 
         result = workflow_get_mode(task_id="TASK_TEST_102")
 
-        assert result["workflow_mode"]["effective"] == "reviewed"
+        assert result["workflow_mode"]["effective"] == "standard"
         assert "available_modes" in result
 
     def test_is_phase_in_mode(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_103")
-        workflow_set_mode("minimal", task_id="TASK_TEST_103")
+        workflow_set_mode("quick", task_id="TASK_TEST_103")
 
-        # Developer should be in minimal mode
-        result1 = workflow_is_phase_in_mode("developer", task_id="TASK_TEST_103")
+        # Implementer should be in quick mode
+        result1 = workflow_is_phase_in_mode("implementer", task_id="TASK_TEST_103")
         assert result1["in_mode"] is True
 
-        # Architect should NOT be in minimal mode
+        # Architect should NOT be in quick mode
         result2 = workflow_is_phase_in_mode("architect", task_id="TASK_TEST_103")
         assert result2["in_mode"] is False
 
-    def test_technical_writer_in_all_modes(self, clean_tasks_dir):
-        for mode in ["standard", "reviewed", "thorough"]:
-            task_id = f"TASK_TEST_TW_{mode}"
-            workflow_initialize(task_id=task_id)
-            workflow_set_mode(mode, task_id=task_id)
+    def test_technical_writer_in_thorough(self, clean_tasks_dir):
+        """Technical writer is only in thorough mode now (conditional in standard)."""
+        workflow_initialize(task_id="TASK_TEST_TW_thorough")
+        workflow_set_mode("thorough", task_id="TASK_TEST_TW_thorough")
 
-            result = workflow_is_phase_in_mode("technical_writer", task_id=task_id)
-            assert result["in_mode"] is True, f"technical_writer should be in {mode} mode"
+        result = workflow_is_phase_in_mode("technical_writer", task_id="TASK_TEST_TW_thorough")
+        assert result["in_mode"] is True, "technical_writer should be in thorough mode"
 
 
 class TestCompletionConsistency:
@@ -674,21 +673,20 @@ class TestCompletionConsistency:
     def test_is_complete_respects_mode_phases(self, clean_tasks_dir):
         """workflow_is_complete uses workflow_mode.phases instead of REQUIRED_PHASES."""
         workflow_initialize(task_id="TASK_TEST_CC_002")
-        workflow_set_mode("minimal", task_id="TASK_TEST_CC_002")
-        # Minimal mode: developer, implementer, quality_guard, technical_writer
-        # Complete all minimal phases
+        workflow_set_mode("standard", task_id="TASK_TEST_CC_002")
+        # Standard mode: architect, developer, implementer, quality_guard
+        workflow_transition("architect", task_id="TASK_TEST_CC_002")
+        workflow_complete_phase(task_id="TASK_TEST_CC_002")
         workflow_transition("developer", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
         workflow_transition("implementer", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
         workflow_transition("quality_guard", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
-        workflow_transition("technical_writer", task_id="TASK_TEST_CC_002")
-        workflow_complete_phase(task_id="TASK_TEST_CC_002")
 
         result = workflow_is_complete(task_id="TASK_TEST_CC_002")
         assert result["is_complete"] is True
-        # architect and reviewer are NOT required in minimal mode
+        # reviewer and skeptic are NOT required in standard mode
 
     def test_can_stop_when_status_completed(self, clean_tasks_dir):
         """workflow_can_stop returns True when state.status == 'completed'."""
@@ -707,15 +705,15 @@ class TestCompletionConsistency:
     def test_can_stop_respects_mode_phases(self, clean_tasks_dir):
         """workflow_can_stop uses workflow_mode.phases instead of REQUIRED_PHASES."""
         workflow_initialize(task_id="TASK_TEST_CC_004")
-        workflow_set_mode("minimal", task_id="TASK_TEST_CC_004")
-        # Complete all minimal phases (developer, implementer, quality_guard, technical_writer)
+        workflow_set_mode("standard", task_id="TASK_TEST_CC_004")
+        # Complete all standard phases (architect, developer, implementer, quality_guard)
+        workflow_transition("architect", task_id="TASK_TEST_CC_004")
+        workflow_complete_phase(task_id="TASK_TEST_CC_004")
         workflow_transition("developer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
         workflow_transition("implementer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
         workflow_transition("quality_guard", task_id="TASK_TEST_CC_004")
-        workflow_complete_phase(task_id="TASK_TEST_CC_004")
-        workflow_transition("technical_writer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
 
         result = workflow_can_stop(task_id="TASK_TEST_CC_004")
@@ -724,9 +722,9 @@ class TestCompletionConsistency:
     def test_can_stop_blocks_incomplete_mode_phases(self, clean_tasks_dir):
         """workflow_can_stop blocks when mode-specific phases are incomplete."""
         workflow_initialize(task_id="TASK_TEST_CC_005")
-        workflow_set_mode("minimal", task_id="TASK_TEST_CC_005")
-        # Only complete developer — missing implementer and technical_writer
-        workflow_transition("developer", task_id="TASK_TEST_CC_005")
+        workflow_set_mode("standard", task_id="TASK_TEST_CC_005")
+        # Only complete architect — missing developer, implementer and quality_guard
+        workflow_transition("architect", task_id="TASK_TEST_CC_005")
         workflow_complete_phase(task_id="TASK_TEST_CC_005")
 
         result = workflow_can_stop(task_id="TASK_TEST_CC_005")
@@ -1226,17 +1224,17 @@ class TestTurboMode:
         assert result["mode"] == "thorough"
         assert result["confidence"] >= 0.8
 
-    def test_set_mode_turbo(self, clean_tasks_dir):
+    def test_set_mode_turbo_alias(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_200")
 
         result = workflow_set_mode("turbo", task_id="TASK_TEST_200")
 
         assert result["success"] is True
         assert result["workflow_mode"]["effective"] == "standard"
+        assert "architect" in result["workflow_mode"]["phases"]
         assert "developer" in result["workflow_mode"]["phases"]
         assert "implementer" in result["workflow_mode"]["phases"]
-        assert "technical_writer" in result["workflow_mode"]["phases"]
-        assert "architect" not in result["workflow_mode"]["phases"]
+        assert "quality_guard" in result["workflow_mode"]["phases"]
         assert "reviewer" not in result["workflow_mode"]["phases"]
 
 
@@ -1283,41 +1281,41 @@ class TestCostLongContext:
 class TestEffortLevels:
     """Test effort level recommendations per mode."""
 
-    def test_effort_full_mode_architect(self, clean_tasks_dir):
+    def test_effort_thorough_mode_architect(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_220")
-        workflow_set_mode("full", task_id="TASK_TEST_220")
+        workflow_set_mode("thorough", task_id="TASK_TEST_220")
 
         result = workflow_get_effort_level("architect", task_id="TASK_TEST_220")
 
         assert result["effort"] == "max"
         assert result["mode"] == "thorough"
 
-    def test_effort_turbo_mode_developer(self, clean_tasks_dir):
+    def test_effort_standard_mode_developer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_221")
-        workflow_set_mode("turbo", task_id="TASK_TEST_221")
+        workflow_set_mode("standard", task_id="TASK_TEST_221")
 
         result = workflow_get_effort_level("developer", task_id="TASK_TEST_221")
 
-        assert result["effort"] == "high"  # turbo→standard, developer effort is high
+        assert result["effort"] == "high"
         assert result["mode"] == "standard"
 
-    def test_effort_minimal_mode_developer(self, clean_tasks_dir):
+    def test_effort_quick_mode_implementer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_222")
-        workflow_set_mode("minimal", task_id="TASK_TEST_222")
+        workflow_set_mode("quick", task_id="TASK_TEST_222")
 
-        result = workflow_get_effort_level("developer", task_id="TASK_TEST_222")
+        result = workflow_get_effort_level("implementer", task_id="TASK_TEST_222")
 
-        assert result["effort"] == "high"  # minimal→standard, developer effort is high
-        assert result["mode"] == "standard"
+        assert result["effort"] == "low"  # quick mode implementer is low effort
+        assert result["mode"] == "quick"
 
-    def test_effort_fast_mode_technical_writer(self, clean_tasks_dir):
+    def test_effort_thorough_mode_technical_writer(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_223")
-        workflow_set_mode("fast", task_id="TASK_TEST_223")
+        workflow_set_mode("thorough", task_id="TASK_TEST_223")
 
         result = workflow_get_effort_level("technical_writer", task_id="TASK_TEST_223")
 
         assert result["effort"] == "medium"
-        assert result["mode"] == "reviewed"
+        assert result["mode"] == "thorough"
 
     def test_effort_default_no_task(self, clean_tasks_dir):
         result = workflow_get_effort_level("architect", task_id="NONEXISTENT")
@@ -2797,29 +2795,29 @@ class TestFileScopeAnalysis:
         result = _analyze_file_scope(["lib/security/csrf.py"])
         assert result["escalation"] == "thorough"
 
-    def test_config_path_triggers_reviewed(self):
+    def test_config_path_triggers_standard(self):
         result = _analyze_file_scope(["config/settings.yaml"])
-        assert result["escalation"] == "reviewed"
+        assert result["escalation"] == "standard"
         assert len(result["config_hits"]) >= 1
 
-    def test_dockerfile_triggers_reviewed(self):
+    def test_dockerfile_triggers_standard(self):
         result = _analyze_file_scope(["Dockerfile"])
-        assert result["escalation"] == "reviewed"
+        assert result["escalation"] == "standard"
 
-    def test_github_workflows_triggers_reviewed(self):
+    def test_github_workflows_triggers_standard(self):
         result = _analyze_file_scope([".github/workflows/ci.yml"])
-        assert result["escalation"] == "reviewed"
+        assert result["escalation"] == "standard"
 
-    def test_many_files_triggers_reviewed(self):
+    def test_many_files_triggers_standard(self):
         files = [f"src/file_{i}.py" for i in range(12)]
         result = _analyze_file_scope(files)
-        assert result["escalation"] == "reviewed"
+        assert result["escalation"] == "standard"
         assert "many files" in result["escalation_reasons"][0]
 
-    def test_many_dirs_triggers_reviewed(self):
+    def test_many_dirs_triggers_standard(self):
         files = ["a/f1.py", "b/f2.py", "c/f3.py"]
         result = _analyze_file_scope(files)
-        assert result["escalation"] == "reviewed"
+        assert result["escalation"] == "standard"
 
     def test_cross_module_triggers_thorough(self):
         files = [f"mod{i}/f.py" for i in range(6)]
@@ -2836,13 +2834,14 @@ class TestFileScopeAnalysis:
 class TestDetectModeWithFiles:
     """Test workflow_detect_mode with files_affected for scope escalation."""
 
-    def test_standard_escalated_to_reviewed_by_file_scope(self):
-        """A routine task touching config should escalate to reviewed."""
+    def test_standard_escalated_by_file_scope(self):
+        """A routine task touching config stays standard (scope escalation to standard)."""
         result = workflow_detect_mode(
             "Fix typo in settings",
             files_affected=["config/settings.yaml"]
         )
-        assert result["mode"] == "reviewed"
+        # quick keyword → standard via scope escalation (config file)
+        assert result["mode"] == "standard"
         assert "scope_analysis" in result
 
     def test_standard_escalated_to_thorough_by_sensitive_files(self):
@@ -2854,13 +2853,13 @@ class TestDetectModeWithFiles:
         # Keywords have "auth" → already thorough, but scope confirms
         assert result["mode"] == "thorough"
 
-    def test_micro_not_escalated_for_safe_files(self):
-        """A trivial task touching only safe files stays micro."""
+    def test_quick_not_escalated_for_safe_files(self):
+        """A trivial task touching only safe files stays quick."""
         result = workflow_detect_mode(
             "Fix typo in utils",
             files_affected=["src/utils.py"]
         )
-        assert result["mode"] == "micro"
+        assert result["mode"] == "quick"
         assert result.get("scope_analysis") is not None
         assert result["scope_analysis"]["escalation"] is None
 
@@ -2896,15 +2895,15 @@ class TestDetectModeWithFiles:
         result = workflow_detect_mode("Add new feature")
         assert "scope_analysis" not in result
 
-    def test_many_files_escalate_standard_to_reviewed(self):
-        """A simple task touching 12+ files should escalate to reviewed."""
+    def test_many_files_keep_standard(self):
+        """A simple task touching 12+ files stays standard (scope escalation is to standard)."""
         files = [f"src/component_{i}.tsx" for i in range(12)]
         result = workflow_detect_mode(
             "Rename CSS class across components",
             files_affected=files
         )
-        # "rename" is standard keyword, but 12 files escalates to reviewed
-        assert result["mode"] == "reviewed"
+        # "rename" is standard keyword, scope escalation is also standard
+        assert result["mode"] == "standard"
 
 
 if __name__ == "__main__":

@@ -29,16 +29,14 @@ PHASE_ORDER = [
     "skeptic",
     "implementer",
     "quality_guard",
-    "feedback",
     "technical_writer"
 ]
 
 REQUIRED_PHASES = [
     "architect",
     "developer",
-    "reviewer",
     "implementer",
-    "technical_writer"
+    "quality_guard"
 ]
 
 # Maximum error patterns to keep in .error_patterns.jsonl (oldest-first eviction)
@@ -2308,54 +2306,43 @@ def workflow_clear_model_cooldown(
 # ============================================================================
 
 WORKFLOW_MODES = {
-    "micro": {
+    "quick": {
         "description": "Implementer only — typos, one-line fixes, trivial changes",
         "phases": ["implementer"],
         "estimated_cost": "$0.03"
     },
     "standard": {
-        "description": "Developer plans and implements — routine features, fixes, refactors",
-        "phases": ["developer", "implementer", "quality_guard", "technical_writer"],
-        "estimated_cost": "$0.10"
-    },
-    "reviewed": {
-        "description": "Adds architecture analysis and code review — non-trivial changes",
-        "phases": ["architect", "developer", "reviewer", "implementer", "quality_guard", "technical_writer"],
-        "estimated_cost": "$0.25"
+        "description": "Architect plans, developer details, implementer executes — routine to non-trivial features",
+        "phases": ["architect", "developer", "implementer", "quality_guard"],
+        "estimated_cost": "$0.12"
     },
     "thorough": {
-        "description": "Full adversarial pipeline — security, migrations, breaking changes",
-        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"],
-        "estimated_cost": "$0.50+"
+        "description": "Full review pipeline with parallel reviewer+skeptic — security, migrations, breaking changes",
+        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"],
+        "estimated_cost": "$0.40+"
     }
 }
 
 # Backward-compatible aliases for old mode names
 MODE_ALIASES = {
+    "micro": "quick",
+    "minimal": "quick",
     "turbo": "standard",
-    "minimal": "standard",
-    "fast": "reviewed",
+    "fast": "standard",
+    "reviewed": "standard",
     "full": "thorough",
 }
 
 # Recommended thinking effort levels per mode and agent
 EFFORT_LEVELS = {
-    "micro": {
+    "quick": {
         "implementer": "low"
     },
     "standard": {
-        "developer": "high",
-        "implementer": "high",
-        "quality_guard": "medium",
-        "technical_writer": "medium"
-    },
-    "reviewed": {
         "architect": "high",
         "developer": "high",
-        "reviewer": "high",
         "implementer": "high",
-        "quality_guard": "high",
-        "technical_writer": "medium"
+        "quality_guard": "medium"
     },
     "thorough": {
         "architect": "max",
@@ -2364,14 +2351,13 @@ EFFORT_LEVELS = {
         "skeptic": "max",
         "implementer": "high",
         "quality_guard": "high",
-        "feedback": "high",
         "technical_writer": "medium"
     }
 }
 
-# Keywords for auto-detection
+# Keywords for auto-detection (3 modes: quick, standard, thorough)
 AUTO_DETECT_RULES = {
-    "micro": {
+    "quick": {
         "keywords": ["typo", "fix typo", "spelling", "whitespace", "one-line",
                     "trivial", "rename variable", "update comment", "fix import"],
         "exclude_keywords": ["security", "auth", "database", "migration", "api", "breaking",
@@ -2524,7 +2510,7 @@ def _analyze_file_scope(files: list[str]) -> dict[str, Any]:
         or dir_count >= thresholds["many_dirs"]
         or config_hits
     ):
-        escalation = "reviewed"
+        escalation = "standard"
         if file_count > thresholds["many_files"]:
             escalation_reasons.append(f"many files affected ({file_count})")
         if dir_count >= thresholds["many_dirs"]:
@@ -2549,7 +2535,7 @@ def workflow_detect_mode(
 ) -> dict[str, Any]:
     """Auto-detect the appropriate workflow mode based on task description and file scope.
 
-    Four modes: micro (trivial), standard (routine), reviewed (non-trivial), thorough (critical).
+    Three modes: quick (trivial), standard (routine to non-trivial), thorough (critical).
 
     Detection uses two signals that are combined (highest wins):
       1. **Keyword analysis** — matches description against known patterns
@@ -2566,9 +2552,9 @@ def workflow_detect_mode(
     desc_lower = task_description.lower()
 
     # --- Signal 1: keyword analysis ---
-    keyword_mode = "reviewed"
+    keyword_mode = "standard"
     keyword_confidence = 0.5
-    keyword_reason = "No specific pattern detected"
+    keyword_reason = "No specific pattern detected — defaulting to standard"
     matched_keywords: list[str] = []
 
     # Check for thorough mode triggers first (highest priority)
@@ -2602,25 +2588,25 @@ def workflow_detect_mode(
                 keyword_reason = f"Routine task ({', '.join(standard_matches)}) without critical patterns"
                 matched_keywords = standard_matches
 
-                # Check if this could be micro mode (subset of standard keywords,
+                # Check if this could be quick mode (trivial keywords only,
                 # no broader feature keywords that would require planning)
-                micro_excluded = False
-                for exclude_keyword in AUTO_DETECT_RULES["micro"]["exclude_keywords"]:
+                quick_excluded = False
+                for exclude_keyword in AUTO_DETECT_RULES["quick"]["exclude_keywords"]:
                     if exclude_keyword in desc_lower:
-                        micro_excluded = True
+                        quick_excluded = True
                         break
 
-                if not micro_excluded:
-                    micro_matches = []
-                    for kw in AUTO_DETECT_RULES["micro"]["keywords"]:
+                if not quick_excluded:
+                    quick_matches = []
+                    for kw in AUTO_DETECT_RULES["quick"]["keywords"]:
                         if kw in desc_lower:
-                            micro_matches.append(kw)
+                            quick_matches.append(kw)
 
-                    if micro_matches:
-                        keyword_mode = "micro"
+                    if quick_matches:
+                        keyword_mode = "quick"
                         keyword_confidence = 0.85
-                        keyword_reason = f"Trivial task ({', '.join(micro_matches)}) — micro mode"
-                        matched_keywords = micro_matches
+                        keyword_reason = f"Trivial task ({', '.join(quick_matches)}) — quick mode"
+                        matched_keywords = quick_matches
 
     # --- Signal 2: file scope analysis (when files provided) ---
     scope_analysis = None
@@ -2630,7 +2616,7 @@ def workflow_detect_mode(
         scope_mode = scope_analysis.get("escalation")
 
     # --- Combine signals: highest mode wins ---
-    mode_rank = {"micro": 0, "standard": 1, "reviewed": 2, "thorough": 3}
+    mode_rank = {"quick": 0, "standard": 1, "thorough": 2}
     final_mode = keyword_mode
     final_reason = keyword_reason
     final_confidence = keyword_confidence
@@ -2714,7 +2700,7 @@ def workflow_set_mode(
     effective_mode = state["workflow_mode"]["effective"]
     mode_config = _resolve_mode(effective_mode, task_id=resolved_task_id)
     if mode_config is None:
-        mode_config = WORKFLOW_MODES["reviewed"]
+        mode_config = WORKFLOW_MODES["standard"]
     state["workflow_mode"]["phases"] = mode_config["phases"]
     state["workflow_mode"]["estimated_cost"] = mode_config.get("estimated_cost", "unknown")
 
@@ -2747,10 +2733,10 @@ def workflow_get_mode(
 
     state = _load_state(task_dir)
     mode = state.get("workflow_mode", {
-        "requested": "reviewed",
-        "effective": "reviewed",
-        "phases": WORKFLOW_MODES["reviewed"]["phases"],
-        "estimated_cost": WORKFLOW_MODES["reviewed"]["estimated_cost"]
+        "requested": "standard",
+        "effective": "standard",
+        "phases": WORKFLOW_MODES["standard"]["phases"],
+        "estimated_cost": WORKFLOW_MODES["standard"]["estimated_cost"]
     })
 
     return {
@@ -2787,7 +2773,7 @@ def workflow_is_phase_in_mode(
     return {
         "phase": phase,
         "in_mode": phase in phases,
-        "effective_mode": mode.get("effective", "reviewed"),
+        "effective_mode": mode.get("effective", "standard"),
         "task_id": state.get("task_id")
     }
 
@@ -2812,15 +2798,15 @@ def workflow_get_effort_level(
     if not task_dir:
         return {
             "effort": "high",
-            "mode": "reviewed",
+            "mode": "standard",
             "reason": "No active task found, using default effort level"
         }
 
     state = _load_state(task_dir)
-    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    mode = state.get("workflow_mode", {}).get("effective", "standard")
     # Resolve any legacy mode names to new names for effort lookup
     resolved_mode = MODE_ALIASES.get(mode, mode)
-    mode_efforts = EFFORT_LEVELS.get(resolved_mode, EFFORT_LEVELS["reviewed"])
+    mode_efforts = EFFORT_LEVELS.get(resolved_mode, EFFORT_LEVELS["standard"])
     effort = mode_efforts.get(agent, "high")
 
     return {
@@ -3037,7 +3023,7 @@ def workflow_get_cost_summary(
     })
 
     # Calculate mode comparison if we have mode info
-    mode = state.get("workflow_mode", {}).get("effective", "reviewed")
+    mode = state.get("workflow_mode", {}).get("effective", "standard")
     full_mode_estimate = cost_tracking["totals"]["total_cost"]  # Current cost is the baseline
 
     # Generate formatted summary
@@ -4524,6 +4510,222 @@ def workflow_get_launch_command(
     }
 
 
+# ── Outcome Tracking ─────────────────────────────────────────────────
+
+# Maximum outcome records to keep (oldest-first eviction)
+MAX_OUTCOME_RECORDS = 1000
+
+
+def _get_outcomes_file() -> Path:
+    """Get the path to the task outcomes file."""
+    tasks_dir = get_tasks_dir()
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    return tasks_dir / ".task_outcomes.jsonl"
+
+
+def workflow_record_outcome(
+    task_id: str,
+    success: bool,
+    rework_cycles: int = 0,
+    files_changed: int = 0,
+    tests_passed: int = 0,
+    tests_failed: int = 0,
+    duration_seconds: float = 0,
+    notes: str = ""
+) -> dict[str, Any]:
+    """Record the final outcome of a completed task.
+
+    Stores outcome data to .task_outcomes.jsonl in the tasks directory
+    for aggregate analysis and continuous improvement.
+
+    Args:
+        task_id: Identifier of the completed task
+        success: Whether the task completed successfully
+        rework_cycles: Number of rework/iteration cycles required
+        files_changed: Number of files modified
+        tests_passed: Number of tests that passed
+        tests_failed: Number of tests that failed
+        duration_seconds: Total wall-clock time in seconds
+        notes: Free-form notes about the outcome
+
+    Returns:
+        Recorded outcome entry
+    """
+    if not task_id:
+        return {"success": False, "error": "task_id is required"}
+
+    # Try to read mode from the task's state if the task dir exists
+    mode = "unknown"
+    task_dir = find_task_dir(task_id)
+    if task_dir:
+        state = _load_state(task_dir)
+        wf_mode = state.get("workflow_mode", {})
+        mode = wf_mode.get("effective", "unknown")
+
+    outcomes_file = _get_outcomes_file()
+
+    outcome = {
+        "task_id": task_id,
+        "success": success,
+        "rework_cycles": rework_cycles,
+        "files_changed": files_changed,
+        "tests_passed": tests_passed,
+        "tests_failed": tests_failed,
+        "duration_seconds": duration_seconds,
+        "notes": notes,
+        "mode": mode,
+        "recorded_at": datetime.now().isoformat()
+    }
+
+    # Read existing outcomes for rotation
+    existing = []
+    if outcomes_file.exists():
+        with open(outcomes_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        existing.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+
+    existing.append(outcome)
+
+    # Rotate: cap at MAX_OUTCOME_RECORDS, evict oldest first
+    if len(existing) > MAX_OUTCOME_RECORDS:
+        existing = existing[-MAX_OUTCOME_RECORDS:]
+
+    # Rewrite the full file
+    with open(outcomes_file, "w") as f:
+        for entry in existing:
+            f.write(json.dumps(entry) + "\n")
+
+    return {
+        "success": True,
+        "outcome": outcome,
+        "total_recorded": len(existing),
+        "message": f"Recorded outcome for task {task_id}"
+    }
+
+
+def workflow_get_outcome_stats(
+    days: int = 30
+) -> dict[str, Any]:
+    """Return aggregate statistics from recorded task outcomes.
+
+    Reads .task_outcomes.jsonl and computes summary metrics for the
+    specified time window.
+
+    Args:
+        days: Number of days to look back (default 30)
+
+    Returns:
+        Aggregate statistics including success rate, averages, and
+        breakdowns by mode
+    """
+    outcomes_file = _get_outcomes_file()
+
+    if not outcomes_file.exists():
+        return {
+            "success": True,
+            "total_tasks": 0,
+            "message": "No outcome data recorded yet"
+        }
+
+    # Load all outcomes
+    all_outcomes = []
+    with open(outcomes_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    all_outcomes.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+    if not all_outcomes:
+        return {
+            "success": True,
+            "total_tasks": 0,
+            "message": "No outcome data recorded yet"
+        }
+
+    # Filter by time window
+    cutoff = datetime.now().isoformat()
+    try:
+        from datetime import timedelta
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    except Exception:
+        pass  # If timedelta fails, include all
+
+    filtered = [
+        o for o in all_outcomes
+        if o.get("recorded_at", "") >= cutoff
+    ]
+
+    if not filtered:
+        return {
+            "success": True,
+            "total_tasks": 0,
+            "days": days,
+            "message": f"No outcomes in the last {days} days"
+        }
+
+    # Compute aggregates
+    total = len(filtered)
+    successes = sum(1 for o in filtered if o.get("success"))
+    success_rate = round(successes / total * 100, 1) if total > 0 else 0
+
+    rework_values = [o.get("rework_cycles", 0) for o in filtered]
+    avg_rework = round(sum(rework_values) / len(rework_values), 2) if rework_values else 0
+
+    duration_values = [o.get("duration_seconds", 0) for o in filtered if o.get("duration_seconds", 0) > 0]
+    avg_duration = round(sum(duration_values) / len(duration_values), 1) if duration_values else 0
+
+    files_values = [o.get("files_changed", 0) for o in filtered]
+    avg_files = round(sum(files_values) / len(files_values), 1) if files_values else 0
+
+    total_tests_passed = sum(o.get("tests_passed", 0) for o in filtered)
+    total_tests_failed = sum(o.get("tests_failed", 0) for o in filtered)
+
+    # Breakdown by mode
+    by_mode: dict[str, dict[str, Any]] = {}
+    for o in filtered:
+        mode = o.get("mode", "unknown")
+        if mode not in by_mode:
+            by_mode[mode] = {"total": 0, "successes": 0, "rework_cycles": []}
+        by_mode[mode]["total"] += 1
+        if o.get("success"):
+            by_mode[mode]["successes"] += 1
+        by_mode[mode]["rework_cycles"].append(o.get("rework_cycles", 0))
+
+    mode_stats = {}
+    for mode, data in by_mode.items():
+        mode_total = data["total"]
+        mode_successes = data["successes"]
+        mode_rework = data["rework_cycles"]
+        mode_stats[mode] = {
+            "total": mode_total,
+            "success_rate": round(mode_successes / mode_total * 100, 1) if mode_total > 0 else 0,
+            "avg_rework_cycles": round(sum(mode_rework) / len(mode_rework), 2) if mode_rework else 0
+        }
+
+    return {
+        "success": True,
+        "days": days,
+        "total_tasks": total,
+        "successes": successes,
+        "failures": total - successes,
+        "success_rate": success_rate,
+        "avg_rework_cycles": avg_rework,
+        "avg_duration_seconds": avg_duration,
+        "avg_files_changed": avg_files,
+        "total_tests_passed": total_tests_passed,
+        "total_tests_failed": total_tests_failed,
+        "by_mode": mode_stats
+    }
+
+
 # ── Interaction Logging ──────────────────────────────────────────────
 
 
@@ -4584,3 +4786,200 @@ def workflow_log_interaction(
         "entry": entry,
         "task_id": task_dir.name,
     }
+
+
+# ============================================================================
+# Composite Query/Action Tools
+# ============================================================================
+
+_WORKFLOW_QUERY_ASPECTS = [
+    "concerns",
+    "assertions",
+    "discoveries",
+    "context_usage",
+    "linked_tasks",
+    "optional_phases",
+    "agent_performance",
+]
+
+
+def workflow_query(
+    aspect: str,
+    task_id: Optional[str] = None,
+    filters: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Unified query tool that dispatches to narrow read-only query functions.
+
+    Args:
+        aspect: What to query. One of: concerns, assertions, discoveries,
+                context_usage, linked_tasks, optional_phases, agent_performance.
+        task_id: Task identifier. If not provided, uses active task.
+        filters: Optional aspect-specific filters:
+            - concerns: {"unaddressed_only": bool}
+            - assertions: {"step_id": str, "status": str}
+            - discoveries: {"category": str}
+            - linked_tasks: {"include_memories": bool}
+            - agent_performance: {"agent": str, "time_range_days": int}
+
+    Returns:
+        Result from the underlying query function.
+    """
+    if aspect not in _WORKFLOW_QUERY_ASPECTS:
+        return {
+            "error": f"Invalid aspect '{aspect}'. Must be one of: {', '.join(_WORKFLOW_QUERY_ASPECTS)}"
+        }
+
+    filters = filters or {}
+
+    if aspect == "concerns":
+        return workflow_get_concerns(
+            task_id=task_id,
+            unaddressed_only=filters.get("unaddressed_only", False),
+        )
+    elif aspect == "assertions":
+        return workflow_get_assertions(
+            step_id=filters.get("step_id"),
+            status=filters.get("status"),
+            task_id=task_id,
+        )
+    elif aspect == "discoveries":
+        return workflow_get_discoveries(
+            category=filters.get("category"),
+            task_id=task_id,
+        )
+    elif aspect == "context_usage":
+        return workflow_get_context_usage(task_id=task_id)
+    elif aspect == "linked_tasks":
+        return workflow_get_linked_tasks(
+            task_id=task_id,
+            include_memories=filters.get("include_memories", False),
+        )
+    elif aspect == "optional_phases":
+        return workflow_get_optional_phases(task_id=task_id)
+    elif aspect == "agent_performance":
+        return workflow_get_agent_performance(
+            agent=filters.get("agent"),
+            time_range_days=filters.get("time_range_days", 30),
+        )
+    # Should never reach here due to the check above
+    return {"error": f"Unhandled aspect: {aspect}"}
+
+
+_MANAGE_MODEL_ACTIONS = [
+    "record_error",
+    "record_success",
+    "get_available",
+    "get_status",
+    "clear_cooldown",
+]
+
+
+def workflow_manage_model(
+    action: str,
+    model: Optional[str] = None,
+    error_type: Optional[str] = None,
+    error_message: str = "",
+    task_id: Optional[str] = None,
+    preferred_model: Optional[str] = None,
+) -> dict[str, Any]:
+    """Unified model resilience tool that dispatches to narrow model management functions.
+
+    Args:
+        action: What to do. One of: record_error, record_success, get_available,
+                get_status, clear_cooldown.
+        model: Model identifier (required for record_error, record_success, clear_cooldown).
+        error_type: Error type (required for record_error).
+        error_message: Optional error message (for record_error).
+        task_id: Optional task context (for record_error).
+        preferred_model: Optional preferred model (for get_available).
+
+    Returns:
+        Result from the underlying model management function.
+    """
+    if action not in _MANAGE_MODEL_ACTIONS:
+        return {
+            "error": f"Invalid action '{action}'. Must be one of: {', '.join(_MANAGE_MODEL_ACTIONS)}"
+        }
+
+    if action == "record_error":
+        if not model:
+            return {"error": "model is required for record_error"}
+        if not error_type:
+            return {"error": "error_type is required for record_error"}
+        return workflow_record_model_error(
+            model=model,
+            error_type=error_type,
+            error_message=error_message,
+            task_id=task_id,
+        )
+    elif action == "record_success":
+        if not model:
+            return {"error": "model is required for record_success"}
+        return workflow_record_model_success(model=model)
+    elif action == "get_available":
+        return workflow_get_available_model(preferred_model=preferred_model)
+    elif action == "get_status":
+        return workflow_get_resilience_status()
+    elif action == "clear_cooldown":
+        if not model:
+            return {"error": "model is required for clear_cooldown"}
+        return workflow_clear_model_cooldown(model=model)
+    # Should never reach here due to the check above
+    return {"error": f"Unhandled action: {action}"}
+
+
+_PARALLEL_ACTIONS = [
+    "start",
+    "complete",
+    "merge",
+]
+
+
+def workflow_parallel(
+    action: str,
+    phases: Optional[list[str]] = None,
+    phase: Optional[str] = None,
+    result_summary: str = "",
+    concerns: Optional[list[dict]] = None,
+    task_id: Optional[str] = None,
+    merge_strategy: str = "deduplicate",
+) -> dict[str, Any]:
+    """Unified parallel execution tool that dispatches to narrow parallel management functions.
+
+    Args:
+        action: What to do. One of: start, complete, merge.
+        phases: List of phase names to run in parallel (required for start).
+        phase: Phase name that completed (required for complete).
+        result_summary: Summary of the phase's output (for complete).
+        concerns: List of concerns raised by phase (for complete).
+        task_id: Task identifier. If not provided, uses active task.
+        merge_strategy: How to merge results (for merge). Default: deduplicate.
+
+    Returns:
+        Result from the underlying parallel management function.
+    """
+    if action not in _PARALLEL_ACTIONS:
+        return {
+            "error": f"Invalid action '{action}'. Must be one of: {', '.join(_PARALLEL_ACTIONS)}"
+        }
+
+    if action == "start":
+        if not phases:
+            return {"error": "phases is required for start action"}
+        return workflow_start_parallel_phase(phases=phases, task_id=task_id)
+    elif action == "complete":
+        if not phase:
+            return {"error": "phase is required for complete action"}
+        return workflow_complete_parallel_phase(
+            phase=phase,
+            result_summary=result_summary,
+            concerns=concerns,
+            task_id=task_id,
+        )
+    elif action == "merge":
+        return workflow_merge_parallel_results(
+            task_id=task_id,
+            merge_strategy=merge_strategy,
+        )
+    # Should never reach here due to the check above
+    return {"error": f"Unhandled action: {action}"}

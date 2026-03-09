@@ -21,6 +21,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
 AGENTS_DIR = REPO_ROOT / "agents"
+SHARED_PREAMBLE_PATH = AGENTS_DIR / "_shared-preamble.md"
 PREAMBLES_DIR = REPO_ROOT / "config" / "platform-preambles"
 ORCHESTRATORS_DIR = REPO_ROOT / "config" / "platform-orchestrators"
 
@@ -49,6 +50,14 @@ AGENT_DESCRIPTIONS = {
 # For Copilot/Gemini: generates as regular agents with full tool access
 COMMAND_AGENTS = {
     "crew-worktree",
+    "crew-status",
+}
+
+# Utility agents that do NOT receive the shared preamble injection.
+# These are lightweight crew helper commands, not core workflow agents.
+UTILITY_AGENTS = {
+    "crew-worktree",
+    "crew-stats",
     "crew-status",
 }
 
@@ -251,8 +260,22 @@ def _write_manifest(output_dir: Path, platform: str, files: list[str]):
 
 
 def list_agents() -> list[Path]:
-    """Return all agent .md files sorted by name."""
-    return sorted(AGENTS_DIR.glob("*.md"))
+    """Return all agent .md files sorted by name, excluding _-prefixed files."""
+    return sorted(p for p in AGENTS_DIR.glob("*.md") if not p.name.startswith("_"))
+
+
+def _load_shared_preamble() -> str:
+    """Load the shared agent preamble content, or return empty string if absent."""
+    if SHARED_PREAMBLE_PATH.exists():
+        return read_file(SHARED_PREAMBLE_PATH)
+    return ""
+
+
+def _apply_shared_preamble(body: str, agent_name: str, shared_preamble: str) -> str:
+    """Append shared preamble to agent body unless it's a utility agent."""
+    if not shared_preamble or agent_name in UTILITY_AGENTS:
+        return body
+    return body.rstrip() + "\n\n" + shared_preamble
 
 
 # ---------------------------------------------------------------------------
@@ -280,13 +303,14 @@ def build_claude(output_dir: Path):
 
     preamble_path = PREAMBLES_DIR / "claude.md"
     preamble = read_file(preamble_path) if preamble_path.exists() else ""
+    shared_preamble = _load_shared_preamble()
 
     agent_count = 0
     cmd_count = 0
     command_agent_names: set[str] = set()  # track filenames written as command-agents
     for agent_path in list_agents():
         name = agent_path.stem  # e.g. "architect"
-        body = read_file(agent_path)
+        body = _apply_shared_preamble(read_file(agent_path), name, shared_preamble)
 
         if name in COMMAND_AGENTS:
             commands_out.mkdir(parents=True, exist_ok=True)
@@ -448,6 +472,7 @@ def build_copilot(output_dir: Path):
 
     preamble_path = PREAMBLES_DIR / "copilot.md"
     preamble = read_file(preamble_path) if preamble_path.exists() else ""
+    shared_preamble = _load_shared_preamble()
 
     written_files: list[Path] = []
 
@@ -468,7 +493,7 @@ def build_copilot(output_dir: Path):
     count = 0
     for agent_path in list_agents():
         name = agent_path.stem
-        body = read_file(agent_path)
+        body = _apply_shared_preamble(read_file(agent_path), name, shared_preamble)
 
         if name == "orchestrator":
             # Already handled above from platform-specific template
@@ -582,6 +607,7 @@ def build_gemini(output_dir: Path):
 
     preamble_path = PREAMBLES_DIR / "gemini.md"
     preamble = read_file(preamble_path) if preamble_path.exists() else ""
+    shared_preamble = _load_shared_preamble()
 
     # Build orchestrator from platform-specific template
     orchestrator_path = ORCHESTRATORS_DIR / "gemini.md"
@@ -601,7 +627,7 @@ def build_gemini(output_dir: Path):
     count = 0
     for agent_path in list_agents():
         name = agent_path.stem
-        body = read_file(agent_path)
+        body = _apply_shared_preamble(read_file(agent_path), name, shared_preamble)
 
         if name == "orchestrator":
             continue
@@ -725,6 +751,7 @@ def build_opencode(output_dir: Path):
 
     preamble_path = PREAMBLES_DIR / "opencode.md"
     preamble = read_file(preamble_path) if preamble_path.exists() else ""
+    shared_preamble = _load_shared_preamble()
 
     written_files: list[Path] = []
 
@@ -754,7 +781,7 @@ def build_opencode(output_dir: Path):
     cmd_count = 0
     for agent_path in list_agents():
         name = agent_path.stem
-        body = read_file(agent_path)
+        body = _apply_shared_preamble(read_file(agent_path), name, shared_preamble)
 
         if name == "orchestrator":
             continue

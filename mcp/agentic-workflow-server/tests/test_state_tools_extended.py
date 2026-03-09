@@ -804,18 +804,18 @@ class TestModeDetectionEdgeCases:
         result = workflow_detect_mode("Breaking API change for v2")
         assert result["mode"] == "thorough"
 
-    def test_unknown_description_defaults_to_full(self):
+    def test_unknown_description_defaults_to_standard(self):
         result = workflow_detect_mode("Do something completely generic with no keywords")
-        assert result["mode"] == "reviewed"
+        assert result["mode"] == "standard"
         assert result["confidence"] == 0.5
 
-    def test_turbo_blocked_by_database(self):
+    def test_standard_blocked_by_database(self):
         result = workflow_detect_mode("Implement database connection pooling")
         assert result["mode"] == "thorough"
 
     def test_case_insensitive(self):
         result = workflow_detect_mode("FIX TYPO in README")
-        assert result["mode"] == "micro"
+        assert result["mode"] == "quick"
 
 
 # ============================================================================

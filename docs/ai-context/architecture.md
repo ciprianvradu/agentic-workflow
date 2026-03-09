@@ -265,18 +265,17 @@ Each agent writes its output to `.tasks/TASK_XXX/<agent>.md`. These accumulate a
 
 ## Configuration Pattern
 
-### Config File Split
+### Config File Structure
 
-The configuration is split into two files:
-- `config/workflow-config.yaml` — Essential settings needed for a basic workflow run (checkpoints, models, modes, worktree basics). This is the file most users copy and customize.
-- `config/workflow-config-advanced.yaml` — Advanced and rarely-changed settings (effort levels, compaction, agent teams, subagent limits, Gemini integration, cost tracking). `config_tools.py` loads both files and merges them; the advanced file provides defaults that can be overridden in either config file.
+All configuration lives in a single file:
+- `config/workflow-config.yaml` — Essential settings at the top (checkpoints, models, modes, worktree); advanced/power-user settings below a separator line (effort levels, compaction, agent teams, subagent limits, Gemini integration, cost tracking). This is the file users copy and customize.
 
 ### Adding a New Setting
 
 Follow this checklist:
 
 1. **Default**: Add to `DEFAULT_CONFIG` in `config_tools.py`
-2. **Reference**: Add to `config/workflow-config.yaml` (if essential) or `config/workflow-config-advanced.yaml` (if advanced/optional) with inline comment
+2. **Reference**: Add to `config/workflow-config.yaml` with inline comment (essential settings above the separator, advanced settings below)
 3. **Usage**: Read via `config_get_effective()` in the consuming code
 4. **Schema**: If exposed as MCP tool parameter, add to `server.py` Tool schema
 5. **Tests**: Add to `tests/test_config_tools.py`

@@ -80,10 +80,10 @@ def clean_tasks_dir():
 
 class TestInitCommand:
     def test_init_start(self, clean_tasks_dir):
-        result = run_orchestrator("init", "--args", '"Fix typo in README" --mode minimal')
+        result = run_orchestrator("init", "--args", '"Fix typo in README" --mode quick')
         assert result["action"] == "start"
         assert result["task_id"]
-        assert result["mode"] == "standard"
+        assert result["mode"] == "quick"
         assert "next" in result
 
         # Clean up
@@ -122,7 +122,7 @@ class TestInitCommand:
             shutil.rmtree(task_dir)
 
     def test_init_no_description(self):
-        result = run_orchestrator("init", "--args", "--mode fast")
+        result = run_orchestrator("init", "--args", "--mode standard")
         assert result.get("error") is True
 
 
@@ -137,7 +137,7 @@ class TestNextCommand:
 
     def test_next_after_init(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_001", description="Test task")
-        workflow_set_mode(mode="minimal", task_id="TASK_CO_001")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_001")
 
         result = run_orchestrator("next", "--task-id", "TASK_CO_001")
         # Should suggest developer (first phase in minimal mode)
@@ -151,19 +151,19 @@ class TestNextCommand:
 class TestAgentDoneCommand:
     def test_agent_done_basic(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_002", description="Test task")
-        workflow_set_mode(mode="minimal", task_id="TASK_CO_002")
-        # Transition to developer (first phase in minimal)
-        workflow_transition(to_phase="developer", task_id="TASK_CO_002")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_002")
+        # Transition to architect (first phase in standard)
+        workflow_transition(to_phase="architect", task_id="TASK_CO_002")
 
         # Create a dummy output file
         task_dir = clean_tasks_dir / "TASK_CO_002"
-        output_file = task_dir / "developer.md"
-        output_file.write_text("# Developer Plan\nDo the thing.\n")
+        output_file = task_dir / "architect.md"
+        output_file.write_text("# Architecture\nDesign done.\n")
 
         result = run_orchestrator(
             "agent-done",
             "--task-id", "TASK_CO_002",
-            "--agent", "developer",
+            "--agent", "architect",
             "--output-file", str(output_file),
         )
         assert result["action"] == "agent_done"
@@ -172,8 +172,8 @@ class TestAgentDoneCommand:
 
     def test_agent_done_with_cost(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_003", description="Test task")
-        workflow_set_mode(mode="minimal", task_id="TASK_CO_003")
-        workflow_transition(to_phase="developer", task_id="TASK_CO_003")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_003")
+        workflow_transition(to_phase="architect", task_id="TASK_CO_003")
 
         result = run_orchestrator(
             "agent-done",
@@ -187,7 +187,7 @@ class TestAgentDoneCommand:
 
     def test_agent_done_with_blocking_issues(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_004", description="Test task")
-        workflow_set_mode(mode="full", task_id="TASK_CO_004")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_004")
         workflow_complete_phase(task_id="TASK_CO_004")
         workflow_transition(to_phase="developer", task_id="TASK_CO_004")
         workflow_complete_phase(task_id="TASK_CO_004")
@@ -217,7 +217,7 @@ class TestAgentDoneCommand:
 class TestCheckpointDoneCommand:
     def test_approve(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_005", description="Test task")
-        workflow_set_mode(mode="full", task_id="TASK_CO_005")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_005")
 
         result = run_orchestrator(
             "checkpoint-done",
@@ -229,7 +229,7 @@ class TestCheckpointDoneCommand:
 
     def test_revise(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_006", description="Test task")
-        workflow_set_mode(mode="full", task_id="TASK_CO_006")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_006")
         workflow_complete_phase(task_id="TASK_CO_006")
         workflow_transition(to_phase="developer", task_id="TASK_CO_006")
         workflow_complete_phase(task_id="TASK_CO_006")
@@ -289,7 +289,7 @@ class TestImplActionCommand:
 class TestCompleteCommand:
     def test_basic_completion(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_010", description="Add caching")
-        workflow_set_mode(mode="fast", task_id="TASK_CO_010")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_010")
 
         result = run_orchestrator(
             "complete",
@@ -313,7 +313,7 @@ class TestCompleteCommand:
 class TestResumeCommand:
     def test_resume_basic(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_CO_011", description="Test resume")
-        workflow_set_mode(mode="full", task_id="TASK_CO_011")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_011")
 
         result = run_orchestrator("resume", "--task-id", "TASK_CO_011")
         assert result["action"] == "resume"
@@ -330,20 +330,21 @@ class TestResumeCommand:
 # ============================================================================
 
 class TestFullSequence:
-    def test_minimal_workflow(self, clean_tasks_dir):
-        """Test init → agent-done sequence for minimal mode reaches complete."""
+    def test_standard_workflow(self, clean_tasks_dir):
+        """Test init → agent-done sequence for standard mode reaches complete."""
         # Init
-        init_result = run_orchestrator("init", "--args", '"Fix typo" --mode minimal')
+        init_result = run_orchestrator("init", "--args", '"Add caching" --mode standard')
         assert init_result["action"] == "start"
         task_id = init_result["task_id"]
         task_dir = clean_tasks_dir / task_id
 
-        # Minimal mode: developer → implementer → technical_writer
-        phases = ["developer", "implementer", "technical_writer"]
+        # Standard mode: architect → developer → implementer → quality_guard
+        phases = ["architect", "developer", "implementer", "quality_guard"]
         output_files = {
+            "architect": "architect.md",
             "developer": "developer.md",
             "implementer": "implementer.md",
-            "technical_writer": "technical-writer.md",
+            "quality_guard": "quality-guard.md",
         }
 
         for phase in phases:
@@ -372,7 +373,7 @@ class TestStateUpdates:
     def test_agent_done_transitions_to_next_phase(self, clean_tasks_dir):
         """After agent-done, state.json phase should reflect the next agent."""
         workflow_initialize(task_id="TASK_CO_SU_001", description="Test state update")
-        workflow_set_mode(mode="full", task_id="TASK_CO_SU_001")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_SU_001")
         # Start at architect phase
         workflow_transition(to_phase="architect", task_id="TASK_CO_SU_001")
 
@@ -398,24 +399,23 @@ class TestStateUpdates:
             assert state["phase"] == expected_phase
 
     def test_init_turbo_sets_correct_first_phase(self, clean_tasks_dir):
-        """In turbo mode, state.json phase should be 'developer', not 'architect'."""
+        """Turbo mode (now aliased to standard) starts with architect."""
         result = run_orchestrator("init", "--args", '"Build feature" --mode turbo')
         assert result["action"] == "start"
         task_id = result["task_id"]
         task_dir = clean_tasks_dir / task_id
 
-        # Turbo mode skips architect — first phase should be developer
+        # Turbo now aliases to standard which includes architect
         if result["next"].get("action") == "spawn_agent":
             first_agent = result["next"]["agent"]
             state = _load_state(task_dir)
             assert state["phase"] == first_agent
-            # Turbo mode should start with developer, not architect
-            assert first_agent == "developer"
+            assert first_agent == "architect"
 
     def test_complete_marks_state_done(self, clean_tasks_dir):
         """After complete, state.json should have status='completed' and completed_at."""
         workflow_initialize(task_id="TASK_CO_SU_003", description="Test completion")
-        workflow_set_mode(mode="fast", task_id="TASK_CO_SU_003")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_SU_003")
 
         result = run_orchestrator(
             "complete",
@@ -434,7 +434,7 @@ class TestStateUpdates:
     def test_checkpoint_approve_completes_phase(self, clean_tasks_dir):
         """Approving at checkpoint should mark phase complete in state.json."""
         workflow_initialize(task_id="TASK_CO_SU_004", description="Test checkpoint")
-        workflow_set_mode(mode="full", task_id="TASK_CO_SU_004")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_SU_004")
         workflow_transition(to_phase="architect", task_id="TASK_CO_SU_004")
 
         result = run_orchestrator(
@@ -463,7 +463,7 @@ class TestActiveTaskLifecycle:
         if active_file.exists():
             active_file.unlink()
 
-        result = run_orchestrator("init", "--args", '"Test active task" --mode minimal')
+        result = run_orchestrator("init", "--args", '"Test active task" --mode quick')
         assert result["action"] == "start"
         task_id = result["task_id"]
 
@@ -482,7 +482,7 @@ class TestActiveTaskLifecycle:
         active_file = clean_tasks_dir / ".active_task"
 
         workflow_initialize(task_id="TASK_CO_AT_001", description="Test removal")
-        workflow_set_mode(mode="minimal", task_id="TASK_CO_AT_001")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_AT_001")
 
         # Simulate what init would do
         active_file.write_text("TASK_CO_AT_001\n")
@@ -497,7 +497,7 @@ class TestActiveTaskLifecycle:
         active_file = clean_tasks_dir / ".active_task"
 
         workflow_initialize(task_id="TASK_CO_AT_002", description="Test preserve")
-        workflow_set_mode(mode="minimal", task_id="TASK_CO_AT_002")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_AT_002")
 
         # .active_task points to a different task
         active_file.write_text("TASK_CO_AT_OTHER\n")
@@ -518,7 +518,7 @@ class TestActiveTaskLifecycle:
             active_file.unlink()
 
         workflow_initialize(task_id="TASK_CO_AT_003", description="Test resume")
-        workflow_set_mode(mode="full", task_id="TASK_CO_AT_003")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_AT_003")
 
         result = run_orchestrator("resume", "--task-id", "TASK_CO_AT_003")
         assert result["action"] == "resume"
@@ -537,7 +537,7 @@ class TestActiveTaskLifecycle:
             active_file.unlink()
 
         workflow_initialize(task_id="TASK_CO_AT_004", description="Test init resume")
-        workflow_set_mode(mode="full", task_id="TASK_CO_AT_004")
+        workflow_set_mode(mode="thorough", task_id="TASK_CO_AT_004")
 
         result = run_orchestrator("init", "--args", "resume TASK_CO_AT_004")
         assert result["action"] == "resume"

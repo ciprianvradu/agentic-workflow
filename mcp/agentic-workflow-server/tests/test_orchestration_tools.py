@@ -423,11 +423,11 @@ class TestCrewInitTask:
     def test_basic_init(self, clean_tasks_dir):
         result = crew_init_task(
             task_description="Fix typo in README",
-            options={"mode": "minimal"}
+            options={"mode": "quick"}
         )
         assert result["success"] is True
         assert result["task_id"]
-        assert result["mode"] == "standard"
+        assert result["mode"] == "quick"
 
         # Clean up
         workflow_guard_release(task_id=result["task_id"])
@@ -490,7 +490,7 @@ class TestCrewInitTask:
 class TestCrewGetNextPhase:
     def test_first_phase_full_mode(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_001", description="Test task")
-        workflow_set_mode(mode="full", task_id="TASK_ORCH_001")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_001")
 
         result = crew_get_next_phase(task_id="TASK_ORCH_001")
         # Phase is None after initialize — crew_get_next_phase returns spawn_agent for first phase
@@ -499,7 +499,7 @@ class TestCrewGetNextPhase:
 
     def test_next_after_architect(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_001B", description="Test task")
-        workflow_set_mode(mode="full", task_id="TASK_ORCH_001B")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_001B")
         workflow_transition(to_phase="architect", task_id="TASK_ORCH_001B")
         workflow_complete_phase(task_id="TASK_ORCH_001B")
         workflow_transition(to_phase="developer", task_id="TASK_ORCH_001B")
@@ -511,10 +511,10 @@ class TestCrewGetNextPhase:
 
     def test_complete_when_all_done(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_002", description="Test task")
-        workflow_set_mode(mode="full", task_id="TASK_ORCH_002")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_002")
 
         # Complete all thorough mode phases sequentially
-        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "feedback", "technical_writer"]:
+        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_002")
             workflow_complete_phase(task_id="TASK_ORCH_002")
 
@@ -571,7 +571,7 @@ class TestCrewGetImplementationAction:
 class TestCrewFormatCompletion:
     def test_basic_completion(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_ORCH_006", description="Add caching layer")
-        workflow_set_mode(mode="fast", task_id="TASK_ORCH_006")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_006")
 
         result = crew_format_completion(
             task_id="TASK_ORCH_006",
@@ -581,7 +581,7 @@ class TestCrewFormatCompletion:
         assert "cost_summary" in result
         assert "commit_message" in result
         assert "caching" in result["commit_message"].lower() or "Add caching layer" in result["commit_message"]
-        assert result["mode"] == "reviewed"
+        assert result["mode"] == "standard"
 
     def test_nonexistent_task(self):
         result = crew_format_completion(task_id="TASK_NONEXISTENT")
@@ -595,7 +595,7 @@ class TestCrewFormatCompletion:
 class TestCrewGetResumeState:
     def test_basic_resume(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_ORCH_007", description="Test task for resume")
-        workflow_set_mode(mode="full", task_id="TASK_ORCH_007")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_007")
 
         result = crew_get_resume_state(task_id="TASK_ORCH_007")
         assert result["task_id"] == "TASK_ORCH_007"
@@ -605,7 +605,7 @@ class TestCrewGetResumeState:
 
     def test_resume_with_progress(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_ORCH_008", description="Implementation task")
-        workflow_set_mode(mode="full", task_id="TASK_ORCH_008")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_008")
         # Transition through all planning phases to implementer
         for phase in ["architect", "developer", "reviewer", "skeptic"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_008")
@@ -787,7 +787,7 @@ class TestDeterministicCheckpoints:
         from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir as _find
 
         workflow_initialize(task_id="TASK_ORCH_CP_001", description="Checkpoint test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_001")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_001")
         workflow_transition("architect", task_id="TASK_ORCH_CP_001")
 
         # Config with after_architect: true and threshold=0
@@ -812,7 +812,7 @@ class TestDeterministicCheckpoints:
         from unittest.mock import patch
 
         workflow_initialize(task_id="TASK_ORCH_CP_002", description="Threshold test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_002")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_002")
         workflow_transition("architect", task_id="TASK_ORCH_CP_002")
 
         mock_config = {
@@ -836,7 +836,7 @@ class TestDeterministicCheckpoints:
         from agentic_workflow_server.state_tools import workflow_add_concern
 
         workflow_initialize(task_id="TASK_ORCH_CP_003", description="Concern threshold test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_003")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_003")
         workflow_transition("architect", task_id="TASK_ORCH_CP_003")
 
         # Add a concern
@@ -869,7 +869,7 @@ class TestDeterministicCheckpoints:
         from agentic_workflow_server.state_tools import workflow_add_concern
 
         workflow_initialize(task_id="TASK_ORCH_CP_004", description="Severity filter test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_004")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_004")
         workflow_transition("architect", task_id="TASK_ORCH_CP_004")
 
         # Add a low-severity concern
@@ -900,7 +900,7 @@ class TestDeterministicCheckpoints:
         from unittest.mock import patch
 
         workflow_initialize(task_id="TASK_ORCH_CP_005", description="No checkpoint test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_005")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_005")
         # Transition to architect (first phase) — phase is active but not completed
         workflow_transition("architect", task_id="TASK_ORCH_CP_005")
 
@@ -922,7 +922,7 @@ class TestDeterministicCheckpoints:
         from unittest.mock import patch
 
         workflow_initialize(task_id="TASK_ORCH_CP_006", description="Structured question test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_006")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_006")
         workflow_transition("architect", task_id="TASK_ORCH_CP_006")
 
         mock_config = {
@@ -953,7 +953,7 @@ class TestDeterministicCheckpoints:
         from agentic_workflow_server.state_tools import workflow_add_concern
 
         workflow_initialize(task_id="TASK_ORCH_CP_007", description="Summary test")
-        workflow_set_mode("reviewed", task_id="TASK_ORCH_CP_007")
+        workflow_set_mode("standard", task_id="TASK_ORCH_CP_007")
         workflow_transition("architect", task_id="TASK_ORCH_CP_007")
 
         workflow_add_concern(
