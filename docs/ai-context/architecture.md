@@ -92,16 +92,34 @@ This is the largest and most important module. It manages all persistent workflo
 - `workflow_get_effort_level(agent)` — Recommended thinking depth per mode
 
 **Workflow Modes:**
-| Mode | Agents | Use case |
-|------|--------|----------|
-| **micro** | planner → implementer | One-shot tasks, quick fixes, trivial changes |
-| **standard** | developer → implementer → technical_writer | Routine features, fixes, refactors |
-| **reviewed** | architect → developer → reviewer → implementer → technical_writer | Non-trivial changes needing review |
-| **thorough** | architect → developer → reviewer → skeptic → implementer → feedback → technical_writer | Security, migrations, breaking changes |
+| Mode | Agents | Use case | Est. cost |
+|------|--------|----------|-----------|
+| **micro** | implementer | Typos, one-line fixes, trivial changes | ~$0.03 |
+| **standard** | developer → implementer → quality_guard → technical_writer | Routine features, fixes, refactors | ~$0.10 |
+| **reviewed** | architect → developer → reviewer → implementer → quality_guard → technical_writer | Non-trivial changes needing review | ~$0.25 |
+| **thorough** | architect → developer → reviewer → skeptic → implementer → quality_guard → feedback → technical_writer | Security, migrations, breaking changes | ~$0.50+ |
 
 Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
 
 The **technical_writer** phase is conditional in standard mode: it is skipped when no documentation gaps have been flagged (via `workflow_mark_docs_needed`) and the mode is `standard` or lower.
+
+**Auto-Detection (default `--mode auto`):**
+
+Mode is selected by two signals — highest wins (thorough > reviewed > standard > micro):
+
+1. **Keyword matching** against task description (case-insensitive):
+   - **micro**: "typo", "spelling", "whitespace", "one-line", "trivial", "rename variable", "update comment", "fix import" — but excluded if description also contains "implement", "refactor", "create", "build", "security", etc.
+   - **standard**: "add", "implement", "update", "refactor", "create", "build", "utility" — but excluded if "security", "auth", "database", "migration", "api", "breaking" present.
+   - **thorough**: "security", "authentication", "database", "migration", "api", "breaking change", "critical", "auth", "password", "token".
+   - If no keywords match → defaults to **reviewed**.
+
+2. **File scope analysis** (when `files_affected` is provided):
+   - Sensitive paths (auth/, security/, migration/, db/) → escalate to thorough
+   - Config paths (.env, Dockerfile, CI workflows) → escalate to reviewed
+   - Many files (>10) or many directories (>3) → escalate to reviewed
+   - Cross-module changes (>5 distinct modules) → escalate to thorough
+
+The detection logic is in `workflow_detect_mode()` — pure Python, no LLM involved. Override with `--mode <name>` to skip auto-detection.
 
 **Model Routing:** `_build_phase_action()` returns a `model` field resolved from config:
 - Fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
@@ -116,6 +134,8 @@ The **technical_writer** phase is conditional in standard mode: it is skipped wh
 ### config_tools.py — Configuration (~900 lines)
 
 **`DEFAULT_CONFIG` dict** (line ~24) — All settings with defaults. This is the source of truth for what settings exist.
+
+**Config caching**: `config_get_effective()` caches merged results with a 5-minute TTL. The cache key is based on file paths and their `mtime` values, so editing any config file invalidates the cache on the next call. The cache is per-process only — restarting the MCP server always starts fresh.
 
 Key config sections:
 - `checkpoints` — Which human approval points are active per phase

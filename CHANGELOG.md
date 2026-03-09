@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-03-09
+
+### Added
+- **Micro workflow mode** — auto-detected for typos, whitespace, spelling fixes; runs implementer only (~$0.03)
+- **Planner agent** — combined architect+developer for standard/turbo mode single-pass planning
+- **Config split** — essential settings in `workflow-config.yaml`, advanced/power-user settings in `workflow-config-advanced.yaml`; loaded via cascade (advanced first, essential overlays)
+- **Config caching** — `config_get_effective()` caches merged config with 5-minute TTL, invalidated by file mtime changes
+- **Global severity scale** — unified 4-level scale (Critical/High/Medium/Low) in `docs/ai-context/severity-scale.md`, referenced by all agents
+- **Shared prompt sections** — extracted Memory Preservation, Completion Signals, and Doc Gap Flagging into `docs/ai-context/` reference docs (~428 lines removed from agents)
+- **MCP tool categories** — all 69 tools categorized as core (29) or extra (40) in `docs/mcp-tool-categories.md`
+- **Auto-detection documentation** — keyword matching, file scope analysis, and mode ranking documented in `architecture.md`
+
+### Changed
+- **Agent hand-off improvements** — skeptic output now flows to implementer context; REVISE loopback routing added
+- **Conditional technical writer** — skipped in standard mode when no documentation gaps flagged
+- **Orchestrator spec moved** — `agents/orchestrator.md` → `docs/orchestrator-spec.md` (not an agent, is a specification)
+- **MCP server enum** — `workflow_transition` tool now accepts `quality_guard`, `feedback`, and `planner` as valid phases
+- Essential config reduced from ~758 lines to ~270 lines
+
+### Fixed
+- MCP enum validation rejecting `quality_guard` and `feedback` phase transitions
+- Auto-detection correctly routes "typo" tasks to micro mode instead of standard
+
 ## [0.7.0] - 2026-03-02
 
 ### Added

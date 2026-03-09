@@ -131,6 +131,7 @@ Not all tasks need all agents:
 
 | Mode | Agents | Use For |
 |------|--------|---------|
+| **micro** | Implementer | Typos, one-line fixes, trivial changes |
 | **standard** | Developer → Implementer → Writer | Routine features, fixes, refactors |
 | **reviewed** | Architect → Developer → Reviewer → Implementer → Writer | Non-trivial changes needing review |
 | **thorough** | All 7 + optional specialists | Security, DB migrations, breaking changes |
