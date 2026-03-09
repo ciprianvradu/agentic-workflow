@@ -463,7 +463,12 @@ fn draw_doc_list(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
                         .collect();
                     for pl in preview_lines {
                         let truncated = if pl.len() > 60 {
-                            format!("{}...", &pl[..60])
+                            let boundary = pl.char_indices()
+                                .map(|(i, _)| i)
+                                .take_while(|&i| i <= 60)
+                                .last()
+                                .unwrap_or(0);
+                            format!("{}...", &pl[..boundary])
                         } else {
                             pl.to_string()
                         };

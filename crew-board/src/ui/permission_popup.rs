@@ -258,7 +258,13 @@ pub fn draw(frame: &mut Frame, app: &App, _area: Rect) {
                                     serde_json::Value::String(s) => {
                                         let max = width.saturating_sub(k.len() + 4);
                                         if s.len() > max && max > 3 {
-                                            format!("{}...", &s[..max.saturating_sub(3)])
+                                            let limit = max.saturating_sub(3);
+                                            let boundary = s.char_indices()
+                                                .map(|(i, _)| i)
+                                                .take_while(|&i| i <= limit)
+                                                .last()
+                                                .unwrap_or(0);
+                                            format!("{}...", &s[..boundary])
                                         } else {
                                             s.clone()
                                         }
@@ -267,7 +273,13 @@ pub fn draw(frame: &mut Frame, app: &App, _area: Rect) {
                                         let s = other.to_string();
                                         let max = width.saturating_sub(k.len() + 4);
                                         if s.len() > max && max > 3 {
-                                            format!("{}...", &s[..max.saturating_sub(3)])
+                                            let limit = max.saturating_sub(3);
+                                            let boundary = s.char_indices()
+                                                .map(|(i, _)| i)
+                                                .take_while(|&i| i <= limit)
+                                                .last()
+                                                .unwrap_or(0);
+                                            format!("{}...", &s[..boundary])
                                         } else {
                                             s
                                         }

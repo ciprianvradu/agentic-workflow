@@ -96,7 +96,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
             let max_desc = (results_area.width as usize)
                 .saturating_sub(cursor_indicator.len() + r.task_id.len() + r.match_source.len() + 6);
             let desc = if r.description.len() > max_desc {
-                format!("{}…", &r.description[..max_desc.saturating_sub(1)])
+                let truncate_at = r.description
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .take_while(|&i| i < max_desc.saturating_sub(1))
+                    .last()
+                    .unwrap_or(0);
+                format!("{}…", &r.description[..truncate_at])
             } else {
                 r.description.clone()
             };

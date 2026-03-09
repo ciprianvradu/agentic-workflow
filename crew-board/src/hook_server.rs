@@ -759,14 +759,25 @@ fn shorten_path(path: &str, max_len: usize) -> String {
     if prefix_len == 0 {
         return filename.to_string();
     }
-    format!("{}.../{}", &path[..prefix_len.min(path.len())], filename)
+    let boundary = path.char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= prefix_len.min(path.len()))
+        .last()
+        .unwrap_or(0);
+    format!("{}.../{}", &path[..boundary], filename)
 }
 
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
+        let limit = max_len.saturating_sub(3);
+        let boundary = s.char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= limit)
+            .last()
+            .unwrap_or(0);
+        format!("{}...", &s[..boundary])
     }
 }
 
