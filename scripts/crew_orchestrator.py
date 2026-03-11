@@ -629,6 +629,13 @@ def cmd_complete(args: argparse.Namespace) -> None:
     _remove_active_task(task_id)
 
     completion["jira_actions"] = jira_actions
+
+    # Check if async docs were signaled
+    if task_dir:
+        state_reloaded = _load_state(task_dir)
+        if state_reloaded.get("async_docs_pending"):
+            completion["async_docs_pending"] = True
+
     _output(completion)
 
 
@@ -683,6 +690,87 @@ def cmd_resume(args: argparse.Namespace) -> None:
         "action": "resume",
         "resume_state": resume,
         "next": next_action,
+    })
+
+
+def cmd_learn(args: argparse.Namespace) -> None:
+    """Run Technical Writer standalone against recent git changes.
+
+    No full pipeline state is created. Parses args, resolves diff range,
+    and returns agent spawn instructions.
+    """
+    parsed = crew_parse_args(f"learn {args.args}")
+
+    if parsed.get("errors"):
+        _output({"error": True, "errors": parsed["errors"]})
+        return
+
+    options = parsed.get("options", {})
+
+    # Resolve the git diff command based on options
+    if options.get("diff"):
+        diff_command = f"git diff {options['diff']}"
+        log_command = f"git log --oneline {options['diff']}"
+    elif options.get("since"):
+        since = options["since"]
+        diff_command = f"git diff HEAD@{{'{since} ago'}}"
+        log_command = f"git log --oneline --since='{since}'"
+    elif options.get("task"):
+        # Use task's worktree base branch for diff
+        task_id = options["task"]
+        task_dir = find_task_dir(task_id)
+        if task_dir:
+            state = _load_state(task_dir)
+            wt = state.get("worktree", {})
+            base_branch = wt.get("base_branch", "main")
+            diff_command = f"git diff {base_branch}...HEAD"
+            log_command = f"git log --oneline {base_branch}...HEAD"
+        else:
+            diff_command = "git diff HEAD~1"
+            log_command = "git log --oneline -1"
+    else:
+        # Default: last commit
+        diff_command = "git diff HEAD~1"
+        log_command = "git log --oneline -1"
+
+    # Resolve model
+    effective = config_get_effective()
+    config = effective.get("config", {})
+    models_config = config.get("models", {})
+    default_model = models_config.get("default", "opus")
+    model = options.get("model") or models_config.get("standard", {}).get("technical_writer") or models_config.get("technical_writer") or default_model
+
+    # Get max turns
+    subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
+    max_turns = subagent_limits.get("documentation_agents", 20)
+
+    # Agent prompt path
+    agents_dir = Path.home() / ".claude" / "agents"
+    agent_prompt_path = str(agents_dir / "technical-writer.md")
+
+    # Resolve task context if --task provided
+    task_dir_str = None
+    context_files = []
+    if options.get("task"):
+        td = find_task_dir(options["task"])
+        if td:
+            task_dir_str = str(td)
+            for name in ["task.md", "implementer.md", "planner.md"]:
+                f = td / name
+                if f.exists():
+                    context_files.append(str(f))
+
+    _output({
+        "action": "learn",
+        "diff_command": diff_command,
+        "log_command": log_command,
+        "agent_prompt_path": agent_prompt_path,
+        "model": model,
+        "max_turns": max_turns,
+        "auto_commit": options.get("auto_commit", False),
+        "focus": parsed.get("task_description", ""),
+        "task_dir": task_dir_str,
+        "context_files": context_files,
     })
 
 
@@ -788,6 +876,11 @@ def main():
     p_resume.add_argument("--task-id", required=True, help="Task identifier")
     p_resume.add_argument("--host", default="unknown", help="AI host platform identifier")
 
+    # learn
+    p_learn = subparsers.add_parser("learn", help="Run Technical Writer standalone")
+    p_learn.add_argument("--args", required=True, help="Raw /crew learn arguments string")
+    p_learn.add_argument("--host", default="unknown", help="AI host platform identifier")
+
     args = parser.parse_args()
 
     commands = {
@@ -800,6 +893,7 @@ def main():
         "complete": cmd_complete,
         "log-interaction": cmd_log_interaction,
         "resume": cmd_resume,
+        "learn": cmd_learn,
     }
 
     try:

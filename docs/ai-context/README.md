@@ -44,6 +44,7 @@ agentic-workflow/
 ├── commands/                   # Slash-command definitions
 │   ├── crew.md                 # Main /crew command (orchestrator)
 │   ├── crew-config.md          # /crew-config command
+│   ├── crew-learn.md           # /crew-learn command (standalone TW from git changes)
 │   ├── crew-resume.md          # /crew-resume command
 │   ├── crew-checkpoint.md      # /crew-checkpoint command (save workflow checkpoint)
 │   └── crew-cost-report.md     # /crew-cost-report command (cost breakdown)

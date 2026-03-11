@@ -26,6 +26,7 @@ from agentic_workflow_server.orchestration_tools import (
     _generate_branch_name,
     _tokenize,
 )
+from agentic_workflow_server.config_tools import DEFAULT_CONFIG
 from agentic_workflow_server.state_tools import (
     get_tasks_dir,
     workflow_initialize,
@@ -1103,3 +1104,159 @@ class TestDeterministicCheckpoints:
         assert "2 unaddressed concern" in q_text
         assert "critical" in q_text
         assert "SQL injection" in q_text
+
+
+# ============================================================================
+# Async documentation tests
+# ============================================================================
+
+class TestAsyncDocumentation:
+    def test_config_defaults(self):
+        """documentation config has correct defaults."""
+        assert DEFAULT_CONFIG["documentation"]["async_mode"] is False
+        assert DEFAULT_CONFIG["documentation"]["auto_commit_docs"] is False
+        assert DEFAULT_CONFIG["documentation"]["notify_on_complete"] is True
+
+    def test_async_docs_in_standard_mode(self, clean_tasks_dir):
+        """Standard mode with async_mode=true returns complete_with_async_docs."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_ASYNC_001", description="Test async docs")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_ASYNC_001")
+
+        # Complete planner and implementer
+        for phase in ["planner", "implementer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_ASYNC_001")
+            workflow_complete_phase(task_id="TASK_ORCH_ASYNC_001")
+
+        mock_config = {
+            "documentation": {"async_mode": True, "auto_commit_docs": False, "notify_on_complete": True},
+            "models": {"default": "opus", "standard": {"technical_writer": "sonnet"}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}, "documentation": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_ASYNC_001")
+
+        assert result["action"] == "complete_with_async_docs"
+        assert "async_docs" in result
+        assert result["async_docs"]["agent"] == "technical_writer"
+        assert result["async_docs"]["notify_on_complete"] is True
+        assert result["async_docs"]["auto_commit_docs"] is False
+
+    def test_async_docs_disabled_returns_normal_complete(self, clean_tasks_dir):
+        """Standard mode with async_mode=false completes normally."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_ASYNC_002", description="Test normal docs")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_ASYNC_002")
+
+        # Complete all standard mode phases
+        for phase in ["planner", "implementer", "technical_writer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_ASYNC_002")
+            workflow_complete_phase(task_id="TASK_ORCH_ASYNC_002")
+
+        mock_config = {
+            "documentation": {"async_mode": False},
+            "models": {"default": "opus", "standard": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}, "documentation": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_ASYNC_002")
+
+        assert result["action"] == "complete"
+
+    def test_async_docs_ignored_in_thorough_mode(self, clean_tasks_dir):
+        """Thorough mode ignores async_mode and runs TW synchronously."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_ASYNC_003", description="Test thorough mode")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_ASYNC_003")
+
+        # Complete up through security_auditor
+        for phase in ["planner", "reviewer", "implementer", "quality_guard", "security_auditor"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_ASYNC_003")
+            workflow_complete_phase(task_id="TASK_ORCH_ASYNC_003")
+
+        mock_config = {
+            "documentation": {"async_mode": True},  # Should be ignored
+            "parallelization": {"quality_guard_security_auditor": {"enabled": False}},
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}, "documentation": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_ASYNC_003")
+
+        # Should spawn TW normally, not complete_with_async_docs
+        assert result["action"] == "spawn_agent"
+        assert result["agent"] == "technical_writer"
+
+
+# ============================================================================
+# /crew learn argument parsing tests
+# ============================================================================
+
+class TestCrewLearnParsing:
+    def test_basic_learn(self):
+        result = crew_parse_args("learn")
+        assert result["action"] == "learn"
+        assert result["errors"] == []
+
+    def test_learn_with_since(self):
+        result = crew_parse_args("learn --since 3d")
+        assert result["action"] == "learn"
+        assert result["options"]["since"] == "3d"
+
+    def test_learn_with_task(self):
+        result = crew_parse_args("learn --task TASK_042")
+        assert result["action"] == "learn"
+        assert result["options"]["task"] == "TASK_042"
+
+    def test_learn_with_diff(self):
+        result = crew_parse_args("learn --diff main..HEAD")
+        assert result["action"] == "learn"
+        assert result["options"]["diff"] == "main..HEAD"
+
+    def test_learn_with_auto_commit(self):
+        result = crew_parse_args("learn --auto-commit")
+        assert result["action"] == "learn"
+        assert result["options"]["auto_commit"] is True
+
+    def test_learn_with_focus(self):
+        result = crew_parse_args("learn authentication changes")
+        assert result["action"] == "learn"
+        assert result["task_description"] == "authentication changes"
+
+    def test_learn_with_model(self):
+        result = crew_parse_args("learn --model sonnet")
+        assert result["action"] == "learn"
+        assert result["options"]["model"] == "sonnet"
+
+    def test_learn_combined_options(self):
+        result = crew_parse_args("learn --since 1w --auto-commit --model opus")
+        assert result["action"] == "learn"
+        assert result["options"]["since"] == "1w"
+        assert result["options"]["auto_commit"] is True
+        assert result["options"]["model"] == "opus"
+
+    def test_learn_unknown_option(self):
+        result = crew_parse_args("learn --unknown-flag")
+        assert result["action"] == "learn"
+        assert any("Unknown option" in e for e in result["errors"])

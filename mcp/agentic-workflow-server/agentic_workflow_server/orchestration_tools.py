@@ -532,6 +532,9 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
     if first_word in ("resume", "status", "proceed", "config"):
         action = first_word
         text = text[len(first_word):].strip()
+    elif first_word == "learn":
+        action = "learn"
+        text = text[len("learn"):].strip()
     elif first_word == "ask":
         action = "ask"
         text = text[len("ask"):].strip()
@@ -577,6 +580,8 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
             "options": options,
             "errors": errors
         }
+    if action == "learn":
+        return _parse_learn_args(text, errors)
     if action == "ask":
         return _parse_ask_args(text, errors)
 
@@ -710,6 +715,53 @@ def _parse_ask_args(text: str, errors: list) -> dict[str, Any]:
         "task_description": question,
         "options": options,
         "errors": errors
+    }
+
+
+def _parse_learn_args(text: str, errors: list) -> dict[str, Any]:
+    """Parse /crew learn subcommand arguments.
+
+    Supports:
+      /crew learn                    -- learn from recent changes (git diff HEAD~1)
+      /crew learn --since 3d         -- learn from changes in last 3 days
+      /crew learn --task TASK_042    -- learn from a specific task's changes
+      /crew learn --diff "main..HEAD" -- learn from a specific git diff range
+      /crew learn --auto-commit      -- auto-commit documentation changes
+    """
+    tokens = _tokenize(text)
+    options: dict[str, Any] = {}
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "--since" and i + 1 < len(tokens):
+            options["since"] = tokens[i + 1]
+            i += 2
+        elif token == "--task" and i + 1 < len(tokens):
+            options["task"] = tokens[i + 1]
+            i += 2
+        elif token == "--diff" and i + 1 < len(tokens):
+            options["diff"] = tokens[i + 1]
+            i += 2
+        elif token == "--auto-commit":
+            options["auto_commit"] = True
+            i += 1
+        elif token == "--model" and i + 1 < len(tokens):
+            options["model"] = tokens[i + 1]
+            i += 2
+        elif token.startswith("--"):
+            errors.append(f"Unknown option for learn: {token}")
+            i += 1
+        else:
+            # Remaining text is an optional focus description
+            options["focus"] = " ".join(tokens[i:])
+            break
+
+    return {
+        "action": "learn",
+        "task_description": options.get("focus", ""),
+        "options": options,
+        "errors": errors,
     }
 
 
@@ -1220,8 +1272,16 @@ def crew_get_next_phase(
     while next_idx < len(full_sequence):
         candidate = full_sequence[next_idx]
         if candidate not in phases_completed:
-            # Skip technical_writer in standard mode when no docs are needed
+            # Check async documentation mode for technical_writer in standard mode
             if candidate == "technical_writer" and effective_mode == "standard":
+                doc_config = config.get("documentation", {})
+                async_mode = doc_config.get("async_mode", False)
+                if async_mode:
+                    # Async mode: signal completion with async docs pending
+                    return _build_async_docs_completion(
+                        state, config, task_dir, full_sequence, phases_completed
+                    )
+                # Non-async: skip TW if no docs needed (existing behavior)
                 docs_needed = state.get("docs_needed", [])
                 if not docs_needed:
                     next_idx += 1
@@ -1603,6 +1663,46 @@ def _build_checkpoint_result(
                 {"label": "Revise", "description": "Ask the agent to address concerns before continuing"},
                 {"label": "Skip", "description": "Dismiss concerns and continue anyway"},
             ],
+        },
+    }
+
+
+def _build_async_docs_completion(
+    state: dict,
+    config: dict,
+    task_dir: Path,
+    full_sequence: list[str],
+    phases_completed: list[str],
+) -> dict[str, Any]:
+    """Build a completion action that signals async technical writer should run.
+
+    The main workflow completes immediately, but the orchestrator is instructed
+    to spawn the technical writer in the background afterward.
+
+    Only applies in standard mode when documentation.async_mode is true.
+    """
+    task_id = state.get("task_id", "")
+    doc_config = config.get("documentation", {})
+
+    # Build the TW spawn info so the orchestrator can run it in background
+    tw_action = _build_phase_action("technical_writer", state, config, task_dir)
+
+    return {
+        "action": "complete_with_async_docs",
+        "task_id": task_id,
+        "phases_completed": phases_completed,
+        "async_docs": {
+            "agent": "technical_writer",
+            "agent_prompt_path": tw_action.get("agent_prompt_path", ""),
+            "context_files": tw_action.get("context_files", []),
+            "effort_level": tw_action.get("effort_level", "medium"),
+            "model": tw_action.get("model", "sonnet"),
+            "max_turns": tw_action.get("max_turns", 20),
+            "variables": tw_action.get("variables", {}),
+            "auto_commit_docs": doc_config.get("auto_commit_docs", False),
+            "notify_on_complete": doc_config.get("notify_on_complete", True),
+            "git_diff_command": tw_action.get("git_diff_command", "git diff main...HEAD"),
+            "git_diff_uncommitted_command": tw_action.get("git_diff_uncommitted_command", "git diff"),
         },
     }
 

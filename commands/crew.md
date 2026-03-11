@@ -129,6 +129,22 @@ Run: `python3 {__scripts_dir__}/crew_orchestrator.py complete --task-id <id> [--
 - Handle Jira transitions from `result.jira_actions`: for each action with `"prompt"` → ask user, with `"execute"` → call `jira_issues_transition` (check `only_from` first via `jira_issues_get`)
 - Ask human to approve commit. Record concern outcomes if any were raised.
 
+#### action: "complete_with_async_docs"
+
+The main workflow is complete, but the Technical Writer should run asynchronously in the background.
+
+1. Run: `python3 {__scripts_dir__}/crew_orchestrator.py complete --task-id <id> [--files <comma-separated>]`
+2. Display cost summary and suggest commit message (same as normal complete)
+3. Handle worktree/beads/Jira actions (same as normal complete)
+4. Ask human to approve commit. Record concern outcomes if any were raised.
+5. After commit is done, spawn Technical Writer in background:
+   - Read agent prompt from `result.async_docs.agent_prompt_path`
+   - Compose prompt using Agent Prompt Composition (same as spawn_agent)
+   - Include git diff context from `result.async_docs.git_diff_command`
+   - Spawn: `Task(subagent_type: "general-purpose", model: result.async_docs.model, max_turns: result.async_docs.max_turns, prompt: "<composed prompt>", run_in_background: true)`
+6. If `result.async_docs.notify_on_complete` is true, inform user: "Technical Writer is running in the background. Documentation updates will appear shortly."
+7. If `result.async_docs.auto_commit_docs` is true, after TW completes: stage and commit doc changes with message "docs: update documentation for <task_id>"
+
 ### Single Agent Consultation
 
 1. Load agent prompt from `~/{__platform_dir__}/agents/<agent>.md`

@@ -167,6 +167,11 @@ DEFAULT_CONFIG = {
             "require_all_pass": True
         }
     },
+    "documentation": {
+        "async_mode": False,
+        "auto_commit_docs": False,
+        "notify_on_complete": True,
+    },
     "custom_phases": {},
     "parallelization": {
         "reviewer_skeptic": {

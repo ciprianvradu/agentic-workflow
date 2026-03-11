@@ -102,6 +102,10 @@ Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → stand
 
 The **technical_writer** phase is a required phase in all modes that include it (standard and thorough). REQUIRED_PHASES are: planner, implementer, technical_writer.
 
+**Async Documentation Mode (standard mode only):**
+
+When `documentation.async_mode` is true, the standard mode workflow completes after the implementer phase and runs the Technical Writer in the background. This allows the user to commit and continue work while docs are updated asynchronously. The `complete_with_async_docs` action signals this to the orchestrator. This setting is ignored in thorough mode, where TW always runs synchronously. Config options: `documentation.auto_commit_docs` (auto-commit doc changes) and `documentation.notify_on_complete` (show notification when done).
+
 **Auto-Detection (default `--mode auto`):**
 
 Mode is selected by two signals — highest wins (thorough > standard > quick):
@@ -144,6 +148,7 @@ Key config sections:
 - `auto_actions` — What agents can do without asking (run_tests, git_add, etc.)
 - `loop_mode` — Autonomous execution settings
 - `max_iterations` — Retry limits per phase type
+- `documentation` — Async documentation mode settings (async_mode, auto_commit_docs, notify_on_complete)
 
 **`config_get_effective(task_id?)`** — Returns merged config from all 4 cascade levels.
 

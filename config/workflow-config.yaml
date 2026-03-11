@@ -183,6 +183,14 @@ auto_actions:
   git_commit: false            # Require approval for commits
   git_push: false              # Require approval for pushing
 
+# Documentation Settings
+# Controls how the Technical Writer agent runs at the end of the workflow
+documentation:
+  async_mode: false              # When true (standard mode only): complete workflow immediately,
+                                 # then run Technical Writer in the background
+  auto_commit_docs: false        # Auto-commit doc changes after async TW completes
+  notify_on_complete: true       # Show notification when async TW finishes
+
 # Effort Levels — controls reasoning depth per agent per mode
 # Claude Code: maps to output_config.effort (low|medium|high|max)
 #   thinking: {"type": "adaptive"} + output_config: {"effort": "<level>"}
