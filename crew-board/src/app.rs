@@ -2004,6 +2004,76 @@ impl App {
         true
     }
 
+    /// Handle pasted text in the search popup.
+    pub fn search_paste(&mut self, text: &str) {
+        let popup = match &mut self.search_popup {
+            Some(p) => p,
+            None => return,
+        };
+        use tui_input::backend::crossterm::EventHandler;
+        for ch in text.chars() {
+            if ch == '\n' || ch == '\r' {
+                continue; // Skip newlines in search input
+            }
+            popup.input.handle_event(&crossterm::event::Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(ch),
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+            ));
+        }
+        popup.dirty = true;
+        popup.last_input = std::time::Instant::now();
+    }
+
+    /// Handle pasted text in the permission popup quick-send input.
+    pub fn permission_popup_paste(&mut self, text: &str) {
+        let popup = match &mut self.permission_popup {
+            Some(p) => p,
+            None => return,
+        };
+        let input = match &mut popup.quick_send_input {
+            Some(i) => i,
+            None => return,
+        };
+        use tui_input::backend::crossterm::EventHandler;
+        for ch in text.chars() {
+            if ch == '\n' || ch == '\r' {
+                continue;
+            }
+            input.handle_event(&crossterm::event::Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(ch),
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+            ));
+        }
+    }
+
+    /// Handle pasted text in the create worktree popup description input.
+    pub fn create_popup_paste(&mut self, text: &str) {
+        let popup = match &mut self.create_popup {
+            Some(p) => p,
+            None => return,
+        };
+        // Only accept paste during description input step
+        if !matches!(popup.step, CreateStep::InputDescription) {
+            return;
+        }
+        use tui_input::backend::crossterm::EventHandler;
+        for ch in text.chars() {
+            if ch == '\n' || ch == '\r' {
+                continue;
+            }
+            popup.description_input.handle_event(&crossterm::event::Event::Key(
+                crossterm::event::KeyEvent::new(
+                    crossterm::event::KeyCode::Char(ch),
+                    crossterm::event::KeyModifiers::NONE,
+                ),
+            ));
+        }
+    }
+
     /// Check if a debounced search should fire. Called each event-loop tick.
     /// Returns true if a search was triggered.
     pub fn tick_search_debounce(&mut self) -> bool {

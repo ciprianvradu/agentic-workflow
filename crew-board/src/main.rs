@@ -17,9 +17,9 @@ use app::{ActiveView, App, DetailMode, FocusPane, ModifierBarState, TerminalInpu
 use clap::Parser;
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        KeyboardEnhancementFlags, ModifierKeyCode, MouseButton, MouseEventKind,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+        Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, ModifierKeyCode,
+        MouseButton, MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -176,7 +176,8 @@ fn main() -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
 
@@ -248,6 +249,30 @@ fn run_app(
                         app.mouse_scroll(mouse.column, mouse.row, false);
                     }
                     _ => {}
+                }
+            }
+            // Handle paste events (bracketed paste mode)
+            if let Event::Paste(ref text) = ev {
+                if app.active_view == ActiveView::Terminals
+                    && app.terminal_input_mode == TerminalInputMode::TerminalFocused
+                {
+                    // Wrap in bracketed paste sequences so the receiving application
+                    // (bash, Claude Code, etc.) knows this is pasted text and won't
+                    // treat newlines as command execution.
+                    let mut bytes = Vec::with_capacity(text.len() + 12);
+                    bytes.extend_from_slice(b"\x1b[200~");
+                    bytes.extend_from_slice(text.as_bytes());
+                    bytes.extend_from_slice(b"\x1b[201~");
+                    app.terminal_send_input(&bytes);
+                } else if app.permission_popup.is_some() {
+                    // Forward paste to permission popup custom input if active
+                    app.permission_popup_paste(text);
+                } else if app.search_popup.is_some() {
+                    // Forward paste to search input
+                    app.search_paste(text);
+                } else if app.create_popup.is_some() {
+                    // Forward paste to create popup text input
+                    app.create_popup_paste(text);
                 }
             }
             if let Event::Key(key) = ev {
