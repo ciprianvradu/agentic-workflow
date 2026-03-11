@@ -5013,3 +5013,163 @@ def workflow_parallel(
         )
     # Should never reach here due to the check above
     return {"error": f"Unhandled action: {action}"}
+
+
+# ============================================================================
+# Tool: workflow_get_analytics
+# ============================================================================
+
+def workflow_get_analytics(
+    days: int = 30
+) -> dict[str, Any]:
+    """Aggregate workflow analytics across all completed tasks.
+
+    Provides mode distribution, cost trends, concern hit rates, and
+    phase timing data. Used by /crew-stats command.
+
+    Args:
+        days: Number of days to look back (default 30)
+
+    Returns:
+        Analytics summary with task counts, cost, concerns, and phase timing
+    """
+    tasks_dir = get_tasks_dir()
+    if not tasks_dir.exists():
+        return {"success": True, "total_tasks": 0, "message": "No tasks directory found"}
+
+    from datetime import timedelta
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+
+    # Load all states
+    states = []
+    for d in sorted(tasks_dir.iterdir()):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        sf = d / "state.json"
+        if sf.exists():
+            try:
+                state = json.loads(sf.read_text())
+                created = state.get("created_at", "")
+                if created >= cutoff or not created:
+                    states.append(state)
+            except Exception:
+                continue
+
+    if not states:
+        return {"success": True, "total_tasks": 0, "days": days,
+                "message": f"No tasks in the last {days} days"}
+
+    total = len(states)
+    completed = sum(1 for s in states if s.get("status") == "completed")
+
+    # Mode distribution
+    mode_counts: dict[str, int] = {}
+    for s in states:
+        mode = s.get("workflow_mode", {}).get("effective", "unknown")
+        mode_counts[mode] = mode_counts.get(mode, 0) + 1
+
+    # Cost aggregation
+    total_cost = 0.0
+    cost_by_agent: dict[str, float] = {}
+    for s in states:
+        ct = s.get("cost_tracking", {}).get("totals", {})
+        task_cost = ct.get("total_cost", 0)
+        total_cost += task_cost
+        for agent, data in s.get("cost_tracking", {}).get("by_agent", {}).items():
+            cost_by_agent[agent] = cost_by_agent.get(agent, 0) + data.get("total_cost", 0)
+
+    # Concern stats
+    total_concerns = 0
+    addressed_concerns = 0
+    for s in states:
+        concerns = s.get("concerns", [])
+        total_concerns += len(concerns)
+        addressed_concerns += sum(1 for c in concerns if c.get("addressed_by"))
+
+    return {
+        "success": True,
+        "days": days,
+        "total_tasks": total,
+        "completed_tasks": completed,
+        "mode_distribution": mode_counts,
+        "cost": {
+            "total": round(total_cost, 4),
+            "avg_per_task": round(total_cost / total, 4) if total > 0 else 0,
+            "by_agent": {k: round(v, 4) for k, v in sorted(cost_by_agent.items(),
+                         key=lambda x: x[1], reverse=True)[:10]},
+        },
+        "concerns": {
+            "total": total_concerns,
+            "addressed": addressed_concerns,
+            "address_rate_pct": round(addressed_concerns / total_concerns * 100, 1) if total_concerns > 0 else 0,
+        },
+    }
+
+
+# ============================================================================
+# Tool: workflow_get_doc_metrics
+# ============================================================================
+
+def workflow_get_doc_metrics() -> dict[str, Any]:
+    """Get knowledge base health metrics: doc count, freshness, and gap count.
+
+    Scans the knowledge base directories for documentation files and
+    cross-references against docs_needed from task states.
+
+    Returns:
+        Doc metrics including total docs, freshness stats, and gap counts
+    """
+    tasks_dir = get_tasks_dir()
+
+    # Find KB directories
+    repo_root = tasks_dir.parent
+    kb_dirs: list[Path] = []
+    primary = repo_root / "docs" / "ai-context"
+    if primary.is_dir():
+        kb_dirs.append(primary)
+
+    # Inventory doc files
+    doc_files = []
+    for kb_dir in kb_dirs:
+        for f in sorted(kb_dir.rglob("*.md")):
+            try:
+                rel = str(f.relative_to(repo_root))
+                mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                days = (datetime.now() - mtime).days
+                doc_files.append({"path": rel, "days_since_update": days, "size_bytes": f.stat().st_size})
+            except OSError:
+                continue
+
+    # Collect unfilled gaps from all tasks
+    unfilled_gaps: set[str] = set()
+    if tasks_dir.exists():
+        for d in sorted(tasks_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            sf = d / "state.json"
+            if sf.exists():
+                try:
+                    state = json.loads(sf.read_text())
+                    for f in state.get("docs_needed", []):
+                        unfilled_gaps.add(f)
+                except Exception:
+                    continue
+
+    # Freshness
+    ages = [d["days_since_update"] for d in doc_files if d["days_since_update"] >= 0]
+    avg_age = round(sum(ages) / len(ages), 1) if ages else 0
+    stale_count = sum(1 for a in ages if a > 30)
+
+    return {
+        "success": True,
+        "total_docs": len(doc_files),
+        "docs": doc_files,
+        "freshness": {
+            "avg_days": avg_age,
+            "stale_count": stale_count,
+        },
+        "gaps": {
+            "total_flagged": len(unfilled_gaps),
+            "remaining_files": sorted(unfilled_gaps),
+        },
+    }

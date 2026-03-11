@@ -85,6 +85,9 @@ from agentic_workflow_server.state_tools import (
     # Optional phases
     workflow_enable_optional_phase,
     workflow_get_optional_phases,
+    # Analytics
+    workflow_get_analytics,
+    workflow_get_doc_metrics,
     # Constants
     get_tasks_dir,
     DISCOVERY_CATEGORIES,
@@ -1102,6 +1105,100 @@ class TestOptionalPhasesEdgeCases:
             assert result["success"] is True
         result = workflow_get_optional_phases(task_id="TASK_EXT_262")
         assert set(result["optional_phases"]) == set(valid)
+
+
+class TestWorkflowGetAnalytics:
+    """Tests for workflow_get_analytics aggregate tool."""
+
+    @pytest.fixture
+    def isolated_tasks(self):
+        """Isolated tasks dir for analytics tests."""
+        import tempfile
+        import agentic_workflow_server.state_tools as _st
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_tasks = Path(tmpdir) / ".tasks"
+            tmp_tasks.mkdir()
+            old = _st._cached_tasks_dir
+            _st._cached_tasks_dir = tmp_tasks
+            try:
+                yield tmp_tasks
+            finally:
+                _st._cached_tasks_dir = old
+
+    def test_empty_tasks_dir(self, isolated_tasks):
+        """Returns zero-task result when no tasks exist."""
+        result = workflow_get_analytics(days=30)
+        assert result["success"] is True
+        assert result["total_tasks"] == 0
+
+    def test_aggregates_across_tasks(self, isolated_tasks):
+        """Aggregates cost and concern data across multiple tasks."""
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+
+        # Create two tasks with cost and concern data
+        workflow_initialize(task_id="TASK_AN_001", description="Task 1")
+        workflow_set_mode(mode="standard", task_id="TASK_AN_001")
+        td1 = find_task_dir("TASK_AN_001")
+        s1 = _load_state(td1)
+        s1["cost_tracking"] = {
+            "entries": [],
+            "totals": {"input_tokens": 1000, "output_tokens": 500, "total_cost": 0.05, "duration_seconds": 60},
+            "by_agent": {"planner": {"input_tokens": 1000, "output_tokens": 500, "total_cost": 0.05}},
+            "by_model": {},
+        }
+        s1["concerns"] = [{"severity": "medium", "source": "reviewer", "addressed_by": "implementer"}]
+        _save_state(td1, s1)
+
+        workflow_initialize(task_id="TASK_AN_002", description="Task 2")
+        workflow_set_mode(mode="thorough", task_id="TASK_AN_002")
+        td2 = find_task_dir("TASK_AN_002")
+        s2 = _load_state(td2)
+        s2["cost_tracking"] = {
+            "entries": [],
+            "totals": {"input_tokens": 2000, "output_tokens": 1000, "total_cost": 0.10, "duration_seconds": 120},
+            "by_agent": {"planner": {"input_tokens": 2000, "output_tokens": 1000, "total_cost": 0.10}},
+            "by_model": {},
+        }
+        s2["concerns"] = [
+            {"severity": "high", "source": "skeptic"},
+            {"severity": "low", "source": "reviewer", "addressed_by": "implementer"},
+        ]
+        _save_state(td2, s2)
+
+        result = workflow_get_analytics(days=30)
+        assert result["success"] is True
+        assert result["total_tasks"] == 2
+        assert result["mode_distribution"]["standard"] == 1
+        assert result["mode_distribution"]["thorough"] == 1
+        assert result["cost"]["total"] == 0.15
+        assert result["concerns"]["total"] == 3
+        assert result["concerns"]["addressed"] == 2
+
+
+class TestWorkflowGetDocMetrics:
+    """Tests for workflow_get_doc_metrics tool."""
+
+    def test_returns_doc_metrics(self):
+        """Should return doc count and freshness data."""
+        result = workflow_get_doc_metrics()
+        assert result["success"] is True
+        assert result["total_docs"] >= 0
+        assert "freshness" in result
+        assert "gaps" in result
+
+    def test_gap_tracking_from_state(self, clean_tasks_dir):
+        """Gaps from docs_needed should appear in metrics."""
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+
+        workflow_initialize(task_id="TASK_EXT_DOCM_001", description="Test doc metrics gaps")
+        td = find_task_dir("TASK_EXT_DOCM_001")
+        state = _load_state(td)
+        state["docs_needed"] = ["src/unflagged_module.py"]
+        _save_state(td, state)
+
+        result = workflow_get_doc_metrics()
+        assert result["success"] is True
+        assert "src/unflagged_module.py" in result["gaps"]["remaining_files"]
 
 
 if __name__ == "__main__":

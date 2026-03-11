@@ -96,6 +96,9 @@ from .state_tools import (
     # Outcome tracking
     workflow_record_outcome,
     workflow_get_outcome_stats,
+    # Analytics
+    workflow_get_analytics,
+    workflow_get_doc_metrics,
     # Interaction logging
     workflow_log_interaction,
     # Composite tools
@@ -1406,6 +1409,31 @@ TOOLS = [
             "required": []
         }
     ),
+    # Analytics
+    Tool(
+        name="workflow_get_analytics",
+        description="Aggregate workflow analytics across all completed tasks: mode distribution, cost trends, concern hit rates. Used by /crew-stats.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "days": {
+                    "type": "integer",
+                    "description": "Number of days to look back (default 30)",
+                    "default": 30
+                }
+            },
+            "required": []
+        }
+    ),
+    Tool(
+        name="workflow_get_doc_metrics",
+        description="Get knowledge base health metrics: doc count, freshness, and documentation gaps. Used by /crew-docs-report.",
+        inputSchema={
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    ),
     # Interaction Logging
     Tool(
         name="workflow_log_interaction",
@@ -1861,6 +1889,9 @@ TOOL_DISPATCH_TABLE = {
     # Outcome tracking
     "workflow_record_outcome": workflow_record_outcome,
     "workflow_get_outcome_stats": workflow_get_outcome_stats,
+    # Analytics
+    "workflow_get_analytics": workflow_get_analytics,
+    "workflow_get_doc_metrics": workflow_get_doc_metrics,
     # Interaction logging
     "workflow_log_interaction": workflow_log_interaction,
     # Composite tools

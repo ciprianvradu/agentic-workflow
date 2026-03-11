@@ -875,6 +875,9 @@ class TestDocGapDetection:
         assert result.get("action") == "spawn_agent"
         assert result.get("agent") == "technical_writer"
         assert result.get("docs_needed") == ["src/utils.py", "src/config.py"]
+        # Incremental: TW should get changed_files_command for focused doc updates
+        assert "changed_files_command" in result
+        assert "git diff --name-only" in result["changed_files_command"]
 
     def test_tw_no_docs_needed_omits_key(self, clean_tasks_dir):
         """When docs_needed is empty, the key should not appear in the result."""
@@ -938,6 +941,31 @@ class TestDocGapDetection:
         )
 
         assert result["extracted"]["docs_needed"] == ["src/new_module.py", "src/patterns.py"]
+
+    def test_parse_docs_needed_from_implementer_output(self, clean_tasks_dir):
+        """Implementer output with <docs_needed> tag should also be parsed."""
+        workflow_initialize(task_id="TASK_ORCH_DG_004", description="Test impl parse")
+
+        output = """
+# Implementation Complete
+
+Modified files:
+- src/services/auth.py
+- src/utils/crypto.py
+
+<docs_needed>
+["src/services/auth.py", "src/utils/crypto.py"]
+</docs_needed>
+
+<promise>IMPLEMENTER_COMPLETE</promise>
+"""
+        result = crew_parse_agent_output(
+            agent="implementer",
+            output_text=output,
+            task_id="TASK_ORCH_DG_004"
+        )
+
+        assert result["extracted"]["docs_needed"] == ["src/services/auth.py", "src/utils/crypto.py"]
 
 
 # ============================================================================

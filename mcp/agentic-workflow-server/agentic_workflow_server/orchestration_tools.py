@@ -1441,11 +1441,15 @@ def _build_phase_action(
         if convention_files:
             result["convention_files"] = convention_files
 
-    # Provide docs_needed list for technical_writer
+    # Provide docs_needed list and changed_files command for technical_writer
     if agent == "technical_writer":
         docs_needed = state.get("docs_needed", [])
         if docs_needed:
             result["docs_needed"] = docs_needed
+        # Provide command to get list of changed files for incremental doc updates
+        wt = state.get("worktree") or {}
+        base_branch = wt.get("base_branch", "main")
+        result["changed_files_command"] = f"git diff --name-only {base_branch}...HEAD"
 
     # Provide git diff commands for agents that need code change context
     if agent in ("technical_writer", "quality_guard", "security_auditor"):
@@ -1776,7 +1780,7 @@ def crew_parse_agent_output(
     extracted: dict[str, Any] = {}
     has_blocking_issues = False
 
-    # Parse <docs_needed> (from architect)
+    # Parse <docs_needed> (from any agent: planner, implementer, reviewer, etc.)
     docs_match = re.search(r'<docs_needed>\s*(\[.*?\])\s*</docs_needed>', output_text, re.DOTALL)
     if docs_match:
         try:
