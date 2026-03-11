@@ -838,6 +838,108 @@ class TestHostAwarePlanner:
         assert ha["planner_mode"] == "auto"
 
 
+class TestDocGapDetection:
+    """Tests for docs_needed passing to technical_writer phase."""
+
+    def test_tw_gets_docs_needed_list(self, clean_tasks_dir):
+        """Technical writer phase action should include docs_needed from state."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_DG_001", description="Test doc gaps")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_DG_001")
+
+        # Add docs_needed to state
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_DG_001")
+        state = _load_state(task_dir)
+        state["docs_needed"] = ["src/utils.py", "src/config.py"]
+        state["phase"] = "implementer"
+        state["phases_completed"] = ["planner", "implementer"]
+        _save_state(task_dir, state)
+
+        mock_config = {
+            "models": {"default": "opus", "standard": {"technical_writer": "sonnet"}},
+            "subagent_limits": {"max_turns": {"documentation_agents": 20}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"documentation": {"after_technical_writer": True}},
+            "parallelization": {},
+            "custom_phases": {},
+            "documentation": {"async_mode": False},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_DG_001")
+
+        assert result.get("action") == "spawn_agent"
+        assert result.get("agent") == "technical_writer"
+        assert result.get("docs_needed") == ["src/utils.py", "src/config.py"]
+
+    def test_tw_no_docs_needed_omits_key(self, clean_tasks_dir):
+        """When docs_needed is empty, the key should not appear in the result."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_DG_002", description="Test no doc gaps")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_DG_002")
+
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_DG_002")
+        state = _load_state(task_dir)
+        state["phase"] = "technical_writer"
+        state["phases_completed"] = ["planner", "implementer"]
+        state["docs_needed"] = ["something.py"]  # Need at least one to not skip TW
+        _save_state(task_dir, state)
+
+        mock_config = {
+            "models": {"default": "opus", "standard": {"technical_writer": "sonnet"}},
+            "subagent_limits": {"max_turns": {"documentation_agents": 20}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"documentation": {"after_technical_writer": True}},
+            "parallelization": {},
+            "custom_phases": {},
+            "documentation": {"async_mode": False},
+        }
+
+        # Clear docs_needed before build
+        state2 = _load_state(task_dir)
+        state2["docs_needed"] = []
+        _save_state(task_dir, state2)
+
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_DG_002")
+
+        # TW should be skipped when docs_needed is empty in standard mode
+        assert result.get("agent") != "technical_writer" or "docs_needed" not in result
+
+    def test_parse_docs_needed_from_planner_output(self, clean_tasks_dir):
+        """Planner output with <docs_needed> tag should be parsed and stored."""
+        workflow_initialize(task_id="TASK_ORCH_DG_003", description="Test parse")
+
+        output = """
+# Plan
+
+## Implementation
+- Step 1: Add feature
+
+<docs_needed>
+["src/new_module.py", "src/patterns.py"]
+</docs_needed>
+
+<promise>PLANNER_COMPLETE</promise>
+"""
+        result = crew_parse_agent_output(
+            agent="planner",
+            output_text=output,
+            task_id="TASK_ORCH_DG_003"
+        )
+
+        assert result["extracted"]["docs_needed"] == ["src/new_module.py", "src/patterns.py"]
+
+
 # ============================================================================
 # crew_get_implementation_action tests (requires filesystem)
 # ============================================================================

@@ -215,13 +215,44 @@ workflow_save_discovery(category="gotcha", content="Database has eventual consis
 
 ---
 
-## Documentation Gap Flagging
+## Documentation Gap Flagging (Proactive)
 
-While analyzing, flag undocumented code or outdated docs for the Technical Writer:
+**Before finalizing your plan**, scan for documentation gaps. For every file in your implementation plan, check whether it has corresponding documentation in `{knowledge_base}`. Flag gaps so the Technical Writer can address them.
+
+### What to Check
+
+For each file in your plan's "Affected Systems" or implementation steps:
+1. Does `{knowledge_base}` have documentation covering this module/pattern?
+2. Are there undocumented conventions the Implementer needs to follow?
+3. Does the plan introduce new patterns that should be documented?
+
+### How to Flag
+
+Call `workflow_mark_docs_needed()` with the files that need documentation:
 
 ```
-workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented.md"])
+workflow_mark_docs_needed(task_id: "{task_id}", files: [
+    "path/to/undocumented-module.py",
+    "path/to/new-pattern.ts"
+])
 ```
+
+Also include the `<docs_needed>` tag in your output (it is parsed automatically):
+
+```
+<docs_needed>
+["path/to/file1.py", "path/to/file2.ts"]
+</docs_needed>
+```
+
+### When to Flag
+
+- Files being modified that have no coverage in `{knowledge_base}`
+- New files being created that introduce patterns worth documenting
+- Existing docs that contradict the planned changes
+- Conventions you discovered during analysis that aren't written down
+
+**Important**: The Technical Writer phase only runs if docs_needed is non-empty. If you don't flag gaps, documentation won't be updated.
 
 ---
 

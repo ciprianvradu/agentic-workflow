@@ -1441,6 +1441,12 @@ def _build_phase_action(
         if convention_files:
             result["convention_files"] = convention_files
 
+    # Provide docs_needed list for technical_writer
+    if agent == "technical_writer":
+        docs_needed = state.get("docs_needed", [])
+        if docs_needed:
+            result["docs_needed"] = docs_needed
+
     # Provide git diff commands for agents that need code change context
     if agent in ("technical_writer", "quality_guard", "security_auditor"):
         wt = state.get("worktree") or {}
