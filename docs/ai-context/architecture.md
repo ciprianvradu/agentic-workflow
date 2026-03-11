@@ -129,6 +129,12 @@ The detection logic is in `workflow_detect_mode()` — pure Python, no LLM invol
 - Quick mode defaults to Sonnet, standard/thorough use Opus for planning agents
 - Override with `models.default: opus` in project config to use Opus everywhere
 
+**Host-aware Planner Mode:** `_build_phase_action()` also injects a `planner_mode` variable when spawning the planner agent. The value is derived from the `host_aware` config section:
+- `planner_mode: auto` (default) — resolves to `plan_only` for hosts that explore before invoking `/crew` (claude, opencode), and `full` for hosts that do not (copilot, gemini)
+- `planner_mode: plan_only` — forces the planner to skip Phase 2 (code investigation) regardless of host
+- `planner_mode: full` — forces full two-phase planning regardless of host
+- When `host_aware.enabled: false`, `planner_mode` is always `full`
+
 **Internal helpers (prefixed with `_`):**
 - `_load_state(task_dir)` / `_save_state(task_dir, state)` — JSON I/O with file locking
 - `_build_resume_prompt(task_id, path, ai_host)` — Platform-specific resume prompt
@@ -149,6 +155,7 @@ Key config sections:
 - `loop_mode` — Autonomous execution settings
 - `max_iterations` — Retry limits per phase type
 - `documentation` — Async documentation mode settings (async_mode, auto_commit_docs, notify_on_complete)
+- `host_aware` — Host-aware Planner optimization (enabled, skip_exploration per-host, planner_mode)
 
 **`config_get_effective(task_id?)`** — Returns merged config from all 4 cascade levels.
 

@@ -645,6 +645,137 @@ class TestCrewGetNextPhase:
 
 
 # ============================================================================
+# TestHostAwarePlanner tests
+# ============================================================================
+
+class TestHostAwarePlanner:
+    """Tests for host-aware planner_mode injection."""
+
+    def _make_host_aware_config(self, host_aware_override=None):
+        base = {
+            "host_aware": {
+                "enabled": True,
+                "skip_exploration": {
+                    "claude": True,
+                    "copilot": False,
+                    "gemini": False,
+                    "opencode": True,
+                },
+                "planner_mode": "auto",
+            },
+            "models": {"default": "opus", "standard": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "parallelization": {},
+            "custom_phases": {},
+        }
+        if host_aware_override:
+            base["host_aware"].update(host_aware_override)
+        return base
+
+    def test_planner_mode_plan_only_for_claude_host(self, clean_tasks_dir):
+        """Planner gets planner_mode=plan_only when host=claude and host_aware enabled."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_HA_001", description="Test host-aware")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_HA_001")
+
+        # Store ai_host=claude in state
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_HA_001")
+        state = _load_state(task_dir)
+        state["ai_host"] = "claude"
+        _save_state(task_dir, state)
+
+        mock_config = self._make_host_aware_config()
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_HA_001")
+
+        assert result.get("action") == "spawn_agent"
+        assert result.get("agent") == "planner"
+        assert result["variables"]["planner_mode"] == "plan_only"
+
+    def test_planner_mode_full_when_host_aware_disabled(self, clean_tasks_dir):
+        """Planner gets planner_mode=full when host_aware.enabled=False."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_HA_002", description="Test host-aware disabled")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_HA_002")
+
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_HA_002")
+        state = _load_state(task_dir)
+        state["ai_host"] = "claude"
+        _save_state(task_dir, state)
+
+        mock_config = self._make_host_aware_config({"enabled": False})
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_HA_002")
+
+        assert result.get("agent") == "planner"
+        assert result["variables"]["planner_mode"] == "full"
+
+    def test_planner_mode_full_for_copilot_host(self, clean_tasks_dir):
+        """Planner gets planner_mode=full when host=copilot (not in skip_exploration)."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_HA_003", description="Test copilot host")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_HA_003")
+
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_HA_003")
+        state = _load_state(task_dir)
+        state["ai_host"] = "copilot"
+        _save_state(task_dir, state)
+
+        mock_config = self._make_host_aware_config()
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_HA_003")
+
+        assert result.get("agent") == "planner"
+        assert result["variables"]["planner_mode"] == "full"
+
+    def test_planner_mode_explicit_override(self, clean_tasks_dir):
+        """When planner_mode is set explicitly (not auto), it is used directly."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_HA_004", description="Test explicit override")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_HA_004")
+
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_HA_004")
+        state = _load_state(task_dir)
+        state["ai_host"] = "copilot"  # would normally be "full"
+        _save_state(task_dir, state)
+
+        # Force plan_only regardless of host
+        mock_config = self._make_host_aware_config({"planner_mode": "plan_only"})
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_HA_004")
+
+        assert result.get("agent") == "planner"
+        assert result["variables"]["planner_mode"] == "plan_only"
+
+    def test_host_aware_defaults_in_default_config(self):
+        """DEFAULT_CONFIG includes host_aware with correct defaults."""
+        from agentic_workflow_server.config_tools import DEFAULT_CONFIG
+        ha = DEFAULT_CONFIG["host_aware"]
+        assert ha["enabled"] is True
+        assert ha["skip_exploration"]["claude"] is True
+        assert ha["skip_exploration"]["copilot"] is False
+        assert ha["skip_exploration"]["gemini"] is False
+        assert ha["skip_exploration"]["opencode"] is True
+        assert ha["planner_mode"] == "auto"
+
+
+# ============================================================================
 # crew_get_implementation_action tests (requires filesystem)
 # ============================================================================
 

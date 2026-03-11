@@ -170,6 +170,23 @@ Each platform limits what tools sub-agents can use, defined in `build-agents.py`
 - **Gemini**: Explicit tool allowlists per agent (`GEMINI_AGENT_TOOLS` dict), plus `max_turns` limits (`GEMINI_MAX_TURNS`)
 - **OpenCode**: Tool deny-maps per agent (`OPENCODE_AGENT_TOOLS` dict), e.g., `{"write": false, "edit": false}` to restrict read-only agents
 
+### Host-aware Planner Mode
+
+When the orchestrator spawns the planner agent, it injects a `planner_mode` variable based on the `host_aware` config section (see [architecture.md](./architecture.md#host-aware-planner-mode) for the full resolution logic).
+
+Default behavior per host:
+
+| Host | `skip_exploration` default | Effective `planner_mode` |
+|---|---|---|
+| Claude Code | `true` | `plan_only` — skips Phase 2 code investigation |
+| OpenCode | `true` | `plan_only` — skips Phase 2 code investigation |
+| Copilot | `false` | `full` — runs both Phase 1 and Phase 2 |
+| Gemini | `false` | `full` — runs both Phase 1 and Phase 2 |
+
+Claude Code and OpenCode explore the codebase before the user invokes `/crew`, so the planner can skip its own code-investigation phase and produce the implementation plan directly. Copilot and Gemini do not pre-explore, so the planner runs its full two-phase process.
+
+Override with `host_aware.planner_mode: plan_only` or `full` in `workflow-config.yaml` to force a specific mode regardless of host. Set `host_aware.enabled: false` to disable the feature entirely and always use `full` mode.
+
 ### Per-Agent Model Selection
 
 Platforms that support per-agent model selection use dicts in `build-agents.py` to map agent names to model IDs. The model is emitted in the agent frontmatter.

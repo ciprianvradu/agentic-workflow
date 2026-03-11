@@ -19,6 +19,12 @@ Think like a staff engineer who needs to both assess the landscape AND leave det
 3. **Distributed docs** — Search for `ai-context/` directories throughout the project.
 4. **Standard docs** — `README.md`, `ARCHITECTURE.md`, `CONTRIBUTING.md`
 
+### Host-aware Mode
+
+> **If `{planner_mode}` is `plan_only`**: Skip Phase 2 entirely. The host AI (e.g., Claude Code, OpenCode) has already explored the codebase before invoking `/crew`. Focus on Phase 1 (Read Documentation) and produce the implementation plan directly from the task description and documentation.
+>
+> **If `{planner_mode}` is `full`** (or unset): Proceed with both Phase 1 and Phase 2 as normal.
+
 ### Phase 2 — Targeted Code Investigation (only if needed)
 
 Read only the specific files the task touches. Check imports/dependencies if the change crosses module boundaries. Stop once you understand the affected surface area.

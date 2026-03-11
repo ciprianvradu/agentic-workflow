@@ -222,6 +222,19 @@ beads:
   add_comments: true                # Add workflow progress as beads comments
 
 
+# Host-aware Planner Optimization
+# When running on a host that already explored the codebase (e.g., Claude Code,
+# OpenCode), the Planner can skip Phase 2 (code investigation) to save time.
+host_aware:
+  enabled: true                    # false to disable entirely
+  skip_exploration:
+    claude: true                   # Claude Code explores before /crew
+    copilot: false                 # Copilot does not pre-explore
+    gemini: false                  # Gemini does not pre-explore
+    opencode: true                 # OpenCode explores before /crew
+  planner_mode: auto               # auto | plan_only | full
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Advanced Settings (most users don't need to change below)
 # ═══════════════════════════════════════════════════════════════════════════════

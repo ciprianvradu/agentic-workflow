@@ -1378,6 +1378,26 @@ def _build_phase_action(
         "kb_files": kb_inv.get("files", []),
     }
 
+    # Inject planner_mode for host-aware optimization
+    if agent == "planner":
+        host_aware = config.get("host_aware", {})
+        if host_aware.get("enabled", True):
+            configured_mode = host_aware.get("planner_mode", "auto")
+            if configured_mode == "auto":
+                ai_host = state.get("ai_host", "unknown")
+                skip_exploration = host_aware.get("skip_exploration", {})
+                if skip_exploration.get(ai_host, False):
+                    variables["planner_mode"] = "plan_only"
+                else:
+                    variables["planner_mode"] = "full"
+            else:
+                # Explicit override: "plan_only" or "full"
+                variables["planner_mode"] = configured_mode
+        else:
+            variables["planner_mode"] = "full"
+    else:
+        variables["planner_mode"] = "full"
+
     # Build beads comment if enabled
     beads_comment = None
     beads_config = config.get("beads", {})

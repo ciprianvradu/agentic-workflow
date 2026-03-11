@@ -184,6 +184,16 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 300,
         },
     },
+    "host_aware": {
+        "enabled": True,
+        "skip_exploration": {
+            "claude": True,
+            "copilot": False,
+            "gemini": False,
+            "opencode": True,
+        },
+        "planner_mode": "auto",
+    },
 }
 
 
