@@ -44,6 +44,7 @@ from workflow_state import WorkflowState, _resolve_tasks_dir, _detect_worktree_t
 
 # Maps agent names to their workflow phase (None = optional/specialist agent)
 AGENT_TO_PHASE = {
+    "planner": "planner",
     "architect": "architect",
     "developer": "developer",
     "reviewer": "reviewer",
@@ -53,9 +54,9 @@ AGENT_TO_PHASE = {
     "quality_guard": "quality_guard",
     "technical-writer": "technical_writer",
     "technical_writer": "technical_writer",
-    # Optional specialist agents — not part of the main pipeline
-    "security-auditor": None,
-    "security_auditor": None,
+    # Security auditor — part of thorough pipeline (parallel with quality_guard)
+    "security-auditor": "security_auditor",
+    "security_auditor": "security_auditor",
     "performance-analyst": None,
     "performance_analyst": None,
     "api-guardian": None,

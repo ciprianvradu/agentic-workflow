@@ -19,7 +19,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 
 ## What This Project Is
 
-The **Agentic Development Workflow** is a multi-agent orchestration system for software development. It coordinates specialized AI agents — architect, developer, reviewer, skeptic, implementer, feedback, and technical-writer — through a structured pipeline that plans, reviews, builds, verifies, and documents code changes.
+The **Agentic Development Workflow** is a multi-agent orchestration system for software development. It coordinates specialized AI agents — planner, reviewer, implementer, quality-guard, and technical-writer — through a structured pipeline that plans, reviews, builds, verifies, and documents code changes.
 
 It runs on **four platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, and OpenCode — using the same agent definitions and workflow configuration across all of them.
 
@@ -30,16 +30,14 @@ The core infrastructure is an **MCP server** (Model Context Protocol) written in
 ```
 agentic-workflow/
 ├── agents/                     # Agent prompt definitions (markdown)
-│   ├── architect.md            # System design & risk analysis
-│   ├── developer.md            # Implementation planning
-│   ├── reviewer.md             # Code review & gap detection
-│   ├── skeptic.md              # Failure mode analysis
+│   ├── planner.md              # System analysis + implementation planning (read-only)
+│   ├── reviewer.md             # Plan review & adversarial analysis (read-only)
 │   ├── implementer.md          # Code execution (the only code-writing agent)
-│   ├── feedback.md             # Plan-vs-reality comparison
+│   ├── quality-guard.md        # Code quality review
 │   ├── technical-writer.md     # Documentation updates
+│   ├── security-auditor.md     # Thorough pipeline: security review (parallel with quality-guard)
 │   ├── crew-worktree.md        # Worktree creation flow
 │   ├── crew-status.md          # Workflow status display
-│   ├── security-auditor.md     # Optional: security review
 │   ├── performance-analyst.md  # Optional: performance review
 │   ├── api-guardian.md         # Optional: API contract protection
 │   └── accessibility-reviewer.md # Optional: a11y review
@@ -115,13 +113,11 @@ agentic-workflow/
 
 Every task flows through phases in order:
 
-1. **Architect** — Analyzes system impact, risks, constraints (read-only)
-2. **Developer** — Creates step-by-step implementation plan (read-only)
-3. **Reviewer** — Checks plan for gaps and correctness (read-only)
-4. **Skeptic** — Stress-tests for failure modes (read-only)
-5. **Implementer** — Executes the plan, writes code (read-write)
-6. **Feedback** — Compares built code vs approved plan (read-only)
-7. **Technical Writer** — Updates documentation (docs-only write)
+1. **Planner** — System analysis + implementation plan (read-only)
+2. **Reviewer** — Plan review + adversarial analysis (read-only, thorough only)
+3. **Implementer** — Executes the plan (read-write)
+4. **Quality Guard** + **Security Auditor** — Code quality + security review, run in parallel (thorough only)
+5. **Technical Writer** — Documentation updates (docs-only write)
 
 Human checkpoints occur between phases (configurable).
 
@@ -131,12 +127,11 @@ Not all tasks need all agents:
 
 | Mode | Agents | Use For |
 |------|--------|---------|
-| **micro** | Implementer | Typos, one-line fixes, trivial changes |
-| **standard** | Developer → Implementer → Writer | Routine features, fixes, refactors |
-| **reviewed** | Architect → Developer → Reviewer → Implementer → Writer | Non-trivial changes needing review |
-| **thorough** | All 7 + optional specialists | Security, DB migrations, breaking changes |
+| **quick** | Implementer | Typos, one-line fixes, trivial changes |
+| **standard** | Planner → Implementer → Technical Writer | Routine features, fixes, refactors |
+| **thorough** | Planner → Reviewer → Implementer → Quality Guard + Security Auditor (parallel) → Technical Writer | Security, DB migrations, breaking changes |
 
-Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
 
 Mode is auto-detected from the task description or set explicitly.
 

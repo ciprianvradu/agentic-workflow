@@ -200,12 +200,14 @@ def main():
         sys.exit(0)
 
     phase_names = {
+        "planner": "Planner",
         "architect": "Architect",
         "developer": "Developer",
         "reviewer": "Reviewer",
         "skeptic": "Skeptic",
         "implementer": "Implementer",
         "quality_guard": "Quality Guard",
+        "security_auditor": "Security Auditor",
         "technical_writer": "Technical Writer",
         "technical-writer": "Technical Writer",
     }

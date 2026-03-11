@@ -23,20 +23,18 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _FIX_WORKTREE_PATHS_SCRIPT = _REPO_ROOT / "scripts" / "fix-worktree-paths.py"
 
 PHASE_ORDER = [
-    "architect",
-    "developer",
+    "planner",
     "reviewer",
-    "skeptic",
     "implementer",
     "quality_guard",
+    "security_auditor",
     "technical_writer"
 ]
 
 REQUIRED_PHASES = [
-    "architect",
-    "developer",
+    "planner",
     "implementer",
-    "quality_guard"
+    "technical_writer"
 ]
 
 # Maximum error patterns to keep in .error_patterns.jsonl (oldest-first eviction)
@@ -621,23 +619,23 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
     phases_completed = [_normalize_phase(p) for p in state.get("phases_completed", [])]
 
     if current is None:
-        if to_phase == "architect":
-            return True, "Starting workflow with architect"
-        # Allow starting with any phase if mode doesn't include architect
+        if to_phase == "planner":
+            return True, "Starting workflow with planner"
+        # Allow starting with any phase if mode doesn't include planner
         if mode_phases and to_phase == mode_phases[0]:
-            return True, f"Starting workflow with {to_phase} (mode skips architect)"
+            return True, f"Starting workflow with {to_phase} (mode skips planner)"
         # Allow starting with custom phases that run before mode phases
         custom_in_seq = state.get("custom_phases_in_sequence", [])
         if to_phase in custom_in_seq:
             return True, f"Starting workflow with custom phase {to_phase}"
-        return False, "Workflow must start with architect phase"
+        return False, "Workflow must start with planner phase"
 
     if to_phase == current:
         return True, "Re-running current phase"
 
     if to_phase in phases_completed:
-        if to_phase == "developer" and state.get("review_issues"):
-            return True, "Looping back to developer due to review issues"
+        if to_phase == "planner" and state.get("review_issues"):
+            return True, "Looping back to planner due to review issues"
         return False, f"Phase {to_phase} already completed"
 
     # Use mode_phases as the ordering if available, else fall back to PHASE_ORDER
@@ -668,8 +666,8 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
         if to_phase in valid_phases:
             return True, f"Transition from standard phase {current} to custom phase {to_phase}"
 
-    if to_phase == "developer" and current in ("reviewer", "skeptic"):
-        return True, f"Valid loop-back from {current} to developer"
+    if to_phase == "planner" and current in ("reviewer", "implementer"):
+        return True, f"Valid loop-back from {current} to planner"
 
     # Find the next valid phase to suggest
     if current in ordering:
@@ -708,8 +706,8 @@ def workflow_initialize(
 
     state = _create_default_state(task_id)
     # Don't set phase here — crew_init_task sets it after mode is determined.
-    # This prevents the bug where standard mode (no architect) gets stuck
-    # with phase="architect" that never produces output.
+    # This prevents the bug where standard mode (no planner) gets stuck
+    # with phase="planner" that never produces output.
     state["phase"] = None
     if description:
         state["description"] = description
@@ -765,7 +763,7 @@ def workflow_transition(
     if old_phase and old_phase != to_phase and old_phase not in state["phases_completed"]:
         state["phases_completed"].append(old_phase)
 
-    if to_phase == "developer" and old_phase in ("reviewer", "skeptic"):
+    if to_phase == "planner" and old_phase in ("reviewer", "implementer"):
         state["iteration"] = state.get("iteration", 1) + 1
         state["review_issues"] = []
 
@@ -1032,12 +1030,11 @@ def workflow_can_stop(task_id: Optional[str] = None) -> dict[str, Any]:
         }
 
     phase_names = {
-        "architect": "Architect",
-        "developer": "Developer",
+        "planner": "Planner",
         "reviewer": "Reviewer",
-        "skeptic": "Skeptic",
         "implementer": "Implementer",
-        "feedback": "Feedback",
+        "quality_guard": "Quality Guard",
+        "security_auditor": "Security Auditor",
         "technical_writer": "Technical Writer"
     }
 
@@ -1603,10 +1600,9 @@ def workflow_prune_old_outputs(
         "plan.md",
         "config.yaml",
         "task.md",
-        "architect.md",
-        "developer.md",
+        "planner.md",
         "reviewer.md",
-        "skeptic.md",
+        "implementer.md",
     ]
 
     # Get all files sorted by modification time (oldest first)
@@ -2324,14 +2320,14 @@ WORKFLOW_MODES = {
         "estimated_cost": "$0.03"
     },
     "standard": {
-        "description": "Architect plans, developer details, implementer executes — routine to non-trivial features",
-        "phases": ["architect", "developer", "implementer", "quality_guard"],
-        "estimated_cost": "$0.12"
+        "description": "Planner + Implementer + Technical Writer — routine to non-trivial features",
+        "phases": ["planner", "implementer", "technical_writer"],
+        "estimated_cost": "$0.10"
     },
     "thorough": {
-        "description": "Full review pipeline with parallel reviewer+skeptic — security, migrations, breaking changes",
-        "phases": ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"],
-        "estimated_cost": "$0.40+"
+        "description": "Full pipeline with review and security — security, migrations, breaking changes",
+        "phases": ["planner", "reviewer", "implementer", "quality_guard", "security_auditor", "technical_writer"],
+        "estimated_cost": "$0.30+"
     }
 }
 
@@ -2351,18 +2347,16 @@ EFFORT_LEVELS = {
         "implementer": "low"
     },
     "standard": {
-        "architect": "high",
-        "developer": "high",
+        "planner": "high",
         "implementer": "high",
-        "quality_guard": "medium"
+        "technical_writer": "medium"
     },
     "thorough": {
-        "architect": "max",
-        "developer": "max",
+        "planner": "max",
         "reviewer": "high",
-        "skeptic": "max",
         "implementer": "high",
         "quality_guard": "high",
+        "security_auditor": "high",
         "technical_writer": "medium"
     }
 }
@@ -2370,8 +2364,16 @@ EFFORT_LEVELS = {
 # Keywords for auto-detection (3 modes: quick, standard, thorough)
 AUTO_DETECT_RULES = {
     "quick": {
-        "keywords": ["typo", "fix typo", "spelling", "whitespace", "one-line",
-                    "trivial", "rename variable", "update comment", "fix import"],
+        "keywords": ["typo", "fix typo", "simple fix", "rename", "update comment", "fix import",
+                    "fix test", "fix lint", "fix build", "fix formatting", "fix whitespace",
+                    "fix spelling", "bump version", "update version", "add dependency",
+                    "remove dependency", "update dependency", "update config", "toggle flag",
+                    "change constant", "delete unused", "remove dead code", "one-line", "trivial"],
+        "patterns": [
+            r"^fix (a |the )?broken test",
+            r"^change .+ from .+ to",
+            r"^set .+ to",
+        ],
         "exclude_keywords": ["security", "auth", "database", "migration", "api", "breaking",
                            "authentication", "authorization", "password", "token", "critical",
                            "add feature", "implement", "refactor", "create", "build"]
@@ -2569,56 +2571,72 @@ def workflow_detect_mode(
     keyword_reason = "No specific pattern detected — defaulting to standard"
     matched_keywords: list[str] = []
 
-    # Check for thorough mode triggers first (highest priority)
-    thorough_matches = []
-    for keyword in AUTO_DETECT_RULES["thorough"]["keywords"]:
-        if keyword in desc_lower:
-            thorough_matches.append(keyword)
+    # Check quick patterns first — they are high-confidence signals that override
+    # broader keyword detection (e.g. "fix the broken test in auth module" is quick,
+    # even though "auth" is also a thorough keyword). Patterns are specific enough
+    # that exclude_keywords are not applied to them.
+    quick_pattern_matches = []
+    for pattern in AUTO_DETECT_RULES["quick"].get("patterns", []):
+        if re.search(pattern, task_description, re.IGNORECASE):
+            quick_pattern_matches.append(pattern)
 
-    if thorough_matches:
-        keyword_mode = "thorough"
-        keyword_confidence = 0.9
-        keyword_reason = f"Task mentions critical keywords: {', '.join(thorough_matches)}"
-        matched_keywords = thorough_matches
-    else:
-        # Check for standard mode (routine tasks without critical keywords)
-        standard_excluded = False
-        for exclude_keyword in AUTO_DETECT_RULES["standard"]["exclude_keywords"]:
-            if exclude_keyword in desc_lower:
-                standard_excluded = True
-                break
+    if quick_pattern_matches:
+        keyword_mode = "quick"
+        keyword_confidence = 0.85
+        keyword_reason = f"Trivial task ({', '.join(quick_pattern_matches)}) — quick mode"
+        matched_keywords = quick_pattern_matches
 
-        if not standard_excluded:
-            standard_matches = []
-            for keyword in AUTO_DETECT_RULES["standard"]["keywords"]:
-                if keyword in desc_lower:
-                    standard_matches.append(keyword)
+    if keyword_mode != "quick":
+        # Check for thorough mode triggers (highest priority among keyword checks)
+        thorough_matches = []
+        for keyword in AUTO_DETECT_RULES["thorough"]["keywords"]:
+            if keyword in desc_lower:
+                thorough_matches.append(keyword)
 
-            if standard_matches:
-                keyword_mode = "standard"
-                keyword_confidence = 0.8
-                keyword_reason = f"Routine task ({', '.join(standard_matches)}) without critical patterns"
-                matched_keywords = standard_matches
+        if thorough_matches:
+            keyword_mode = "thorough"
+            keyword_confidence = 0.9
+            keyword_reason = f"Task mentions critical keywords: {', '.join(thorough_matches)}"
+            matched_keywords = thorough_matches
+        else:
+            # Check for standard mode (routine tasks without critical keywords)
+            standard_excluded = False
+            for exclude_keyword in AUTO_DETECT_RULES["standard"]["exclude_keywords"]:
+                if exclude_keyword in desc_lower:
+                    standard_excluded = True
+                    break
 
-                # Check if this could be quick mode (trivial keywords only,
-                # no broader feature keywords that would require planning)
-                quick_excluded = False
-                for exclude_keyword in AUTO_DETECT_RULES["quick"]["exclude_keywords"]:
-                    if exclude_keyword in desc_lower:
-                        quick_excluded = True
-                        break
+            if not standard_excluded:
+                standard_matches = []
+                for keyword in AUTO_DETECT_RULES["standard"]["keywords"]:
+                    if keyword in desc_lower:
+                        standard_matches.append(keyword)
 
-                if not quick_excluded:
-                    quick_matches = []
-                    for kw in AUTO_DETECT_RULES["quick"]["keywords"]:
-                        if kw in desc_lower:
-                            quick_matches.append(kw)
+                if standard_matches:
+                    keyword_mode = "standard"
+                    keyword_confidence = 0.8
+                    keyword_reason = f"Routine task ({', '.join(standard_matches)}) without critical patterns"
+                    matched_keywords = standard_matches
 
-                    if quick_matches:
-                        keyword_mode = "quick"
-                        keyword_confidence = 0.85
-                        keyword_reason = f"Trivial task ({', '.join(quick_matches)}) — quick mode"
-                        matched_keywords = quick_matches
+                    # Check if this could be quick mode (trivial keywords only,
+                    # no broader feature keywords that would require planning)
+                    quick_excluded = False
+                    for exclude_keyword in AUTO_DETECT_RULES["quick"]["exclude_keywords"]:
+                        if exclude_keyword in desc_lower:
+                            quick_excluded = True
+                            break
+
+                    if not quick_excluded:
+                        quick_matches = []
+                        for kw in AUTO_DETECT_RULES["quick"]["keywords"]:
+                            if kw in desc_lower:
+                                quick_matches.append(kw)
+
+                        if quick_matches:
+                            keyword_mode = "quick"
+                            keyword_confidence = 0.85
+                            keyword_reason = f"Trivial task ({', '.join(quick_matches)}) — quick mode"
+                            matched_keywords = quick_matches
 
     # --- Signal 2: file scope analysis (when files provided) ---
     scope_analysis = None
@@ -2800,7 +2818,7 @@ def workflow_get_effort_level(
     for use with Claude's extended thinking effort parameter.
 
     Args:
-        agent: Agent name (architect, developer, reviewer, etc.)
+        agent: Agent name (planner, reviewer, implementer, etc.)
         task_id: Task identifier. If not provided, uses active task.
 
     Returns:
@@ -2906,7 +2924,7 @@ def workflow_record_cost(
     """Record token usage and cost for an agent run.
 
     Args:
-        agent: Agent name (architect, developer, etc.)
+        agent: Agent name (planner, reviewer, implementer, etc.)
         model: Model used (opus, sonnet, haiku)
         input_tokens: Number of input tokens
         output_tokens: Number of output tokens

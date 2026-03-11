@@ -3,6 +3,14 @@ name: crew-security-auditor
 description: "Security Auditor — finds vulnerabilities (OWASP Top 10)"
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `@crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -141,6 +149,8 @@ Scan for exposed secrets:
 ## Summary
 [1-2 sentences: Overall security posture of this plan]
 
+See `{knowledge_base}/severity-scale.md` for severity definitions.
+
 ## Critical Vulnerabilities (Must fix before production)
 
 ### Finding 1: [Title]
@@ -270,49 +280,40 @@ Security vulnerabilities are not technical debt - they are ticking time bombs.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save security findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="SQL injection in user search - Step 2.3 uses string concatenation for query")
-workflow_save_discovery(category="gotcha", content="JWT secret is hardcoded in auth.config.ts - must move to environment variable")
-workflow_save_discovery(category="pattern", content="Existing auth uses bcrypt with cost factor 12 - maintain consistency")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | Critical security vulnerabilities that must be fixed |
-| `gotcha` | Security misconfigurations or risky patterns |
-| `pattern` | Existing security patterns to follow |
-
-### What to Preserve
-
-Save discoveries that the Implementer must handle:
-- **Vulnerabilities** that need specific fixes
-- **Secrets exposure** that needs remediation
-- **Auth/authz flaws** that need security controls
-- **Input validation gaps** that need sanitization
+Save vulnerabilities that need specific fixes, secrets exposure needing remediation, auth/authz flaws, and input validation gaps.
 
 ---
 
 ## Completion Signals
 
-When your audit is complete, output:
-```
-<promise>SECURITY_AUDITOR_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical vulnerabilities require immediate attention:
-```
-<promise>BLOCKED: [critical security vulnerability description]</promise>
-```
+When your audit is complete: `<promise>SECURITY_AUDITOR_COMPLETE</promise>`
+If critical vulnerabilities require immediate attention: `<promise>BLOCKED: [critical security vulnerability description]</promise>`
+If you find data breach or compliance risks: `<promise>ESCALATE: [security risk requiring human decision]</promise>`
 
-If you find data breach or compliance risks:
-```
-<promise>ESCALATE: [security risk requiring human decision]</promise>
-```
+## Shared Agent Standards
+
+### Memory Preservation
+
+Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.
+
+At start of your phase, call `workflow_get_discoveries()` or `workflow_flush_context()` to load findings from earlier phases. At end, save decisions, patterns, gotchas, and blockers relevant to downstream agents.
+
+### Documentation Gap Flagging
+
+When you encounter undocumented or outdated code, call `workflow_mark_docs_needed()` to flag it for the Technical Writer. See `{knowledge_base}/doc-gap-flagging.md` for details.
+
+### Completion Signals
+
+See `{knowledge_base}/completion-signals.md` for the full promise protocol. Every agent must emit exactly one of these when finished:
+
+- `<promise>AGENT_COMPLETE</promise>` -- replace AGENT with your role name (e.g., `ARCHITECT_COMPLETE`)
+- `<promise>BLOCKED: [reason]</promise>` -- cannot proceed without human input
+- `<promise>ESCALATE: [reason]</promise>` -- critical concern requiring immediate attention
+
+### Severity Scale
+
+When rating issues use the project severity scale. See `{knowledge_base}/severity-scale.md` for definitions of Critical / High / Medium / Low.

@@ -16,7 +16,7 @@ Complex development tasks require multiple perspectives: architecture considerat
 
 **Agentic Workflow** solves this by:
 
-- **Orchestrating specialized agents** - Each agent has a focused role (architect, developer, reviewer, skeptic, etc.)
+- **Orchestrating specialized agents** - Each agent has a focused role (planner, reviewer, implementer, quality guard, etc.)
 - **Maintaining human control** - Configurable checkpoints let you review and approve at critical stages
 - **Supporting autonomous execution** - Loop mode handles repetitive fix tasks while you sleep
 - **Preserving context** - Gemini integration provides massive context analysis; state files enable resumption
@@ -224,60 +224,50 @@ For small tweaks, you can always make direct edits without using the crew.
 ### Workflow Phases
 
 ```
-┌─────────────────┐     ┌─────────────────────┐     ┌────────────┐     ┌─────────────┐
-│  CONTEXT PREP   │ ──▶ │   PLANNING LOOP     │ ──▶ │ IMPLEMENT  │ ──▶ │ DOCUMENT    │
-│ (Gemini+Repomix)│     │                     │     │   LOOP     │     │             │
-└─────────────────┘     └─────────────────────┘     └────────────┘     └─────────────┘
-                              │
-                              ▼
-                    Architect → Developer → Reviewer → Skeptic
-                        │           │           │          │
-                        ▼           ▼           ▼          ▼
-                   [checkpoint] [optional]  [checkpoint] [checkpoint]
+┌─────────────────┐     ┌──────────┐     ┌──────────┐     ┌────────────┐     ┌─────────────┐
+│  CONTEXT PREP   │ ──▶ │ PLANNING │ ──▶ │ REVIEW   │ ──▶ │ IMPLEMENT  │ ──▶ │ QUALITY &   │ ──▶ │ DOCUMENT  │
+│ (Gemini+Repomix)│     │          │     │(thorough)│     │   LOOP     │     │ SECURITY    │     │           │
+└─────────────────┘     └──────────┘     └──────────┘     └────────────┘     │ (thorough)  │     └───────────┘
+                              │                │                │            └─────────────┘          │
+                              ▼                ▼                ▼                    │                ▼
+                           Planner         Reviewer        Implementer      Quality Guard       Tech Writer
+                              │                │                            + Security Auditor
+                              ▼                ▼                             (parallel)
+                         [checkpoint]     [checkpoint]
 ```
 
 ### Agents
 
 | Agent | Phase | Role | Output |
 |-------|-------|------|--------|
-| **Planner** | Planning (quick mode) | Combined architect+developer for simple tasks — brief plan, no separate review | Compact implementation plan |
-| **Architect** | Planning | System design, boundaries, risks, integration points | Architectural analysis |
-| **Developer** | Planning | Detailed step-by-step implementation plan | `TASK_XXX.md` with checkboxes |
-| **Reviewer** | Planning | Plan validation, security review, pattern compliance | Review findings |
-| **Skeptic** | Planning | Edge cases, failure modes, "3 AM scenarios" | Risk analysis |
+| **Planner** | Planning | Combined system analysis and implementation planning in one pass | Implementation plan with checkboxes |
+| **Reviewer** | Planning (thorough) | Plan validation, security review, adversarial analysis, edge cases | Review findings + risk analysis |
 | **Implementer** | Implementation | Execute plan step-by-step, verify each step | Completed task, test results |
-| **Feedback** | Implementation | Detect deviations, classify severity, recommend fixes | Deviation analysis |
+| **Quality Guard** | Quality (thorough) | Post-implementation checks, test verification, standards compliance. Runs in parallel with Security Auditor | Quality report |
+| **Security Auditor** | Quality (thorough) | Security vulnerability review -- OWASP Top 10, secrets, auth flaws. Runs in parallel with Quality Guard | Security audit report |
 | **Technical Writer** | Documentation | Update AI-context docs with discovered patterns | Documentation updates |
+| **Architect** | Consultation | System design, boundaries, risks, integration points | Architectural analysis |
+| **Developer** | Consultation | Detailed step-by-step implementation plan | `TASK_XXX.md` with checkboxes |
+| **Skeptic** | Consultation | Edge cases, failure modes, "3 AM scenarios" | Risk analysis |
 
 ### Agent Details
 
-#### Architect (Planning Phase)
-Analyzes system-wide implications before any code is written:
-- Identifies affected modules and integration points
+#### Planner (Planning Phase)
+The primary planning agent, combining system analysis and implementation planning in one pass:
+- Analyzes system-wide implications, affected modules, and integration points
+- Creates detailed step-by-step implementation plan in `TASK_XXX.md`
 - Evaluates risks, constraints, and alternatives
-- Raises questions requiring human decision
-- Reviews security and performance implications
-
-#### Developer (Planning Phase)
-Translates architectural guidance into an executable plan:
-- Creates detailed step-by-step instructions in `TASK_XXX.md`
 - Specifies exact file paths, imports, and code changes
 - Includes verification commands for each step
-- Documents rollback procedures and warning signs
 
-#### Reviewer (Planning Phase)
-Validates the developer's plan before execution:
+#### Reviewer (Planning Phase — thorough only)
+Validates the planner's plan before execution, also handling adversarial analysis:
 - Checks code syntax and pattern compliance
 - Verifies security considerations are addressed
 - Ensures test coverage is planned
 - Identifies missing steps or ambiguities
-
-#### Skeptic (Planning Phase)
-Stress-tests the plan for real-world scenarios:
-- Considers race conditions and concurrency issues
-- Evaluates external dependency failure modes
-- Questions assumptions and identifies risks
-- Proposes additional test cases for edge cases
+- Stress-tests the plan for real-world edge cases and failure modes
+- Considers race conditions, concurrency issues, and external dependency failures
 
 #### Implementer (Implementation Phase)
 Executes the approved plan:
@@ -286,12 +276,12 @@ Executes the approved plan:
 - Reports any deviations or blockers
 - Marks checkboxes as steps complete
 
-#### Feedback (Implementation Phase)
-Monitors implementation quality:
-- Compares actual changes vs planned changes
-- Classifies deviations (acceptable, concerning, critical)
-- Validates against knowledge base patterns
-- Escalates issues requiring human judgment
+#### Quality Guard (Quality Phase — thorough only)
+Post-implementation quality verification (runs in parallel with Security Auditor in thorough mode):
+- Validates all tests pass and build succeeds
+- Checks standards compliance and code quality
+- Verifies implementation matches the approved plan
+- Reports deviations and quality concerns
 
 #### Technical Writer (Documentation Phase)
 Captures knowledge for future AI sessions:
@@ -299,6 +289,28 @@ Captures knowledge for future AI sessions:
 - Updates `docs/ai-context/` files
 - Validates existing documentation accuracy
 - Captures non-obvious implementation details
+
+#### Consultation Agents (available via `/crew ask`)
+
+These agents are available for direct consultation but are no longer part of the standard pipeline:
+
+**Architect** — Analyzes system-wide implications:
+- Identifies affected modules and integration points
+- Evaluates risks, constraints, and alternatives
+- Raises questions requiring human decision
+- Reviews security and performance implications
+
+**Developer** — Translates guidance into executable plans:
+- Creates detailed step-by-step instructions
+- Specifies exact file paths, imports, and code changes
+- Includes verification commands for each step
+- Documents rollback procedures and warning signs
+
+**Skeptic** — Stress-tests plans for real-world scenarios:
+- Considers race conditions and concurrency issues
+- Evaluates external dependency failure modes
+- Questions assumptions and identifies risks
+- Proposes additional test cases for edge cases
 
 ## Commands
 
@@ -319,7 +331,7 @@ Main command for starting or resuming workflows.
 | `--max-iterations <n>` | Max attempts per step (default: 10) |
 | `--verify <method>` | Verification: `tests`, `build`, `lint`, `all`, `custom` |
 | `--no-checkpoints` | Skip human checkpoints (fully autonomous) |
-| `--parallel` | Run Reviewer+Skeptic in parallel |
+| `--parallel` | Run Quality Guard+Technical Writer in parallel |
 | `--beads <issue>` | Link to beads issue (e.g., `AUTH-42`) |
 | `--task <file>` | Read task from markdown file |
 
@@ -562,8 +574,8 @@ workflow_modes:
 | Mode | Agents | Use Case | Est. Cost |
 |------|--------|----------|-----------|
 | **quick** | Implementer only | Typos, one-line fixes, trivial changes | $0.03 |
-| **standard** | Architect, Developer, Implementer, Quality Guard | Routine features, fixes, refactors | $0.12 |
-| **thorough** | All agents (Arch, Dev, Rev, Skeptic, Impl, QG, Feedback, TW) | Security, migrations, breaking changes | $0.40+ |
+| **standard** | Planner → Implementer → Technical Writer | Routine features, fixes, refactors | $0.10 |
+| **thorough** | Planner → Reviewer → Implementer → Quality Guard + Security Auditor (parallel) → Technical Writer | Security, migrations, breaking changes | $0.30+ |
 | **auto** | Auto-detect based on task description | Default | varies |
 
 Legacy aliases (backward-compatible): `micro`/`minimal`/`turbo` map to standard, `fast`/`reviewed` map to standard, `full` maps to thorough.
@@ -577,17 +589,15 @@ effort_levels:
   quick:
     implementer: low
   standard:
-    architect: high
-    developer: high
+    planner: high
     implementer: high
-    quality_guard: medium
+    technical_writer: medium
   thorough:
-    architect: max               # Deep analysis with edge cases
-    developer: max
+    planner: max                  # Deep analysis with edge cases
     reviewer: high
-    skeptic: max
     implementer: high
     quality_guard: high
+    security_auditor: high
     technical_writer: medium
 ```
 
@@ -816,7 +826,7 @@ All workflow state is stored in `.tasks/TASK_XXX/`:
   "task_id": "TASK_001",
   "description": "Add JWT authentication",
   "phase": "implementer",
-  "phases_completed": ["architect", "developer", "reviewer", "skeptic"],
+  "phases_completed": ["planner", "reviewer"],
   "review_issues": [],
   "iteration": 1,
   "docs_needed": [],
@@ -1106,7 +1116,7 @@ This project uses [Semantic Versioning](https://semver.org/). Version is tracked
 
 1. Update all three version files listed above
 2. Add a dated entry to `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com/) format
-3. Run tests: `cd mcp/agentic-workflow-server && python3 -m pytest tests/ -v`
+3. Run tests: `python3 -m pytest mcp/agentic-workflow-server/tests/ -v`
 4. Run `./install.sh` to verify the version displays correctly
 5. Commit with: `chore(release): bump to vX.Y.Z`
 

@@ -250,10 +250,10 @@ pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
     // Ctrl+key — character control codes (Ctrl+A=0x01 .. Ctrl+Z=0x1a)
     if modifiers.contains(KeyModifiers::CONTROL) {
         if let KeyCode::Char(c) = code {
-            // Some terminals (kitty protocol) report Ctrl+Enter as Char('\r') or Char('\n')
-            // instead of KeyCode::Enter. Route these to the CSI u encoding below.
+            // Kitty protocol may report Ctrl+Enter as Char('\r') or Char('\n').
+            // Send literal newline — Claude Code expects \n for "insert newline".
             if c == '\r' || c == '\n' {
-                return format!("\x1b[13;{}u", m).into_bytes();
+                return b"\n".to_vec();
             }
             let ctrl = (c.to_ascii_lowercase() as u8)
                 .wrapping_sub(b'a')
@@ -283,11 +283,11 @@ pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
             let mut buf = [0u8; 4];
             c.encode_utf8(&mut buf).as_bytes().to_vec()
         }
-        // Enter/Backspace/Tab: use CSI u encoding when modifiers are held
-        // so apps like Claude Code can distinguish Ctrl+Enter (newline) from Enter (submit)
+        // Enter: Ctrl+Enter sends \n (newline) for Claude Code's "insert line" action.
+        // Plain Enter sends \r (carriage return) as standard terminal behavior.
         KeyCode::Enter => {
-            if m > 0 {
-                format!("\x1b[13;{}u", m).into_bytes()
+            if modifiers.contains(KeyModifiers::CONTROL) {
+                b"\n".to_vec()
             } else {
                 b"\r".to_vec()
             }
@@ -379,23 +379,23 @@ mod tests {
 
     #[test]
     fn test_ctrl_enter_keycode() {
-        // When crossterm reports Ctrl+Enter as KeyCode::Enter
+        // When crossterm reports Ctrl+Enter as KeyCode::Enter — send \n for Claude Code newline
         let bytes = key_to_bytes(KeyCode::Enter, KeyModifiers::CONTROL);
-        assert_eq!(bytes, b"\x1b[13;5u");
+        assert_eq!(bytes, b"\n");
     }
 
     #[test]
     fn test_ctrl_enter_as_char_cr() {
         // When crossterm (kitty protocol) reports Ctrl+Enter as Char('\r')
         let bytes = key_to_bytes(KeyCode::Char('\r'), KeyModifiers::CONTROL);
-        assert_eq!(bytes, b"\x1b[13;5u");
+        assert_eq!(bytes, b"\n");
     }
 
     #[test]
     fn test_ctrl_enter_as_char_lf() {
         // When crossterm (kitty protocol) reports Ctrl+Enter as Char('\n')
         let bytes = key_to_bytes(KeyCode::Char('\n'), KeyModifiers::CONTROL);
-        assert_eq!(bytes, b"\x1b[13;5u");
+        assert_eq!(bytes, b"\n");
     }
 
     #[test]

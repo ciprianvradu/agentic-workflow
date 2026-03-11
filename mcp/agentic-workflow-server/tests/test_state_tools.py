@@ -215,28 +215,27 @@ class TestWorkflowTransitions:
 
     def test_valid_forward_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_010")
-        workflow_transition("architect", task_id="TASK_TEST_010")
+        workflow_transition("planner", task_id="TASK_TEST_010")
 
-        result = workflow_transition("developer", task_id="TASK_TEST_010")
+        result = workflow_transition("reviewer", task_id="TASK_TEST_010")
 
         assert result["success"] is True
-        assert result["from_phase"] == "architect"
-        assert result["to_phase"] == "developer"
+        assert result["from_phase"] == "planner"
+        assert result["to_phase"] == "reviewer"
 
     def test_invalid_skip_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_011")
-        workflow_transition("architect", task_id="TASK_TEST_011")
+        workflow_transition("planner", task_id="TASK_TEST_011")
 
-        # Try to skip from architect to implementer
+        # Try to skip from planner to implementer
         result = workflow_transition("implementer", task_id="TASK_TEST_011")
 
         assert result["success"] is False
         assert "Cannot skip" in result["error"]
 
-    def test_loopback_to_developer(self, clean_tasks_dir):
+    def test_loopback_to_planner(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_012")
-        workflow_transition("architect", task_id="TASK_TEST_012")
-        workflow_transition("developer", task_id="TASK_TEST_012")
+        workflow_transition("planner", task_id="TASK_TEST_012")
         workflow_transition("reviewer", task_id="TASK_TEST_012")
 
         # Add a review issue to trigger loopback condition
@@ -247,7 +246,7 @@ class TestWorkflowTransitions:
         )
 
         # Loopback should work when there are review issues
-        result = workflow_transition("developer", task_id="TASK_TEST_012")
+        result = workflow_transition("planner", task_id="TASK_TEST_012")
 
         assert result["success"] is True
         assert result["iteration"] == 2  # Incremented
@@ -611,8 +610,9 @@ class TestWorkflowModes:
 
         assert result["success"] is True
         assert result["workflow_mode"]["effective"] == "standard"
-        assert "developer" in result["workflow_mode"]["phases"]
-        assert "architect" in result["workflow_mode"]["phases"]
+        assert "planner" in result["workflow_mode"]["phases"]
+        assert "implementer" in result["workflow_mode"]["phases"]
+        assert "technical_writer" in result["workflow_mode"]["phases"]
 
     def test_set_mode_auto(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_101", description="Fix typo in docs")
@@ -674,19 +674,17 @@ class TestCompletionConsistency:
         """workflow_is_complete uses workflow_mode.phases instead of REQUIRED_PHASES."""
         workflow_initialize(task_id="TASK_TEST_CC_002")
         workflow_set_mode("standard", task_id="TASK_TEST_CC_002")
-        # Standard mode: architect, developer, implementer, quality_guard
-        workflow_transition("architect", task_id="TASK_TEST_CC_002")
-        workflow_complete_phase(task_id="TASK_TEST_CC_002")
-        workflow_transition("developer", task_id="TASK_TEST_CC_002")
+        # Standard mode: planner, implementer, technical_writer
+        workflow_transition("planner", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
         workflow_transition("implementer", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
-        workflow_transition("quality_guard", task_id="TASK_TEST_CC_002")
+        workflow_transition("technical_writer", task_id="TASK_TEST_CC_002")
         workflow_complete_phase(task_id="TASK_TEST_CC_002")
 
         result = workflow_is_complete(task_id="TASK_TEST_CC_002")
         assert result["is_complete"] is True
-        # reviewer and skeptic are NOT required in standard mode
+        # reviewer and quality_guard are NOT required in standard mode
 
     def test_can_stop_when_status_completed(self, clean_tasks_dir):
         """workflow_can_stop returns True when state.status == 'completed'."""
@@ -706,14 +704,12 @@ class TestCompletionConsistency:
         """workflow_can_stop uses workflow_mode.phases instead of REQUIRED_PHASES."""
         workflow_initialize(task_id="TASK_TEST_CC_004")
         workflow_set_mode("standard", task_id="TASK_TEST_CC_004")
-        # Complete all standard phases (architect, developer, implementer, quality_guard)
-        workflow_transition("architect", task_id="TASK_TEST_CC_004")
-        workflow_complete_phase(task_id="TASK_TEST_CC_004")
-        workflow_transition("developer", task_id="TASK_TEST_CC_004")
+        # Complete all standard phases (planner, implementer, technical_writer)
+        workflow_transition("planner", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
         workflow_transition("implementer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
-        workflow_transition("quality_guard", task_id="TASK_TEST_CC_004")
+        workflow_transition("technical_writer", task_id="TASK_TEST_CC_004")
         workflow_complete_phase(task_id="TASK_TEST_CC_004")
 
         result = workflow_can_stop(task_id="TASK_TEST_CC_004")
@@ -723,8 +719,8 @@ class TestCompletionConsistency:
         """workflow_can_stop blocks when mode-specific phases are incomplete."""
         workflow_initialize(task_id="TASK_TEST_CC_005")
         workflow_set_mode("standard", task_id="TASK_TEST_CC_005")
-        # Only complete architect — missing developer, implementer and quality_guard
-        workflow_transition("architect", task_id="TASK_TEST_CC_005")
+        # Only complete planner — missing implementer and technical_writer
+        workflow_transition("planner", task_id="TASK_TEST_CC_005")
         workflow_complete_phase(task_id="TASK_TEST_CC_005")
 
         result = workflow_can_stop(task_id="TASK_TEST_CC_005")
@@ -1231,10 +1227,9 @@ class TestTurboMode:
 
         assert result["success"] is True
         assert result["workflow_mode"]["effective"] == "standard"
-        assert "architect" in result["workflow_mode"]["phases"]
-        assert "developer" in result["workflow_mode"]["phases"]
+        assert "planner" in result["workflow_mode"]["phases"]
         assert "implementer" in result["workflow_mode"]["phases"]
-        assert "quality_guard" in result["workflow_mode"]["phases"]
+        assert "technical_writer" in result["workflow_mode"]["phases"]
         assert "reviewer" not in result["workflow_mode"]["phases"]
 
 
@@ -1281,20 +1276,20 @@ class TestCostLongContext:
 class TestEffortLevels:
     """Test effort level recommendations per mode."""
 
-    def test_effort_thorough_mode_architect(self, clean_tasks_dir):
+    def test_effort_thorough_mode_planner(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_220")
         workflow_set_mode("thorough", task_id="TASK_TEST_220")
 
-        result = workflow_get_effort_level("architect", task_id="TASK_TEST_220")
+        result = workflow_get_effort_level("planner", task_id="TASK_TEST_220")
 
         assert result["effort"] == "max"
         assert result["mode"] == "thorough"
 
-    def test_effort_standard_mode_developer(self, clean_tasks_dir):
+    def test_effort_standard_mode_planner(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_221")
         workflow_set_mode("standard", task_id="TASK_TEST_221")
 
-        result = workflow_get_effort_level("developer", task_id="TASK_TEST_221")
+        result = workflow_get_effort_level("planner", task_id="TASK_TEST_221")
 
         assert result["effort"] == "high"
         assert result["mode"] == "standard"
@@ -1318,7 +1313,7 @@ class TestEffortLevels:
         assert result["mode"] == "thorough"
 
     def test_effort_default_no_task(self, clean_tasks_dir):
-        result = workflow_get_effort_level("architect", task_id="NONEXISTENT")
+        result = workflow_get_effort_level("planner", task_id="NONEXISTENT")
 
         assert result["effort"] == "high"
 

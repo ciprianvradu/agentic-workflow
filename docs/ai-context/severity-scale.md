@@ -14,8 +14,6 @@ All agents use this unified severity scale. Do not define severity ad-hoc in age
 ## Usage by Agent
 
 - **Reviewer** — Reports concerns at any level; flags CRITICAL/HIGH as blocking.
-- **Skeptic** — Challenges assumptions; raises CRITICAL/HIGH concerns that block approval.
-- **Feedback** — Surfaces all levels to the human; groups by severity in output.
 - **Quality Guard** — Enforces the `concern_severity_threshold` gate; fails the phase if unresolved concerns meet or exceed the threshold.
 - **Security Auditor** — Focuses on CRITICAL and HIGH; any security finding is CRITICAL unless demonstrably unexploitable.
 

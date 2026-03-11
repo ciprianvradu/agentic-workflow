@@ -72,9 +72,9 @@ Run: `python3 {__scripts_dir__}/crew_orchestrator.py impl-action --task-id <id> 
   ```
   python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user response>" --type escalation_response --phase implementer
   ```
-- **complete**: Implementation done, continue to next phase (feedback → technical_writer → complete).
+- **complete**: Implementation done, continue to next phase. In standard mode: technical_writer → complete. In thorough mode: quality_guard + security_auditor (parallel) → technical_writer → complete.
 
-**Note**: After the implementer returns "complete", the action loop continues with `result.next` which will be `spawn_agent` for the remaining phases (feedback and/or technical_writer). The final `action: "complete"` only arrives after ALL phases including technical_writer are done. **Never commit before the technical-writer has run.**
+**Note**: After the implementer returns "complete", the action loop continues with `result.next` which will be `spawn_agent` for the remaining phases (quality_guard + security_auditor in thorough, then technical_writer). The final `action: "complete"` only arrives after ALL phases including technical_writer are done. **Never commit before the technical-writer has run.**
 
 #### action: "complete"
 
@@ -104,7 +104,7 @@ When building prompts for agents, include:
 
 ## Handling Review Loops
 
-If the Reviewer or Skeptic raises blocking concerns, the `agent-done` call will detect them and set `result.has_blocking_issues`. Follow the orchestrator's `result.next` action — it handles the loop-back automatically.
+If the Reviewer raises blocking concerns (including adversarial/skeptic analysis), the `agent-done` call will detect them and set `result.has_blocking_issues`. Follow the orchestrator's `result.next` action — it handles the loop-back automatically.
 
 ## Interaction Logging
 
@@ -123,7 +123,7 @@ When the implementation plan has **more than 15 steps** or the user requests asy
    & Execute the implementation plan in .tasks/TASK_042/plan.md step by step.
      Task ID: TASK_042. After each step, call workflow_complete_step via MCP.
    ```
-3. **Resume after**: Check `.tasks/TASK_XXX/state.json` for implementation progress, resume from where the coding agent left off, continue to feedback and technical-writer phases.
+3. **Resume after**: Check `.tasks/TASK_XXX/state.json` for implementation progress, resume from where the coding agent left off, continue to quality-guard and technical-writer phases.
 
 ## Session Resume
 

@@ -8,7 +8,7 @@ which provide optional, advanced, or analytics capabilities.
 
 | Category | Purpose |
 |----------|---------|
-| **Core** | Essential for running a workflow from start to finish. Every mode (standard, reviewed, thorough) depends on these tools. |
+| **Core** | Essential for running a workflow from start to finish. Every mode (quick, standard, thorough) depends on these tools. |
 | **Extra** | Optional enhancements -- analytics, parallelization, error-pattern matching, worktree management, cost tracking, etc. A workflow completes successfully without them. |
 
 > **Note:** Currently all tools are always loaded regardless of category.

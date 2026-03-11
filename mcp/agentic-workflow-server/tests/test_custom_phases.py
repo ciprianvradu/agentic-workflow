@@ -377,7 +377,7 @@ class TestCustomPhaseIntegration:
             yaml.dump(existing, f)
 
         # Complete all standard mode phases
-        for phase in ["architect", "developer", "implementer", "quality_guard"]:
+        for phase in ["planner", "implementer", "technical_writer"]:
             workflow_transition(to_phase=phase, task_id=task_id)
             workflow_complete_phase(task_id=task_id)
 
@@ -395,6 +395,9 @@ class TestCustomPhaseIntegration:
         task_dir = clean_tasks_dir / task_id
         config_path = task_dir / "config.yaml"
         import yaml
+        # Set task-level custom_phases with ONLY triage — explicitly null out any
+        # project-level custom phases (product_manager, ba_designer) so they don't
+        # get deep-merged in and run before planner.
         config_data = {
             "custom_phases": {
                 "triage": {
@@ -402,7 +405,10 @@ class TestCustomPhaseIntegration:
                     "type": "skill",
                     "skill": "evaluate-jira",
                     "condition": {"task_has": "jira_key"},
-                }
+                },
+                # Nullify project-level custom phases that would otherwise merge in
+                "product_manager": None,
+                "ba_designer": None,
             }
         }
         existing = {}
@@ -414,9 +420,9 @@ class TestCustomPhaseIntegration:
             yaml.dump(existing, f)
 
         result = crew_get_next_phase(task_id=task_id)
-        # Should skip triage (condition not met) and go straight to architect
+        # Should skip triage (condition not met) and go straight to planner
         assert result.get("action") == "spawn_agent"
-        assert result.get("agent") == "architect"
+        assert result.get("agent") == "planner"
 
     def test_custom_phase_after_init_with_pretransition(self, clean_tasks_dir):
         """Custom phase after init works even when crew_init_task pre-transitions to first mode phase."""
@@ -425,7 +431,7 @@ class TestCustomPhaseIntegration:
         workflow_set_mode(mode="standard", task_id=task_id)
 
         # Simulate what crew_init_task does: pre-transition to first mode phase
-        workflow_transition(to_phase="architect", task_id=task_id)
+        workflow_transition(to_phase="planner", task_id=task_id)
 
         task_dir = clean_tasks_dir / task_id
         config_path = task_dir / "config.yaml"
@@ -452,7 +458,7 @@ class TestCustomPhaseIntegration:
 
         result = crew_get_next_phase(task_id=task_id)
         # Should return triage (custom phase after init) even though
-        # current_phase is already "architect" — fresh start detection
+        # current_phase is already "planner" — fresh start detection
         assert result.get("action") == "run_skill"
         assert result.get("phase") == "triage"
 

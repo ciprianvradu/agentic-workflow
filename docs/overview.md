@@ -4,7 +4,7 @@
 
 ---
 
-> **What if you could give a task to a team of AI specialists -- an architect, a developer, a code reviewer, a chaos engineer, and a technical writer -- and they would plan, challenge, build, verify, and document the work, checking in with you at every critical decision?**
+> **What if you could give a task to a team of AI specialists -- a planner, a code reviewer, a builder, a quality guard, and a technical writer -- and they would plan, challenge, build, verify, and document the work, checking in with you at every critical decision?**
 
 That is what the Agentic Development Workflow does. It orchestrates multiple AI agents, each with a distinct role and personality, to take a software task from idea to implementation with built-in quality gates and human oversight.
 
@@ -63,37 +63,41 @@ Think of it like an automotive assembly line, but for software. Each station has
 graph TB
     subgraph planning ["Phase 1: Planning"]
         direction LR
-        AR[Architect] --> DEV[Developer]
-        DEV --> REV[Reviewer]
-        REV --> SK[Skeptic]
+        PL[Planner] --> REV[Reviewer]
     end
 
     subgraph building ["Phase 2: Building"]
         direction LR
-        IMP[Implementer] --> FB[Feedback]
+        IMP[Implementer]
     end
 
-    subgraph documenting ["Phase 3: Documentation"]
+    subgraph quality ["Phase 3: Quality (thorough only)"]
+        direction LR
+        QG[Quality Guard] ~~~ SA[Security Auditor]
+    end
+
+    subgraph documenting ["Phase 4: Documentation"]
         direction LR
         TW[Technical Writer]
     end
 
     planning --> building
-    building --> documenting
+    building --> quality
+    quality --> documenting
 
     style planning fill:#E8F0FE,stroke:#4A90D9,color:#333
     style building fill:#E8F5E9,stroke:#4CAF50,color:#333
+    style quality fill:#FFECB3,stroke:#FFA726,color:#333
     style documenting fill:#FFF3E0,stroke:#F5A623,color:#333
-    style AR fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style DEV fill:#5C6BC0,stroke:#3F4FA0,color:#fff
+    style PL fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style REV fill:#26A69A,stroke:#1B7A72,color:#fff
-    style SK fill:#EF5350,stroke:#C62828,color:#fff
     style IMP fill:#66BB6A,stroke:#388E3C,color:#fff
-    style FB fill:#FFA726,stroke:#E65100,color:#fff
+    style QG fill:#FFA726,stroke:#E65100,color:#fff
+    style SA fill:#EF5350,stroke:#C62828,color:#fff
     style TW fill:#AB47BC,stroke:#7B1FA2,color:#fff
 ```
 
-The three phases ensure that **no code is written until the plan has been thoroughly vetted**, and no code is committed until it matches the approved plan.
+The Reviewer, Quality Guard, and Security Auditor are included only in **thorough** mode. In standard mode, the plan flows directly from the Planner to the Implementer, then to the Technical Writer. Quality Guard and Security Auditor run in parallel in thorough mode. The phases ensure that **no code is written until the plan has been vetted**, and no code is committed until it matches the approved plan.
 
 ---
 
@@ -101,26 +105,26 @@ The three phases ensure that **no code is written until the plan has been thorou
 
 Each AI agent has a distinct personality, focus area, and set of permissions. Here is who does what, explained through real-world analogies.
 
-### The Core Seven
+### The Core Team
 
 | Agent | Role Analogy | What They Do | Permissions |
 |-------|-------------|--------------|-------------|
-| **Architect** | Chief Engineer reviewing blueprints | Evaluates how the task fits into the overall system. Identifies risks, dependencies, and constraints. Sees the big picture. | Read-only |
-| **Developer** | Senior Engineer writing the spec | Creates a detailed, step-by-step implementation plan based on the Architect's guidance. Like writing a recipe before cooking. | Read-only |
-| **Reviewer** | Experienced PR Reviewer | Checks the plan for completeness, correctness, and gaps. Catches what the Developer might have missed. | Read-only |
-| **Skeptic** | QA Engineer + Chaos Engineer | Tries to break the plan on paper. Finds every way it could fail -- edge cases, race conditions, what happens at 3 AM on a Sunday. | Read-only |
-| **Implementer** | Developer writing the code | Executes the approved plan step by step, running tests after each step. The only agent that actually writes code. | Read & Write |
-| **Feedback** | Project Manager at a checkpoint | Compares what was actually built against what was planned. Detects deviations, assesses severity, and recommends whether to continue, adjust, or restart. | Read-only |
+| **Planner** | Chief Engineer + Senior Architect | Analyzes how the task fits into the overall system, identifies risks and dependencies, then creates a detailed step-by-step implementation plan. Combines the big-picture thinking with the detailed spec writing in one pass. | Read-only |
+| **Reviewer** | Experienced PR Reviewer + Chaos Engineer | Checks the plan for completeness, correctness, and gaps. Also handles adversarial thinking -- edge cases, race conditions, failure modes. Catches what the Planner might have missed. (Thorough only) | Read-only |
+| **Implementer** | Developer writing the code | Executes the approved plan step by step, running tests after each step. The only agent that actually writes code. Convention files from the project's `ai-context/` folder are injected directly into its prompt. | Read & Write |
+| **Quality Guard** | QA Lead at a checkpoint | Reviews the built code against the approved plan. Checks code quality, plan adherence, and test coverage. Recommends whether to continue, adjust, or restart. Runs in parallel with Security Auditor. Convention files are also injected into its prompt. (Thorough only) | Read-only |
+| **Security Auditor** | Penetration Tester | Reviews code for security vulnerabilities -- OWASP Top 10, secrets exposure, authentication flaws, authorization bypasses. Runs in parallel with Quality Guard. (Thorough only) | Read-only |
 | **Technical Writer** | Documentation specialist | Updates project documentation to capture new knowledge, patterns, and decisions. Keeps the knowledge base current. | Read & Write |
+
+> **Note:** The legacy Architect, Developer, and Skeptic agents remain available for ad-hoc consultation via `/crew ask`, but they are no longer part of the default pipeline.
 
 ```mermaid
 graph TD
     subgraph readonly ["Read-Only Agents (Cannot Change Code)"]
-        AR["Architect\n\nSees the forest,\nnot the trees"]
-        DEV["Developer\n\nWrites the recipe\nbefore cooking"]
-        REV["Reviewer\n\nThe thorough\nproofreader"]
-        SK["Skeptic\n\nThe devil's\nadvocate"]
-        FB["Feedback\n\nThe project\nmanager"]
+        PL["Planner\n\nSees the forest\nAND writes the recipe"]
+        REV["Reviewer\n\nThe thorough proofreader\n+ devil's advocate"]
+        QG["Quality Guard\n\nThe quality\ngatekeeper"]
+        SA["Security Auditor\n\nThe penetration\ntester"]
     end
 
     subgraph readwrite ["Read-Write Agents (Can Change Code)"]
@@ -130,16 +134,15 @@ graph TD
 
     style readonly fill:#F3E5F5,stroke:#AB47BC,color:#333
     style readwrite fill:#E8F5E9,stroke:#66BB6A,color:#333
-    style AR fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style DEV fill:#5C6BC0,stroke:#3F4FA0,color:#fff
+    style PL fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style REV fill:#26A69A,stroke:#1B7A72,color:#fff
-    style SK fill:#EF5350,stroke:#C62828,color:#fff
-    style FB fill:#FFA726,stroke:#E65100,color:#fff
+    style QG fill:#FFA726,stroke:#E65100,color:#fff
+    style SA fill:#EF5350,stroke:#C62828,color:#fff
     style IMP fill:#66BB6A,stroke:#388E3C,color:#fff
     style TW fill:#AB47BC,stroke:#7B1FA2,color:#fff
 ```
 
-**Notice:** Five of the seven agents are **read-only** -- they can look at the code and analyze it, but they cannot change anything. This separation of concerns is a deliberate safety measure. Only the Implementer and Technical Writer can modify files, and both follow plans that have been reviewed and approved.
+**Notice:** Four of the six core agents are **read-only** -- they can look at the code and analyze it, but they cannot change anything. This separation of concerns is a deliberate safety measure. Only the Implementer and Technical Writer can modify files, and both follow plans that have been reviewed and approved.
 
 ---
 
@@ -149,48 +152,40 @@ Here is the full journey of a task from start to finish.
 
 ### Phase 1: The Planning Loop
 
-Planning is not a single pass -- it is an iterative loop. If the Reviewer or Skeptic finds significant problems, the plan goes back for revision.
+Planning is streamlined but thorough. The Planner analyzes the system and creates the implementation plan in a single pass. In thorough mode, the Reviewer then stress-tests the plan for gaps and failure modes before building begins.
 
 ```mermaid
 flowchart TD
-    START([Task Described]) --> ARCH
-    ARCH["1. Architect\nAnalyzes system impact,\nrisks, and constraints"]
-    ARCH --> HC1{Human\nCheckpoint}
-    HC1 -->|Approve| DEV
-    HC1 -->|Revise| ARCH
+    START([Task Described]) --> PLAN
+    PLAN["1. Planner\nAnalyzes system impact,\ncreates step-by-step plan"]
+    PLAN --> HC1{Human\nCheckpoint}
+    HC1 -->|Approve| THOROUGH{Thorough\nmode?}
+    HC1 -->|Revise| PLAN
 
-    DEV["2. Developer\nCreates step-by-step\nimplementation plan"]
-    DEV --> REV
+    THOROUGH -->|Yes| REV
+    THOROUGH -->|No| IMPL_PHASE
 
-    REV["3. Reviewer\nChecks plan for gaps,\ncorrectness, security"]
+    REV["2. Reviewer\nChecks plan for gaps,\nfailure modes, edge cases"]
     REV --> HC2{Human\nCheckpoint}
-    HC2 -->|Approve| SKEP
-    HC2 -->|Revise| DEV
-
-    SKEP["4. Skeptic\nStress-tests the plan\nfor failure modes"]
-    SKEP --> HC3{Human\nCheckpoint}
-    HC3 -->|Approve| IMPL_PHASE
-    HC3 -->|Revise| DEV
-    HC3 -->|Concerns are\ncritical| ARCH
+    HC2 -->|Approve| IMPL_PHASE
+    HC2 -->|Revise| PLAN
 
     IMPL_PHASE([Proceed to Building])
 
     style START fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style ARCH fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style DEV fill:#5C6BC0,stroke:#3F4FA0,color:#fff
+    style PLAN fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style REV fill:#26A69A,stroke:#1B7A72,color:#fff
-    style SKEP fill:#EF5350,stroke:#C62828,color:#fff
+    style THOROUGH fill:#E0E0E0,stroke:#9E9E9E,color:#333
     style HC1 fill:#F5A623,stroke:#D4891E,color:#fff
     style HC2 fill:#F5A623,stroke:#D4891E,color:#fff
-    style HC3 fill:#F5A623,stroke:#D4891E,color:#fff
     style IMPL_PHASE fill:#66BB6A,stroke:#388E3C,color:#fff
 ```
 
-**Why iterate?** The first plan is rarely perfect. By having multiple specialists review and challenge it *before* any code is written, most problems are caught on paper -- where they are cheap to fix -- rather than in code, where they are expensive.
+**Why iterate?** The first plan is rarely perfect. By having the Planner combine architectural analysis with detailed planning, and having the Reviewer challenge the plan *before* any code is written, most problems are caught on paper -- where they are cheap to fix -- rather than in code, where they are expensive.
 
 ### Phase 2: The Implementation Loop
 
-Once the plan is approved, the Implementer builds it step by step. After each step, tests run automatically. At configurable milestones, the Feedback agent checks that the work matches the plan.
+Once the plan is approved, the Implementer builds it step by step. After each step, tests run automatically.
 
 ```mermaid
 flowchart TD
@@ -205,13 +200,16 @@ flowchart TD
 
     PROGRESS -->|"25% / 75%"| STEP
     PROGRESS -->|"50%"| HC_MID{Human\nCheckpoint}
-    PROGRESS -->|"100%"| FDBK
+    PROGRESS -->|"100%"| THOROUGH2{Thorough\nmode?}
 
     HC_MID -->|Continue| STEP
     HC_MID -->|Adjust| ADJ["Update\nremaining steps"]
     ADJ --> STEP
 
-    FDBK["Feedback Agent\ncompares plan vs reality"] --> VERDICT{Verdict}
+    THOROUGH2 -->|Yes| PARALLEL
+    THOROUGH2 -->|No| DOC
+
+    PARALLEL["Quality Guard + Security Auditor\n(run in parallel)"] --> VERDICT{Verdict}
 
     VERDICT -->|Continue| DOC([Proceed to\nDocumentation])
     VERDICT -->|Adjust| ADJ2["Revise remaining\nsteps"]
@@ -225,14 +223,15 @@ flowchart TD
     style PROGRESS fill:#FFA726,stroke:#E65100,color:#fff
     style RETRY fill:#EF5350,stroke:#C62828,color:#fff
     style HC_MID fill:#F5A623,stroke:#D4891E,color:#fff
-    style FDBK fill:#FFA726,stroke:#E65100,color:#fff
+    style THOROUGH2 fill:#E0E0E0,stroke:#9E9E9E,color:#333
+    style PARALLEL fill:#FFA726,stroke:#E65100,color:#fff
     style VERDICT fill:#FFA726,stroke:#E65100,color:#fff
     style DOC fill:#AB47BC,stroke:#7B1FA2,color:#fff
     style ADJ fill:#5C6BC0,stroke:#3F4FA0,color:#fff
     style ADJ2 fill:#5C6BC0,stroke:#3F4FA0,color:#fff
 ```
 
-**Key safeguard:** If an implementation step fails its tests repeatedly, the system escalates to the human rather than continuing in a broken state.
+**Key safeguard:** If an implementation step fails its tests repeatedly, the system escalates to the human rather than continuing in a broken state. In thorough mode, the Quality Guard and Security Auditor run in parallel after implementation to check code quality and security before documentation.
 
 ### Phase 3: Documentation
 
@@ -267,13 +266,10 @@ flowchart LR
 
 | Checkpoint | Default | Why It Matters |
 |-----------|---------|----------------|
-| After Architect | Enabled | Review system-wide concerns before detailed planning begins |
-| After Developer | Disabled | Plan goes straight to Reviewer for validation first |
-| After Reviewer | Enabled | Review gaps and issues found before the Skeptic stress-tests |
-| After Skeptic | Enabled | Final review of edge cases before committing to building |
+| After Planner | Enabled | Review the plan (system analysis + implementation steps) before building begins |
+| After Reviewer | Enabled | Review gaps and failure modes found before committing to building (thorough mode only) |
 | At 50% implementation | Enabled | Mid-build sanity check -- is it on track? |
 | Before commit | Enabled | Always review before changes become permanent |
-| On deviation detected | Enabled | Alert when implementation drifts from the plan |
 | After Technical Writer | Enabled | Review documentation updates before they are applied |
 
 All checkpoints are configurable. You can enable or disable any of them, tailoring the level of human involvement to your team's needs and comfort level.
@@ -292,62 +288,54 @@ Beyond scheduled checkpoints, the system will **automatically escalate** to you 
 
 ## Workflow Modes: Right-Sizing the Process
 
-Not every task needs the full seven-agent treatment. A simple typo fix does not require an Architect's review. The workflow supports four modes that match the process to the task's complexity.
+Not every task needs the full six-agent treatment. A simple typo fix does not require a Planner's review. The workflow supports three modes that match the process to the task's complexity.
 
 ```mermaid
 graph TB
     TASK["Incoming Task"] --> AUTO{Auto-Detect\nMode}
 
-    AUTO -->|"Security, database,\nbreaking changes"| FULL
-    AUTO -->|"Standard features,\nrefactoring"| TURBO
-    AUTO -->|"Multi-module\nchanges"| FAST
-    AUTO -->|"Typos, renames,\nsimple fixes"| MINIMAL
+    AUTO -->|"Security, migrations,\nbreaking changes"| THOROUGH
+    AUTO -->|"Standard features,\nrefactoring"| STANDARD
+    AUTO -->|"Typos, renames,\ntrivial fixes"| QUICK
 
-    subgraph FULL ["Full Mode"]
+    subgraph THOROUGH ["Thorough Mode"]
         direction LR
-        F1["Architect"] --> F2["Developer"] --> F3["Reviewer"] --> F4["Skeptic"] --> F5["Implementer"] --> F6["Feedback"] --> F7["Tech Writer"]
+        TH1["Planner"] --> TH2["Reviewer"] --> TH3["Implementer"] --> TH4["Quality Guard\n+ Security Auditor\n(parallel)"] --> TH5["Tech Writer"]
     end
 
-    subgraph TURBO ["Turbo Mode"]
+    subgraph STANDARD ["Standard Mode"]
         direction LR
-        T1["Developer"] --> T2["Implementer"] --> T3["Tech Writer"]
+        S1["Planner"] --> S2["Implementer"] --> S3["Tech Writer"]
     end
 
-    subgraph FAST ["Fast Mode"]
+    subgraph QUICK ["Quick Mode"]
         direction LR
-        FA1["Architect"] --> FA2["Developer"] --> FA3["Reviewer"] --> FA4["Implementer"] --> FA5["Tech Writer"]
-    end
-
-    subgraph MINIMAL ["Minimal Mode"]
-        direction LR
-        M1["Developer"] --> M2["Implementer"] --> M3["Tech Writer"]
+        Q1["Implementer"]
     end
 
     style TASK fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style AUTO fill:#F5A623,stroke:#D4891E,color:#fff
-    style FULL fill:#FFCDD2,stroke:#EF5350,color:#333
-    style TURBO fill:#C8E6C9,stroke:#66BB6A,color:#333
-    style FAST fill:#E1F5FE,stroke:#29B6F6,color:#333
-    style MINIMAL fill:#F5F5F5,stroke:#BDBDBD,color:#333
+    style THOROUGH fill:#FFCDD2,stroke:#EF5350,color:#333
+    style STANDARD fill:#C8E6C9,stroke:#66BB6A,color:#333
+    style QUICK fill:#F5F5F5,stroke:#BDBDBD,color:#333
 ```
 
 ### Mode Comparison
 
 | Mode | Agents Used | Best For | Estimated Cost |
 |------|------------|----------|---------------|
-| **Full** | All 7 agents | Security changes, database migrations, API changes, critical systems | $0.50+ |
-| **Fast** | 5 agents (skip Skeptic & Feedback) | Multi-module changes that need architectural review | ~$0.25 |
-| **Turbo** | 3 agents (Developer, Implementer, Writer) | Standard features, refactoring, new functionality | ~$0.15 |
-| **Minimal** | 3 agents (Developer, Implementer, Writer) | Typo fixes, renames, comment updates | ~$0.10 |
+| **Thorough** | All 6 agents (Planner, Reviewer, Implementer, Quality Guard + Security Auditor in parallel, Writer) | Security changes, database migrations, breaking API changes, critical systems | $0.50+ |
+| **Standard** | 3 agents (Planner, Implementer, Technical Writer) | Standard features, refactoring, routine to non-trivial changes | ~$0.15 |
+| **Quick** | 1 agent (Implementer only) | Trivial fixes -- typos, renames, comment updates | ~$0.05 |
 
 ### Auto Mode
 
 By default, the system runs in **Auto** mode, which analyzes your task description and picks the right workflow mode automatically. For example:
 
-- *"Fix the typo in the README"* -- selects **Minimal**
-- *"Add a caching layer to the API"* -- selects **Turbo**
-- *"Implement OAuth2 authentication"* -- selects **Full** (because it involves security)
-- *"Refactor the payment module"* -- selects **Fast** or **Full** depending on scope
+- *"Fix the typo in the README"* -- selects **Quick**
+- *"Add a caching layer to the API"* -- selects **Standard**
+- *"Implement OAuth2 authentication"* -- selects **Thorough** (because it involves security)
+- *"Refactor the payment module"* -- selects **Standard** or **Thorough** depending on scope
 
 You can always override this by specifying the mode explicitly.
 
@@ -355,25 +343,22 @@ You can always override this by specifying the mode explicitly.
 
 ## Specialist Agents: Called When Needed
 
-In addition to the core seven agents, there are **specialist agents** that activate automatically when the task involves their area of expertise.
+In addition to the six core agents, there are **specialist agents** that activate automatically when the task involves their area of expertise.
 
 ```mermaid
 flowchart TD
     TASK["Task Keywords\nand File Patterns"] --> DETECT{Auto-Detection}
 
-    DETECT -->|"auth, password,\ntoken, encryption"| SEC["Security Auditor\n\nReviews for\nvulnerabilities"]
     DETECT -->|"performance, cache,\noptimize, scale"| PERF["Performance Analyst\n\nChecks for\nbottlenecks"]
     DETECT -->|"API, endpoint,\nbreaking, schema"| API["API Guardian\n\nProtects API\ncontracts"]
     DETECT -->|"UI, component,\nform, accessibility"| A11Y["Accessibility Reviewer\n\nEnsures inclusive\ndesign"]
 
-    SEC --> PIPELINE["Inserted into the\nmain workflow pipeline"]
-    PERF --> PIPELINE
+    PERF --> PIPELINE["Inserted into the\nmain workflow pipeline"]
     API --> PIPELINE
     A11Y --> PIPELINE
 
     style TASK fill:#4A90D9,stroke:#2C5F8A,color:#fff
     style DETECT fill:#F5A623,stroke:#D4891E,color:#fff
-    style SEC fill:#EF5350,stroke:#C62828,color:#fff
     style PERF fill:#FF7043,stroke:#D84315,color:#fff
     style API fill:#5C6BC0,stroke:#3F4FA0,color:#fff
     style A11Y fill:#26A69A,stroke:#1B7A72,color:#fff
@@ -382,10 +367,11 @@ flowchart TD
 
 | Specialist | Triggered By | What They Check |
 |-----------|-------------|-----------------|
-| **Security Auditor** | Keywords like *auth*, *password*, *token*, *encryption*; or files in auth/security folders | Authentication flaws, data exposure, injection vulnerabilities, secrets in code |
 | **Performance Analyst** | Keywords like *performance*, *cache*, *optimize*, *scale*; or database/query files | Slow queries, missing caching, N+1 problems, scalability bottlenecks |
 | **API Guardian** | Keywords like *API*, *endpoint*, *schema*, *breaking change*; or API/routes files | Backward compatibility, contract changes, versioning, deprecation |
 | **Accessibility Reviewer** | Keywords like *UI*, *component*, *form*, *accessibility*; or frontend component files | Screen reader support, keyboard navigation, color contrast, WCAG compliance |
+
+> **Note:** The **Security Auditor** is no longer a specialist agent. It is part of the thorough pipeline, running in parallel with Quality Guard after implementation.
 
 These specialists are **automatically detected** based on the task description and the files being changed. They can also be enabled or disabled manually.
 
@@ -435,7 +421,7 @@ graph TD
 
 1. **Global defaults** set the baseline for all projects (e.g., "always pause before committing")
 2. **Project config** customizes for a specific codebase (e.g., "this project needs the Security Auditor always on")
-3. **Task config** adjusts for a specific piece of work (e.g., "use Full mode for this task")
+3. **Task config** adjusts for a specific piece of work (e.g., "use Thorough mode for this task")
 4. **Command arguments** let you override anything on the fly (e.g., "run with loop mode this time")
 
 ### What Can Be Configured?
@@ -534,7 +520,7 @@ When the workflow completes, you review the changes and approve the final commit
 A: You need to be working in a software development context, but you do not need to understand the code the AI is writing. The checkpoints present information in plain language, and you can always ask a specific agent for clarification using `/crew ask`.
 
 **Q: How much does it cost per task?**
-A: It depends on the workflow mode and the complexity of the task. Simple fixes (Minimal mode) cost around $0.10 in AI tokens. Complex features (Full mode) typically cost $0.50 or more. The system tracks and reports exact costs for every workflow.
+A: It depends on the workflow mode and the complexity of the task. Trivial fixes (Quick mode) cost around $0.05 in AI tokens. Complex features (Thorough mode) typically cost $0.50 or more. The system tracks and reports exact costs for every workflow.
 
 **Q: Can the AI make changes I did not approve?**
 A: No. The system is designed with configurable checkpoints, and by default, it pauses before committing any changes. Git operations (staging, committing, pushing) require explicit human approval by default.
@@ -545,9 +531,9 @@ A: The system has built-in escalation. If an agent fails repeatedly, exceeds its
 ### About the Agents
 
 **Q: Why separate agents instead of one AI doing everything?**
-A: For the same reason engineering teams have specialists. An architect thinks differently than a QA engineer. By giving each agent a focused role and specific instructions, the output is more thorough and catches more issues than a single-pass approach. The Skeptic, for example, is specifically prompted to think about failure modes -- something a "do everything" agent tends to gloss over.
+A: For the same reason engineering teams have specialists. A planner thinks differently than a quality reviewer. By giving each agent a focused role and specific instructions, the output is more thorough and catches more issues than a single-pass approach. The Reviewer, for example, is specifically prompted to think about failure modes and edge cases -- something a "do everything" agent tends to gloss over.
 
-**Q: Can the Skeptic or Reviewer block the workflow?**
+**Q: Can the Reviewer or Quality Guard block the workflow?**
 A: They can raise concerns that trigger a human checkpoint, but they cannot block the workflow on their own. The human always makes the final decision about whether to proceed, revise, or restart.
 
 **Q: What if I disagree with an agent's assessment?**
@@ -573,7 +559,7 @@ A: Yes. The git worktree support allows multiple workflows to run in parallel on
 A: It complements rather than replaces human review. The AI agents catch many mechanical issues (missed edge cases, inconsistencies with project patterns, common security mistakes) quickly and consistently. Human reviewers can then focus on higher-level concerns like business logic correctness and design decisions.
 
 **Q: Can I use only parts of the workflow?**
-A: Yes. You can consult any individual agent using `/crew ask <agent> "question"` without starting a full workflow. You can also configure Minimal mode for simple tasks that only need planning, implementation, and documentation.
+A: Yes. You can consult any individual agent using `/crew ask <agent> "question"` without starting a full workflow. You can also use Quick mode for trivial fixes that only need the Implementer.
 
 **Q: What if I want to add my own custom agents?**
 A: Agent definitions are markdown files with instructions. Adding a new specialist agent involves creating a new markdown file and configuring its trigger conditions in the workflow configuration. You can also use **Custom Phases** to inject skills, scripts, or agents at any point in the pipeline -- see `custom_phases` in `workflow-config.yaml` for examples.
@@ -588,20 +574,21 @@ The Agentic Development Workflow brings **structured, multi-specialist AI collab
 mindmap
   root((Agentic\nWorkflow))
     Planning
-      Architect reviews impact
-      Developer writes the plan
-      Reviewer checks for gaps
-      Skeptic finds failure modes
+      Planner analyzes and plans
+      Reviewer checks gaps + failure modes
     Building
       Implementer executes steps
       Tests run automatically
-      Feedback checks alignment
+    Quality (thorough)
+      Quality Guard checks alignment
+      Security Auditor checks vulnerabilities
+      Run in parallel
     Quality
       Human checkpoints
       Configurable safety gates
       Automatic escalation
     Flexibility
-      Four workflow modes
+      Three workflow modes
       Auto-detection
       Specialist agents
       Cross-platform support

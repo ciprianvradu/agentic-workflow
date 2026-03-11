@@ -16,10 +16,8 @@
 # Checkpoint configuration - when to pause for human approval
 checkpoints:
   planning:
-    after_architect: true      # Review architectural concerns before detailed planning
-    after_developer: false     # Auto-proceed to reviewer (plan needs validation first)
-    after_reviewer: true       # Review gaps found before skeptic
-    after_skeptic: true        # Review edge cases before implementation
+    after_planner: true        # Review plan before implementation
+    after_reviewer: true       # Review gaps found before implementation
 
   implementation:
     at_25_percent: false       # Auto-proceed through early stages
@@ -65,21 +63,19 @@ models:
   quick:
     implementer: sonnet
 
-  # Standard mode: routine to non-trivial — Opus for architecture, Sonnet for everything else
+  # Standard mode: routine to non-trivial — Opus for planning, Sonnet for execution
   standard:
-    architect: opus
-    developer: sonnet
+    planner: opus
     implementer: sonnet
-    quality_guard: sonnet
+    technical_writer: sonnet
 
-  # Thorough mode: critical changes — Opus for architecture + skeptic, Sonnet for execution
+  # Thorough mode: critical changes — Opus for planning, Sonnet for execution
   thorough:
-    architect: opus
-    developer: sonnet
+    planner: opus
     reviewer: sonnet
-    skeptic: opus
     implementer: sonnet
     quality_guard: sonnet
+    security_auditor: sonnet
     technical_writer: sonnet
 
 # Workflow Modes
@@ -97,25 +93,23 @@ workflow_modes:
       estimated_cost: "$0.03"
 
     standard:
-      description: "Architect + Developer + Implementer + Quality Guard — routine to non-trivial features"
+      description: "Planner + Implementer + Technical Writer — routine to non-trivial features"
       phases:
-        - architect
-        - developer
+        - planner
         - implementer
-        - quality_guard
-      estimated_cost: "$0.12"
+        - technical_writer
+      estimated_cost: "$0.10"
 
     thorough:
-      description: "Full review pipeline with parallel reviewer+skeptic — security, migrations, breaking changes"
+      description: "Full pipeline with review and security — security, migrations, breaking changes"
       phases:
-        - architect
-        - developer
+        - planner
         - reviewer
-        - skeptic
         - implementer
         - quality_guard
+        - security_auditor
         - technical_writer
-      estimated_cost: "$0.40+"
+      estimated_cost: "$0.30+"
 
   # Auto-detection rules for determining mode
   auto_detection:
@@ -127,7 +121,29 @@ workflow_modes:
         - rename
         - update comment
         - fix import
-      max_files_affected: 1
+        - fix test
+        - fix lint
+        - fix build
+        - fix formatting
+        - fix whitespace
+        - fix spelling
+        - bump version
+        - update version
+        - add dependency
+        - remove dependency
+        - update dependency
+        - update config
+        - toggle flag
+        - change constant
+        - delete unused
+        - remove dead code
+        - one-line
+        - trivial
+      patterns:
+        - "^fix (a |the )?broken test"
+        - "^change .+ from .+ to"
+        - "^set .+ to"
+      max_files_affected: 3
       no_tests_required: true
 
     standard:
@@ -178,15 +194,12 @@ effort_levels:
   quick:
     implementer: low
   standard:
-    architect: high
-    developer: high
+    planner: high
     implementer: high
     quality_guard: medium
   thorough:
-    architect: max
-    developer: max
+    planner: max
     reviewer: high
-    skeptic: max
     implementer: high
     quality_guard: high
     technical_writer: medium
@@ -225,7 +238,7 @@ subagent_limits:
 
 # Repomix integration
 repomix:
-  enabled: true
+  enabled: false                 # Enable with --repomix flag; requires repomix CLI
   config_path: repomix.config.json
   auto_refresh: true           # Re-run repomix when files change significantly
 
@@ -233,17 +246,15 @@ repomix:
 # Leverages Gemini's massive context window for research phases
 # One Gemini analysis feeds focused context to all research agents
 gemini_research:
-  enabled: true                     # Master switch for Gemini-enhanced research
+  enabled: false                    # Enable with --gemini flag; requires repomix + gemini CLI
   fallback_to_opus: true            # Use Opus with direct context if Gemini unavailable
   prefer_native_context: true       # Skip Gemini if repomix output fits in Opus 4.6's 1M context
   native_context_threshold_kb: 800  # Max repomix output size (KB) to pass directly to Opus
 
   # Research agents receive Gemini-analyzed context
   research_agents:
-    - architect
-    - developer
+    - planner
     - reviewer
-    - skeptic
 
   # Implementation agents receive focused file context (no Gemini analysis needed)
   implementation_agents:
@@ -414,6 +425,7 @@ context_management:
     - "plan.md"
     - "config.yaml"
     - "task.md"
+    - "planner.md"
     - "architect.md"
     - "developer.md"
     - "reviewer.md"
@@ -458,14 +470,8 @@ memory:
 
 # Parallelization Configuration
 parallelization:
-  # Run Reviewer and Skeptic in parallel
-  reviewer_skeptic:
-    enabled: true
-    timeout_seconds: 300
-    merge_strategy: deduplicate     # deduplicate | combine | prioritize_reviewer
-
-  # Run Quality Guard and Technical Writer in parallel (post-implementation)
-  quality_guard_technical_writer:
+  # Run Quality Guard and Security Auditor in parallel (thorough mode, post-implementation)
+  quality_guard_security_auditor:
     enabled: true
     timeout_seconds: 300
 

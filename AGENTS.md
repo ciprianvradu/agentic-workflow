@@ -21,8 +21,8 @@ A multi-agent orchestration framework for AI-augmented software development. Sup
 | Mode | Agents | When to use | Default models |
 |------|--------|-------------|----------------|
 | **quick** | implementer | Typos, one-line fixes, trivial changes | Sonnet |
-| **standard** | architect → developer → implementer → quality-guard | Routine features, fixes, refactors | Sonnet |
-| **thorough** | architect → developer → reviewer → skeptic → implementer → quality-guard → writer | Security, migrations, breaking changes | Opus (planning) + Sonnet (execution) |
+| **standard** | planner → implementer → technical-writer | Routine features, fixes, refactors | Opus (planning) + Sonnet (execution) |
+| **thorough** | planner → reviewer → implementer → quality-guard + security-auditor (parallel) → technical-writer | Security, migrations, breaking changes | Opus (planning) + Sonnet (execution) |
 
 Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
 
@@ -30,13 +30,13 @@ Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → stand
 
 ```bash
 # Install MCP server dependencies
-cd mcp/agentic-workflow-server && pip install -e .
+pip install -e mcp/agentic-workflow-server
 
 # Build agents for Claude Code
 python3 scripts/build-agents.py claude --output ~/.claude
 
 # Run tests
-cd mcp/agentic-workflow-server && python3 -m pytest tests/ -v
+python3 -m pytest mcp/agentic-workflow-server/tests/ -v
 ```
 
 ## Quick Reference

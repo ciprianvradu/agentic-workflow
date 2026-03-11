@@ -296,41 +296,44 @@ API contracts are promises - breaking them breaks trust.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save API findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="Removing 'status' field from User response - breaks mobile app v1")
-workflow_save_discovery(category="gotcha", content="New endpoint uses camelCase but existing API uses snake_case")
-workflow_save_discovery(category="pattern", content="Existing pagination uses cursor-based with 'next_token' param")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | Breaking changes that require versioning or rejection |
-| `gotcha` | Consistency issues or risky patterns |
-| `pattern` | Existing API conventions to follow |
+Save breaking changes that require versioning, consistency issues, and existing API conventions to follow.
 
 ---
 
 ## Completion Signals
 
-When your review is complete, output:
-```
-<promise>API_GUARDIAN_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If breaking changes require business decision:
-```
-<promise>BLOCKED: [breaking change requiring stakeholder approval]</promise>
-```
+When your review is complete: `<promise>API_GUARDIAN_COMPLETE</promise>`
+If breaking changes require business decision: `<promise>BLOCKED: [breaking change requiring stakeholder approval]</promise>`
+If API contract issues need architect review: `<promise>ESCALATE: [API design issue requiring architecture decision]</promise>`
 
-If API contract issues need architect review:
-```
-<promise>ESCALATE: [API design issue requiring architecture decision]</promise>
-```
+## Shared Agent Standards
+
+### Tool Usage
+
+Use `Grep`, `Glob`, and `Read` directly for searching and reading code. Do **not** spawn subagents (Agent/Explore/Task) for simple searches — it wastes tokens, triggers unnecessary permission prompts, and is slower than using the tools directly. Only use the Agent tool when you need truly parallel independent research across multiple unrelated areas.
+
+### Memory Preservation
+
+Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.
+
+At start of your phase, call `workflow_get_discoveries()` or `workflow_flush_context()` to load findings from earlier phases. At end, save decisions, patterns, gotchas, and blockers relevant to downstream agents.
+
+### Documentation Gap Flagging
+
+When you encounter undocumented or outdated code, call `workflow_mark_docs_needed()` to flag it for the Technical Writer. See `{knowledge_base}/doc-gap-flagging.md` for details.
+
+### Completion Signals
+
+See `{knowledge_base}/completion-signals.md` for the full promise protocol. Every agent must emit exactly one of these when finished:
+
+- `<promise>AGENT_COMPLETE</promise>` -- replace AGENT with your role name (e.g., `ARCHITECT_COMPLETE`)
+- `<promise>BLOCKED: [reason]</promise>` -- cannot proceed without human input
+- `<promise>ESCALATE: [reason]</promise>` -- critical concern requiring immediate attention
+
+### Severity Scale
+
+When rating issues use the project severity scale. See `{knowledge_base}/severity-scale.md` for definitions of Critical / High / Medium / Low.

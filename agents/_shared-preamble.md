@@ -1,5 +1,9 @@
 ## Shared Agent Standards
 
+### Tool Usage
+
+Use `Grep`, `Glob`, and `Read` directly for searching and reading code. Do **not** spawn subagents (Agent/Explore/Task) for simple searches — it wastes tokens, triggers unnecessary permission prompts, and is slower than using the tools directly. Only use the Agent tool when you need truly parallel independent research across multiple unrelated areas.
+
 ### Memory Preservation
 
 Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.

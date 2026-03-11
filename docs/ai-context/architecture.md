@@ -94,36 +94,35 @@ This is the largest and most important module. It manages all persistent workflo
 **Workflow Modes:**
 | Mode | Agents | Use case | Est. cost |
 |------|--------|----------|-----------|
-| **micro** | implementer | Typos, one-line fixes, trivial changes | ~$0.03 |
-| **standard** | developer → implementer → quality_guard → technical_writer | Routine features, fixes, refactors | ~$0.10 |
-| **reviewed** | architect → developer → reviewer → implementer → quality_guard → technical_writer | Non-trivial changes needing review | ~$0.25 |
-| **thorough** | architect → developer → reviewer → skeptic → implementer → quality_guard → feedback → technical_writer | Security, migrations, breaking changes | ~$0.50+ |
+| **quick** | implementer | Typos, one-line fixes | ~$0.03 |
+| **standard** | planner → implementer → technical_writer | Routine features, refactors | ~$0.10 |
+| **thorough** | planner → reviewer → implementer → quality_guard + security_auditor (parallel) → technical_writer | Security, migrations, breaking changes | ~$0.30+ |
 
-Legacy aliases: `turbo`/`minimal` → standard, `fast` → reviewed, `full` → thorough.
+Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
 
-The **technical_writer** phase is conditional in standard mode: it is skipped when no documentation gaps have been flagged (via `workflow_mark_docs_needed`) and the mode is `standard` or lower.
+The **technical_writer** phase is a required phase in all modes that include it (standard and thorough). REQUIRED_PHASES are: planner, implementer, technical_writer.
 
 **Auto-Detection (default `--mode auto`):**
 
-Mode is selected by two signals — highest wins (thorough > reviewed > standard > micro):
+Mode is selected by two signals — highest wins (thorough > standard > quick):
 
 1. **Keyword matching** against task description (case-insensitive):
-   - **micro**: "typo", "spelling", "whitespace", "one-line", "trivial", "rename variable", "update comment", "fix import" — but excluded if description also contains "implement", "refactor", "create", "build", "security", etc.
+   - **quick**: "typo", "spelling", "whitespace", "one-line", "trivial", "rename variable", "update comment", "fix import" — but excluded if description also contains "implement", "refactor", "create", "build", "security", etc.
    - **standard**: "add", "implement", "update", "refactor", "create", "build", "utility" — but excluded if "security", "auth", "database", "migration", "api", "breaking" present.
    - **thorough**: "security", "authentication", "database", "migration", "api", "breaking change", "critical", "auth", "password", "token".
-   - If no keywords match → defaults to **reviewed**.
+   - If no keywords match → defaults to **standard**.
 
 2. **File scope analysis** (when `files_affected` is provided):
    - Sensitive paths (auth/, security/, migration/, db/) → escalate to thorough
-   - Config paths (.env, Dockerfile, CI workflows) → escalate to reviewed
-   - Many files (>10) or many directories (>3) → escalate to reviewed
+   - Config paths (.env, Dockerfile, CI workflows) → escalate to standard
+   - Many files (>10) or many directories (>3) → escalate to standard
    - Cross-module changes (>5 distinct modules) → escalate to thorough
 
 The detection logic is in `workflow_detect_mode()` — pure Python, no LLM involved. Override with `--mode <name>` to skip auto-detection.
 
 **Model Routing:** `_build_phase_action()` returns a `model` field resolved from config:
 - Fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
-- Standard mode defaults to Sonnet, reviewed/thorough use Opus for planning agents
+- Quick mode defaults to Sonnet, standard/thorough use Opus for planning agents
 - Override with `models.default: opus` in project config to use Opus everywhere
 
 **Internal helpers (prefixed with `_`):**
@@ -201,7 +200,7 @@ Exposes project files as MCP resources that agents can read:
 {
   "task_id": "TASK_002",
   "phase": "implementer",
-  "phases_completed": ["architect", "developer", "reviewer", "skeptic"],
+  "phases_completed": ["planner", "reviewer"],
   "review_issues": [],
   "iteration": 1,
   "docs_needed": [],
@@ -291,19 +290,16 @@ Follow this checklist:
 
 | Agent | Mode(s) | Role |
 |-------|---------|------|
-| **planner** | micro | Combined architect+developer for simple tasks — produces a brief plan and immediately hands off to implementer |
-| **architect** | reviewed, thorough | System design, boundaries, risks |
-| **developer** | standard, reviewed, thorough | Detailed step-by-step implementation plan |
-| **reviewer** | reviewed, thorough | Plan validation, security review |
-| **skeptic** | thorough | Edge cases, failure modes |
-| **implementer** | all | Executes the plan |
-| **feedback** | thorough | Deviation detection, plan vs reality |
-| **quality_guard** | standard+ | Quality gate — enforces concern severity threshold (see [severity-scale.md](severity-scale.md)) |
-| **technical_writer** | standard+ (conditional) | Updates `docs/ai-context/` with discovered patterns |
+| **planner** | standard, thorough | System analysis + implementation plan (read-only) |
+| **reviewer** | thorough | Plan review + adversarial analysis (read-only) |
+| **implementer** | all | Executes the plan (read-write) |
+| **quality_guard** | thorough | Code quality, conventions, plan adherence — runs in parallel with security_auditor (read-write) |
+| **security_auditor** | thorough | Security vulnerability review — runs in parallel with quality_guard (read-only) |
+| **technical_writer** | standard, thorough | Documentation updates (docs-only write) |
 
 The orchestrator spec lives in `docs/orchestrator-spec.md` (moved from `agents/orchestrator.md`).
 
-Severity levels used by reviewer, skeptic, feedback, quality_guard, and security_auditor are defined in [docs/ai-context/severity-scale.md](severity-scale.md).
+Severity levels used by reviewer, quality_guard, and security_auditor are defined in [docs/ai-context/severity-scale.md](severity-scale.md).
 
 ### Agent Definition Structure
 

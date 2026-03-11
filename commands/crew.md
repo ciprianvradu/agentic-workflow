@@ -42,14 +42,16 @@ Loop on the returned JSON action from the orchestrator:
 3. If `next.beads_comment`, run: `bd comments add <issue> "<comment>"`
 4. If `next.parallel_with` is set:
    - Spawn both agents simultaneously using parallel Task calls with `run_in_background: true`
+   - Primary agent uses `model: next.model`, parallel agent uses `model: next.parallel_agent_model`
    - Wait for both with TaskOutput
    - Call `workflow_start_parallel_phase`, `workflow_complete_parallel_phase` for each, then `workflow_merge_parallel_results`
+   - In `agent-done` calls, pass the actual model used: `--model <next.model>` for primary, `--model <next.parallel_agent_model>` for parallel
 5. Otherwise spawn single agent:
    ```
-   Task(subagent_type: "general-purpose", model: "opus", max_turns: next.max_turns, prompt: "<composed prompt>")
+   Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: "<composed prompt>")
    ```
 6. Save agent output to `.tasks/<task_id>/<agent>.md`
-7. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model opus]`
+7. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model <next.model>]`
 8. If `result.parse_result.unaddressed_concerns` is non-empty, display them to the user:
    ```
    **Unaddressed Concerns ({count}):**
@@ -113,9 +115,9 @@ Run: `python3 {__scripts_dir__}/crew_orchestrator.py impl-action --task-id <id> 
   ```
   python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user response>" --type escalation_response --phase implementer
   ```
-- **complete**: Implementation done, continue to next phase (feedback → technical_writer → complete).
+- **complete**: Implementation done, continue to next phase. In standard mode: technical_writer → complete. In thorough mode: quality_guard + security_auditor (parallel) → technical_writer → complete.
 
-**Note**: After the implementer returns "complete", the action loop continues with `result.next` which will be `spawn_agent` for the remaining phases (feedback and/or technical_writer). The final `action: "complete"` only arrives after ALL phases including technical_writer are done. **Never commit before the technical-writer has run.**
+**Note**: After the implementer returns "complete", the action loop continues with `result.next` which will be `spawn_agent` for the remaining phases (quality_guard + security_auditor in thorough, then technical_writer). The final `action: "complete"` only arrives after ALL phases including technical_writer are done. **Never commit before the technical-writer has run.**
 
 #### action: "complete"
 
@@ -143,6 +145,7 @@ When building prompts for agents, include:
 4. **Gemini analysis** (if available, extract relevant section)
 5. **Knowledge base inventory** (list files, substitute `{knowledge_base}` path)
 6. **Variable substitution**: Replace `{knowledge_base}` and `{task_directory}` with config values
+7. **Convention injection** (implementer + quality_guard): If `next.convention_files` exists, read each file and include under a `## Mandatory Conventions (from ai-context)` header in the prompt. These are actual convention files referenced by the Planner for the implementer to follow exactly.
 
 ## Error Handling
 

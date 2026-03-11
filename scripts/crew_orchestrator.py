@@ -252,7 +252,11 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     # Resolve task description from file if specified
     if options.get("task_file"):
-        task_file = Path(options["task_file"])
+        raw_path = options["task_file"]
+        # Strip leading @ (used as file indicator in CLI)
+        if raw_path.startswith("@"):
+            raw_path = raw_path[1:]
+        task_file = Path(raw_path)
         if task_file.exists():
             task_description = task_file.read_text().strip()
         else:
@@ -362,10 +366,10 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         cost_recorded = True
 
     # 4. Handle REVISE loopback — if reviewer recommends REVISE, route back
-    #    to developer instead of advancing to the next phase
+    #    to planner (or developer for legacy tasks) instead of advancing
     recommendation = parse_result.get("extracted", {}).get("recommendation", "")
     if agent == "reviewer" and recommendation == "REVISE":
-        # Remove reviewer from phases_completed so it runs again after developer
+        # Remove reviewer from phases_completed so it runs again after planner
         if task_dir:
             state = _load_state(task_dir)
             phases_completed = state.get("phases_completed", [])
@@ -375,8 +379,10 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
             ]
             state["phases_completed"] = phases_completed
             _save_state(task_dir, state)
-        # Transition back to developer
-        workflow_transition(to_phase="developer", task_id=task_id)
+        # Route back to planner (or developer for in-flight legacy tasks)
+        mode_phases = state.get("workflow_mode", {}).get("phases", []) if task_dir else []
+        revise_target = "planner" if "planner" in mode_phases else "developer"
+        workflow_transition(to_phase=revise_target, task_id=task_id)
         next_action = crew_get_next_phase(task_id=task_id)
     else:
         # 4b. Normal forward progression
@@ -528,13 +534,17 @@ def cmd_checkpoint_done(args: argparse.Namespace) -> None:
     if decision in ("approve", "skip"):
         workflow_complete_phase(task_id=task_id)
 
-    # 3. Handle revise — transition back to developer
+    # 3. Handle revise — transition back to planner (or developer for legacy tasks)
     if decision == "revise":
-        workflow_transition(to_phase="developer", task_id=task_id)
+        mode_phases = state.get("workflow_mode", {}).get("phases", []) if task_dir else []
+        revise_target = "planner" if "planner" in mode_phases else "developer"
+        workflow_transition(to_phase=revise_target, task_id=task_id)
 
-    # 4. Handle restart — transition back to architect
+    # 4. Handle restart — transition back to planner (or architect for legacy tasks)
     if decision == "restart":
-        workflow_transition(to_phase="architect", task_id=task_id)
+        mode_phases = state.get("workflow_mode", {}).get("phases", []) if task_dir else []
+        restart_target = "planner" if "planner" in mode_phases else "architect"
+        workflow_transition(to_phase=restart_target, task_id=task_id)
 
     # 5. Get next action
     next_action = crew_get_next_phase(task_id=task_id)

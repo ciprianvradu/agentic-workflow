@@ -356,41 +356,44 @@ Accessibility isn't a feature - it's a requirement. 1 billion people have disabi
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save accessibility findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="Modal has no focus trap - keyboard users can tab outside")
-workflow_save_discovery(category="gotcha", content="Error messages only use color - add icon for colorblind users")
-workflow_save_discovery(category="pattern", content="Existing buttons use aria-describedby for help text")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | WCAG A/AA violations that must be fixed |
-| `gotcha` | Accessibility traps or confusing patterns |
-| `pattern` | Existing accessibility patterns to follow |
+Save WCAG A/AA violations that must be fixed, accessibility traps or confusing patterns, and existing accessibility patterns to follow.
 
 ---
 
 ## Completion Signals
 
-When your review is complete, output:
-```
-<promise>ACCESSIBILITY_REVIEWER_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical accessibility barriers found:
-```
-<promise>BLOCKED: [accessibility violation requiring design change]</promise>
-```
+When your review is complete: `<promise>ACCESSIBILITY_REVIEWER_COMPLETE</promise>`
+If critical accessibility barriers found: `<promise>BLOCKED: [accessibility violation requiring design change]</promise>`
+If accessibility issues need design decision: `<promise>ESCALATE: [accessibility concern requiring UX decision]</promise>`
 
-If accessibility issues need design decision:
-```
-<promise>ESCALATE: [accessibility concern requiring UX decision]</promise>
-```
+## Shared Agent Standards
+
+### Tool Usage
+
+Use `Grep`, `Glob`, and `Read` directly for searching and reading code. Do **not** spawn subagents (Agent/Explore/Task) for simple searches — it wastes tokens, triggers unnecessary permission prompts, and is slower than using the tools directly. Only use the Agent tool when you need truly parallel independent research across multiple unrelated areas.
+
+### Memory Preservation
+
+Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.
+
+At start of your phase, call `workflow_get_discoveries()` or `workflow_flush_context()` to load findings from earlier phases. At end, save decisions, patterns, gotchas, and blockers relevant to downstream agents.
+
+### Documentation Gap Flagging
+
+When you encounter undocumented or outdated code, call `workflow_mark_docs_needed()` to flag it for the Technical Writer. See `{knowledge_base}/doc-gap-flagging.md` for details.
+
+### Completion Signals
+
+See `{knowledge_base}/completion-signals.md` for the full promise protocol. Every agent must emit exactly one of these when finished:
+
+- `<promise>AGENT_COMPLETE</promise>` -- replace AGENT with your role name (e.g., `ARCHITECT_COMPLETE`)
+- `<promise>BLOCKED: [reason]</promise>` -- cannot proceed without human input
+- `<promise>ESCALATE: [reason]</promise>` -- critical concern requiring immediate attention
+
+### Severity Scale
+
+When rating issues use the project severity scale. See `{knowledge_base}/severity-scale.md` for definitions of Critical / High / Medium / Low.

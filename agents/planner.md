@@ -102,6 +102,12 @@ assertions:
     step_id: "3.1"
 ```
 
+## Referenced Convention Files
+
+<ai_context_refs>
+["docs/ai-context/relevant-convention.md", "src/ai-context/naming.md"]
+</ai_context_refs>
+
 ## Rollback Plan
 [How to undo changes if something goes wrong]
 
@@ -126,6 +132,35 @@ assertions:
 5. **Verification commands** — how to test each step
 6. **Warning signs** — what indicates failure
 7. **Why context** — the Implementer needs to understand intent
+
+### Code Context in Plan
+
+For each implementation step, include the relevant code context inline so the Implementer doesn't need to re-read files:
+
+- Show the **current code** that will be modified (10-20 lines around the change point)
+- Show **import statements** and function signatures the Implementer will need
+- Show **test patterns** from existing tests that the Implementer should follow
+
+Example step format:
+```
+- [ ] Step 3: Add pagination parameters to UserService.list()
+
+  **File:** `src/services/user-service.ts:45-62`
+  ```typescript
+  // Current code (modify this):
+  async list(filters: UserFilters): Promise<User[]> {
+    return this.db.users.findMany({ where: filters });
+  }
+  ```
+
+  **Test pattern** (from `tests/services/user-service.test.ts:23`):
+  ```typescript
+  it('should list users with filters', async () => {
+    const users = await service.list({ active: true });
+    expect(users).toHaveLength(2);
+  });
+  ```
+```
 
 ## Code Example Quality
 
@@ -181,6 +216,32 @@ While analyzing, flag undocumented code or outdated docs for the Technical Write
 ```
 workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented.md"])
 ```
+
+---
+
+## Context Map
+
+After completing your analysis, save a context map to `{task_directory}{task_id}/context-map.md` listing the key files you explored and their relevance:
+
+```markdown
+# Context Map
+
+## Core Files (will be modified)
+- `src/services/user-service.ts` — Main service being changed, lines 45-62
+- `src/routes/users.ts` — Route handler that calls the service
+
+## Reference Files (read for patterns)
+- `src/services/order-service.ts` — Has existing pagination pattern to follow
+- `tests/services/order-service.test.ts` — Test pattern for paginated endpoints
+
+## Configuration
+- `src/config/defaults.ts` — Default page size constant
+
+## Documentation
+- `docs/ai-context/architecture.md` — Service layer conventions
+```
+
+This context map helps downstream agents (Implementer, Quality Guard, Technical Writer) skip redundant exploration.
 
 ---
 

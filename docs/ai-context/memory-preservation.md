@@ -252,11 +252,10 @@ The category determines how discoverable the learning is later:
 
 The memory preservation tools integrate with the broader agentic workflow:
 
-1. **Architect agent** - Save architectural decisions
-2. **Developer agent** - Save patterns and implementation decisions
-3. **Implementer agent** - Save gotchas discovered during coding
-4. **Feedback agent** - Save deviations and their resolutions
-5. **Technical Writer** - Reference decisions and patterns in documentation
+1. **Planner agent** - Save architectural decisions, patterns, and implementation decisions
+2. **Implementer agent** - Save gotchas discovered during coding
+3. **Quality Guard** - Save quality findings and their resolutions
+4. **Technical Writer** - Reference decisions and patterns in documentation
 
 ## Troubleshooting
 

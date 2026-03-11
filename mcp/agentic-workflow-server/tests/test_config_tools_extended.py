@@ -356,35 +356,35 @@ class TestConfigGetModel:
 class TestModeSpecificModelRouting:
     """Verify DEFAULT_CONFIG mode sub-dicts produce correct model routing."""
 
-    def test_standard_developer_uses_sonnet(self):
-        """developer should be sonnet in standard mode (not opus)."""
+    def test_standard_planner_uses_opus(self):
+        """planner should be opus in standard mode."""
         from agentic_workflow_server.config_tools import DEFAULT_CONFIG
         standard_models = DEFAULT_CONFIG["models"]["standard"]
-        assert standard_models.get("developer") == "sonnet"
+        assert standard_models.get("planner") == "opus"
 
-    def test_standard_quality_guard_uses_sonnet(self):
-        """quality_guard should be sonnet in standard mode."""
+    def test_standard_technical_writer_uses_sonnet(self):
+        """technical_writer should be sonnet in standard mode."""
         from agentic_workflow_server.config_tools import DEFAULT_CONFIG
         standard_models = DEFAULT_CONFIG["models"]["standard"]
-        assert standard_models.get("quality_guard") == "sonnet"
+        assert standard_models.get("technical_writer") == "sonnet"
 
-    def test_thorough_developer_uses_sonnet(self):
-        """developer should be sonnet in thorough mode."""
+    def test_thorough_planner_uses_opus(self):
+        """planner should be opus in thorough mode."""
         from agentic_workflow_server.config_tools import DEFAULT_CONFIG
         thorough_models = DEFAULT_CONFIG["models"]["thorough"]
-        assert thorough_models.get("developer") == "sonnet"
+        assert thorough_models.get("planner") == "opus"
 
-    def test_thorough_architect_uses_opus(self):
-        """architect stays opus in thorough mode."""
+    def test_thorough_security_auditor_uses_sonnet(self):
+        """security_auditor should be sonnet in thorough mode."""
         from agentic_workflow_server.config_tools import DEFAULT_CONFIG
         thorough_models = DEFAULT_CONFIG["models"]["thorough"]
-        assert thorough_models.get("architect") == "opus"
+        assert thorough_models.get("security_auditor") == "sonnet"
 
-    def test_thorough_skeptic_uses_opus(self):
-        """skeptic stays opus in thorough mode."""
+    def test_thorough_reviewer_uses_sonnet(self):
+        """reviewer should be sonnet in thorough mode."""
         from agentic_workflow_server.config_tools import DEFAULT_CONFIG
         thorough_models = DEFAULT_CONFIG["models"]["thorough"]
-        assert thorough_models.get("skeptic") == "opus"
+        assert thorough_models.get("reviewer") == "sonnet"
 
     def test_user_override_wins_over_default(self, tmp_path):
         """A project config override must win over DEFAULT_CONFIG mode defaults."""

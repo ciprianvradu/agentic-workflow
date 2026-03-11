@@ -47,14 +47,13 @@ Call MCP tool: agentic-workflow__workflow_log_interaction({
 
 ```
 Call MCP tool: agentic-workflow__workflow_detect_mode({ task_id: "TASK_042", description: "<user's task>" })
-→ Returns mode: "full" | "turbo" | "fast" | "minimal"
+→ Returns mode: "thorough" | "standard" | "quick"
 ```
 
 **Mode determines which agents run:**
-- **full**: architect → developer → reviewer → skeptic → implementer → feedback → technical-writer
-- **turbo**: developer → implementer → technical-writer
-- **fast**: architect → developer → reviewer → implementer → technical-writer
-- **minimal**: developer → implementer → technical-writer
+- **thorough**: planner → reviewer → implementer → quality_guard + security_auditor (parallel) → technical_writer
+- **standard**: planner → implementer → technical_writer
+- **quick**: implementer
 
 ### Step 3: Execute Phases
 
@@ -63,7 +62,7 @@ For each phase in the detected mode's agent chain:
 1. **Transition**: Call `agentic-workflow__workflow_transition({ task_id: "TASK_042", phase: "<agent_name>" })`
 2. **Delegate to sub-agent**: Use @mention to invoke the crew agent:
 
-> @crew-architect Analyze the architectural implications of: [task description]. Task ID: TASK_042. Knowledge base files: [inventory].
+> @crew-planner Analyze and plan: [task description]. Task ID: TASK_042. Knowledge base files: [inventory].
 
 3. **Save output**: Write agent output to `.tasks/TASK_042/<agent_name>.md`
 4. **Complete phase**: Call `agentic-workflow__workflow_complete_phase({ task_id: "TASK_042", phase: "<agent_name>" })`
@@ -82,41 +81,38 @@ Call MCP tool: agentic-workflow__workflow_get_cost_summary({ task_id: "TASK_042"
 
 ### Planning Agents
 
-**Architect** (full mode only):
-> @crew-architect Analyze architectural implications of: [task]. Knowledge base: [inventory]. Task ID: [id]
+**Planner** (standard + thorough):
+> @crew-planner Analyze architecture and create an implementation plan for: [task]. Knowledge base: [inventory]. Task ID: [id]
 
-**Developer** (full + turbo):
-> @crew-developer Create an implementation plan for: [task]. Architect analysis: [summary or 'N/A']. Task ID: [id]
-
-**Reviewer** (full mode only):
-> @crew-reviewer Review this implementation plan: [plan summary]. Task ID: [id]
-
-**Skeptic** (full mode only):
-> @crew-skeptic Stress-test this plan for failure modes: [plan summary]. Reviewer findings: [summary]. Task ID: [id]
+**Reviewer** (thorough only — also performs adversarial/skeptic analysis):
+> @crew-reviewer Review and stress-test this implementation plan: [plan summary]. Task ID: [id]
 
 ### Implementation Agents
 
 **Implementer** (all modes):
 > @crew-implementer Execute this plan step by step. Plan is at .tasks/TASK_XXX/plan.md. Task ID: [id]
 
-**Feedback** (full mode only):
-> @crew-feedback Compare the implementation against the plan. Plan: [summary]. Implementation: [summary]. Task ID: [id]
+**Quality Guard** (thorough only — runs in parallel with Security Auditor):
+> @crew-quality-guard Verify the implementation against the plan and conventions. Plan: [summary]. Implementation: [summary]. Task ID: [id]
+
+**Security Auditor** (thorough only — runs in parallel with Quality Guard):
+> @crew-security-auditor Review implementation for security vulnerabilities. Plan: [summary]. Implementation: [summary]. Task ID: [id]
 
 ### Documentation Agents
 
-**Technical Writer** (all modes):
+**Technical Writer** (standard + thorough):
 > @crew-technical-writer Document patterns and decisions from this task. Task: [description]. Implementation: [summary]. Task ID: [id]
 
 ## Handling Review Loops
 
-If the Reviewer or Skeptic raises blocking concerns:
+If the Reviewer raises blocking concerns (including adversarial/skeptic analysis):
 
 1. Call `agentic-workflow__workflow_add_review_issue({ task_id, issue: "<concern>", severity: "high" })`
 2. Inform the user about the concerns and ask how to proceed
 3. Based on response:
-   - **Revise**: Loop back to Developer with concerns as additional context
+   - **Revise**: Loop back to Planner with concerns as additional context
    - **Proceed**: Continue to next phase
-   - **Restart**: Call `agentic-workflow__workflow_transition` back to architect
+   - **Restart**: Call `agentic-workflow__workflow_transition` back to planner
 
 ## State Management
 

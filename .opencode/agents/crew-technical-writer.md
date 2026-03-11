@@ -385,61 +385,45 @@ Your documentation helps future AI agents work effectively with this codebase wi
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to access and preserve learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `pattern`, `decision`, `preference`.
 
-### Load Discoveries from Previous Phases
-
-Before writing documentation, load all discoveries from the workflow:
-
-```
-workflow_flush_context()  # Get all discoveries
-```
-
-These discoveries contain valuable information for documentation:
-- **Patterns** discovered by Architect/Developer
-- **Gotchas** identified by Reviewer/Skeptic
-- **Blockers** encountered by Implementer
-- **Decisions** made throughout the workflow
-
-### When to Save Discoveries
-
-Save documentation-related discoveries:
-
-```
-workflow_save_discovery(category="pattern", content="Documented the BaseService pattern - agents should check patterns.md before implementing services")
-workflow_save_discovery(category="decision", content="Added new AI-context section for error handling patterns")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `pattern` | New patterns documented for future reference |
-| `decision` | Documentation structure decisions |
-| `preference` | User preferences for documentation style |
-
-### What to Preserve
-
-Save discoveries that help future documentation tasks:
-- **New patterns** added to the knowledge base
-- **Documentation structure** decisions
-- **Knowledge gaps** that still need filling
+At start: call `workflow_flush_context()` to load all discoveries from the workflow (patterns, gotchas, blockers, decisions from all phases).
+Save new patterns added to the knowledge base, documentation structure decisions, and knowledge gaps that still need filling.
 
 ---
 
 ## Completion Signals
 
-When your documentation updates are ready, output:
-```
-<promise>TECHNICAL_WRITER_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-With your assessment:
-```
-<promise>DOCS: NO_CHANGES|MINOR_UPDATES|NEW_DOCUMENTATION|MAJOR_REVISION</promise>
-```
+When your documentation updates are ready: `<promise>TECHNICAL_WRITER_COMPLETE</promise>`
+With your assessment: `<promise>DOCS: NO_CHANGES|MINOR_UPDATES|NEW_DOCUMENTATION|MAJOR_REVISION</promise>`
+If existing documentation has critical errors: `<promise>ESCALATE: [documentation accuracy concern]</promise>`
 
-If existing documentation has critical errors:
-```
-<promise>ESCALATE: [documentation accuracy concern]</promise>
-```
+## Shared Agent Standards
+
+### Tool Usage
+
+Use `Grep`, `Glob`, and `Read` directly for searching and reading code. Do **not** spawn subagents (Agent/Explore/Task) for simple searches — it wastes tokens, triggers unnecessary permission prompts, and is slower than using the tools directly. Only use the Agent tool when you need truly parallel independent research across multiple unrelated areas.
+
+### Memory Preservation
+
+Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.
+
+At start of your phase, call `workflow_get_discoveries()` or `workflow_flush_context()` to load findings from earlier phases. At end, save decisions, patterns, gotchas, and blockers relevant to downstream agents.
+
+### Documentation Gap Flagging
+
+When you encounter undocumented or outdated code, call `workflow_mark_docs_needed()` to flag it for the Technical Writer. See `{knowledge_base}/doc-gap-flagging.md` for details.
+
+### Completion Signals
+
+See `{knowledge_base}/completion-signals.md` for the full promise protocol. Every agent must emit exactly one of these when finished:
+
+- `<promise>AGENT_COMPLETE</promise>` -- replace AGENT with your role name (e.g., `ARCHITECT_COMPLETE`)
+- `<promise>BLOCKED: [reason]</promise>` -- cannot proceed without human input
+- `<promise>ESCALATE: [reason]</promise>` -- critical concern requiring immediate attention
+
+### Severity Scale
+
+When rating issues use the project severity scale. See `{knowledge_base}/severity-scale.md` for definitions of Critical / High / Medium / Low.

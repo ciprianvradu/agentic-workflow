@@ -5,6 +5,14 @@ tools:
   - "*"
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `@crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -33,50 +41,58 @@ Arguments: a task description (free text, Jira key, or `--beads ISSUE`).
 
 ### Steps
 
-1. **Detect current branch**: Run `git branch --show-current` to get the current branch name
-2. **Generate task ID**: `TASK_XXX` where XXX is the next available number in `.tasks/`
-3. **Create task directory**: `.tasks/TASK_XXX/`
-4. **Initialize state**: Call `workflow_initialize(task_id="TASK_XXX")` MCP tool
-5. **Resolve AI host**: Check config via `config_get_effective()` → `worktree.ai_host`.
-   If `auto`: default to `claude` (safe default — the most common host).
-   Store as `<ai_host>` for later steps.
-6. **Create worktree**: Call `workflow_create_worktree(task_id="TASK_XXX", base_branch="<current branch from step 1>", ai_host="<ai_host>")` MCP tool — this branches from your current branch, not main
-7. **Execute git commands**: Run the git commands returned by the tool
-8. **Setup worktree environment**: Run the `setup_commands` returned by `workflow_create_worktree` (in order).
-   These commands:
-   - Symlink `.tasks/` to the main repo (for MCP tools and convenience)
-   - Copy host settings (e.g., `.claude/settings.local.json`) with `additionalDirectories` patched in, granting the worktree session read/write access to the parent repo's `.tasks/` directory. This is critical — symlinks alone are not reliable for Claude Code file access.
-   If `config_get_effective()` → `worktree.copy_settings` is `false`, skip the settings copy commands (but still run the `.tasks/` symlink command, which is always the first command).
-   If any command fails, print a warning but continue.
-9. **Fix paths for WSL/Windows compatibility**: The worktree's `.git` file and the main repo's `.git/worktrees/TASK_XXX/gitdir` contain absolute WSL paths that Windows tools (Visual Studio, PowerShell git) can't read. Convert both to relative paths. **CRITICAL: These files MUST have LF line endings (no CRLF). Use `printf` to write them — do NOT use file-write tools or `echo`.**
-   - Read `<worktree_path>/.git` to get the current absolute gitdir path
-   - Compute the relative path from the worktree to the main repo's `.git/worktrees/TASK_XXX` (e.g., `../../<repo_name>/.git/worktrees/TASK_XXX`)
-   - Write with: `printf 'gitdir: <relative_path>\n' > <worktree_path>/.git`
-   - Read `<main_repo>/.git/worktrees/TASK_XXX/gitdir` to get the current absolute path
-   - Compute the relative path back to the worktree (e.g., `../../../<repo_name>-worktrees/TASK_XXX/.git`)
-   - Write with: `printf '<relative_path>\n' > <main_repo>/.git/worktrees/TASK_XXX/gitdir`
-   - Verify both files: `cat -A <worktree_path>/.git` should show `$` at end of line (LF), NOT `^M$` (CRLF)
-10. **Install dependencies in worktree** (if applicable): Detect and install project dependencies so the worktree is ready to use. Check for these files **in the worktree directory** and run the first match:
-   - `package-lock.json` → `npm ci` (in worktree dir)
-   - `yarn.lock` → `yarn install --frozen-lockfile` (in worktree dir)
-   - `pnpm-lock.yaml` → `pnpm install --frozen-lockfile` (in worktree dir)
-   - `requirements.txt` → `pip install -r requirements.txt` (in worktree dir)
-   - `pyproject.toml` → `pip install -e .` (in worktree dir)
-   - `Gemfile.lock` → `bundle install` (in worktree dir)
-   - `go.sum` → `go mod download` (in worktree dir)
-   - `Cargo.lock` → `cargo fetch` (in worktree dir)
-   - If none found, skip this step.
-   - If the install command fails, print a warning but continue — the user can fix it manually.
-11. **Print result** (use the exact format below, substituting actual values):
+1. **Read config + resolve prompts**: Call `config_get_effective()` MCP tool to get the `worktree` section. If MCP tools are unavailable (e.g., OpenCode subtasks), read the config by running:
+   ```
+   python3 .github/scripts/crew_orchestrator.py config
+   ```
+   and parse the JSON output for the `worktree` section.
+   For each prompt-mode setting (`sync_before_create`, `recycle`, `auto_launch`):
+   - If value is `prompt` → ask the user (yes/no) → build the corresponding CLI flag (`--pull`/`--no-pull`, `--recycle`/`--no-recycle`, `--launch`/`--no-launch`)
+   - If value is `auto` or `never` → the script handles it, no flag needed
+
+2. **Run the setup script**:
+   ```
+   python3 .github/scripts/setup-worktree.py "<description>" --ai-host copilot [flags] --json
+   ```
+   Where `[flags]` are the CLI flags built in step 1 (only for prompt-mode settings where the user was asked).
+
+3. **Handle exit code 2** (pending decisions): If the script exits with code 2, the JSON output contains a `pending_decisions` list. Present each decision to the user, collect answers, and re-run with the appropriate flags.
+
+4. **Handle exit code 1** (error): Print the error and stop.
+
+5. **Jira operations** (optional — only when the JSON result contains a `jira` section with an `issue_key`):
+   1. Read `jira.config` from the script output
+   2. **Assign** — based on `auto_assign`:
+      - `never` → skip assignment
+      - `auto` → get current user via `jira_users_current`, assign via `jira_issues_assign`
+      - `prompt` → ask user "Assign this Jira issue to you? (yes/no)", if yes → assign
+   3. **Transition** — execute the `transitions.on_create` hook using the Jira transition procedure:
+      - Read `transitions.on_create` → `{to, mode, only_from}`
+      - If `to` is empty or `mode` is `never` → skip
+      - If `mode` is `prompt` → ask user "Transition issue to '<to>'? (yes/no)", if no → skip
+      - If `only_from` is non-empty: get current issue status via `jira_issues_get`. If current status is NOT in `only_from` → skip with message "Issue is '<current_status>', skipping transition"
+      - List available transitions via `jira_transitions_list` MCP tool
+      - Find the transition whose name matches `to` (case-insensitive)
+      - Execute via `jira_issues_transition` MCP tool
+      - If no matching transition found, warn and continue
+   4. If both `auto_assign == "never"` and `transitions.on_create.to` is empty → skip this step entirely
+   5. If any Jira operation fails (MCP server unavailable, auth error, etc.), print a warning and continue — Jira integration is non-blocking
+
+   **Note:** Jira MCP tools (`jira_users_current`, `jira_issues_assign`, `jira_transitions_list`, `jira_issues_transition`, `jira_issues_get`) require MCP server access. If MCP tools are unavailable (e.g., on OpenCode subtasks), skip Jira operations and print: "Jira integration skipped (MCP tools unavailable). Transition/assign manually if needed."
+
+6. **Print formatted result**: Display the result from the JSON output:
 
 ```
-Worktree created:
-  Path:       <worktree_path>
-  Branch:     <branch_name> (based on <current_branch>)
+Worktree ready:
   Task:       TASK_XXX
-  Task state: <main_repo_absolute_path>/.tasks/TASK_XXX/
-  Setup:      .tasks/ symlinked, settings copied (or "settings copy skipped")
-  Deps:       <installed | skipped | failed (reason)>
+  Directory:  <worktree_path>
+  Branch:     <branch_name> (based on <base_branch>)
+  Recycled:   yes, from <recycled_from>  |  no (fresh)
+  Task state: <main_repo_path>/.tasks/TASK_XXX/
+  Setup:      <summary.setup>
+  Jira:       assigned + transitioned to "In Progress" | skipped | failed (reason)
+  Deps:       <summary.deps>
+  Post-setup: <summary.post_setup>
 
 To start the workflow, open a new terminal and run:
 
@@ -84,30 +100,16 @@ To start the workflow, open a new terminal and run:
 
 Then start your AI assistant (claude / gemini / copilot) and give it this prompt:
 
-  Resume crew workflow TASK_XXX.
-  This is a git worktree — DO NOT create a new .tasks/ directory here.
-  The task state lives in the main repo at:
-    <main_repo_absolute_path>/.tasks/TASK_XXX/
-  Read and write all task state using that absolute path.
-  A .tasks/ symlink exists in this worktree for convenience, but always
-  prefer the absolute path above for reliability.
-  /crew resume TASK_XXX          ← for Claude
-  @crew-resume TASK_XXX          ← for Gemini / Copilot
+  <resume_prompt>
 ```
 
-12. **Auto-launch worktree session** (optional):
-   Check config via `config_get_effective()` → `worktree.auto_launch`:
-   - `never` → skip to Step 13
-   - `prompt` → ask user: "Launch a new terminal session in the worktree? (yes/no)"
-   - `auto` or user said yes → proceed with detection
+If `launch.launched` is true, skip the manual instructions — the session was already launched.
 
-   **Detect terminal environment** (run bash checks in order):
-   1. `echo $TMUX` — non-empty → `tmux`
-   2. `which wt.exe 2>/dev/null` — found → `windows_terminal`
-   3. `uname -s` = "Darwin" → `macos`
-   4. Otherwise → `linux_generic`
+   **Detect terminal environment** (cross-platform — use Python or `setup-worktree.py --json`):
+   - The `setup-worktree.py --json` output includes `launch.terminal_env` — use that value directly.
+   - If detecting manually: check `$TMUX` env var → `tmux`; on WSL check for `wt.exe` on PATH → `windows_terminal`; `platform.system() == "Darwin"` → `macos`; `platform.system() == "Windows"` (non-WSL) → `windows_native`; otherwise → `linux_generic`.
 
-   **Use AI host** from step 5 (`<ai_host>`).
+   **Use AI host** from step 6 (`<ai_host>`).
 
    **Resolve launch mode** from config → `worktree.terminal_launch_mode`:
    - `auto` (default) → platform default: tmux uses window, Windows Terminal uses tab, macOS uses window
@@ -116,13 +118,13 @@ Then start your AI assistant (claude / gemini / copilot) and give it this prompt
 
    **Get main repo path**: Run `pwd`
 
-   **Call**: `workflow_get_launch_command(task_id, terminal_env, ai_host, main_repo_path, launch_mode)`
+   **Call**: `workflow_get_launch_command(task_id, terminal_env, ai_host, main_repo_path, launch_mode)` MCP tool. If MCP tools are unavailable, the launch commands are already included in the `setup-worktree.py --json` output under `launch.commands` — use those directly.
 
    **Execute** the returned `launch_commands` via bash.
 
-   Print success/failure status. If the returned `warnings` mention that the CLI doesn't support auto-prompts (e.g., Copilot), print the resume prompt text so the user can paste it manually. On failure, remind user of manual instructions from Step 11.
+   Print success/failure status. If the returned `warnings` mention that the CLI doesn't support auto-prompts (e.g., Copilot), print the resume prompt text so the user can paste it manually. On failure, remind user of manual instructions from Step 15.
 
-13. **STOP** — do nothing else. Do not start agents, do not fetch issues, do not continue.
+17. **STOP** — do nothing else. Do not start agents, do not fetch issues, do not continue.
 
 ### Example
 

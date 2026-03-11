@@ -24,9 +24,9 @@ custom_phases:
     command: "python3 scripts/check-encodings.py {task_id}"
     timeout: 60
 
-  # Run a custom security scan after the reviewer
+  # Run a custom security scan after the planner
   deep_security:
-    after: reviewer
+    after: planner
     type: agent
     prompt_file: "agents/deep-security.md"
     condition:
@@ -81,7 +81,7 @@ Spawns a general-purpose subagent using a custom prompt file.
 ```yaml
 custom_phases:
   compliance_review:
-    after: developer
+    after: planner
     type: agent
     prompt_file: "agents/compliance.md"  # Required: path to prompt markdown
     condition:
@@ -98,8 +98,7 @@ Every custom phase must specify exactly one of `after` or `before`:
 | Position | Meaning | Example |
 |----------|---------|---------|
 | `after: init` | Before the first agent phase (post-initialization) | Pre-planning triage |
-| `after: architect` | Immediately after architect completes | Post-architecture validation |
-| `after: developer` | Immediately after developer completes | Plan enrichment |
+| `after: planner` | Immediately after planner completes | Post-planning validation |
 | `after: reviewer` | Immediately after reviewer completes | Extra review step |
 | `before: implementer` | Immediately before implementer starts | Pre-implementation setup |
 | `before: complete` | After all agents, before workflow completion | Final checks |
@@ -137,7 +136,7 @@ Runs only in specific workflow modes. Supports aliases (`full` = `thorough`, `tu
 
 ```yaml
 condition:
-  mode_in: [thorough, reviewed]   # Only for thorough/reviewed modes
+  mode_in: [thorough]             # Only for thorough mode
 ```
 
 ### `file_patterns: ["glob1", "glob2"]`
@@ -231,14 +230,14 @@ custom_phases:
     writes_to_state: true
 ```
 
-### Example 4: Thorough-Only Architecture Validation
+### Example 4: Thorough-Only Plan Validation
 
-Run an extra architecture validation step, but only in thorough mode.
+Run an extra plan validation step, but only in thorough mode.
 
 ```yaml
 custom_phases:
-  arch_validation:
-    after: architect
+  plan_validation:
+    after: planner
     type: script
     command: "python3 scripts/validate-architecture.py {task_dir}"
     condition:
@@ -275,7 +274,7 @@ custom_phases:
     type: skill
     skill: "generate-changelog"
     condition:
-      mode_in: [thorough, reviewed]
+      mode_in: [thorough, standard]
 ```
 
 ## Configuration Cascade

@@ -488,14 +488,33 @@ class TestCrewInitTask:
 # ============================================================================
 
 class TestCrewGetNextPhase:
+    def _clear_custom_phases(self, clean_tasks_dir, task_id):
+        """Write task-level config to nullify any project-level custom_phases."""
+        import yaml
+        task_dir = clean_tasks_dir / task_id
+        config_path = task_dir / "config.yaml"
+        config_data = {}
+        if config_path.exists():
+            with open(config_path) as f:
+                config_data = yaml.safe_load(f) or {}
+        # Set project-level custom phases to None so they're skipped by
+        # _load_custom_phases (which filters non-dict entries)
+        config_data["custom_phases"] = {
+            "product_manager": None,
+            "ba_designer": None,
+        }
+        with open(config_path, "w") as f:
+            yaml.dump(config_data, f)
+
     def test_first_phase_full_mode(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_001", description="Test task")
         workflow_set_mode(mode="thorough", task_id="TASK_ORCH_001")
+        self._clear_custom_phases(clean_tasks_dir, "TASK_ORCH_001")
 
         result = crew_get_next_phase(task_id="TASK_ORCH_001")
         # Phase is None after initialize — crew_get_next_phase returns spawn_agent for first phase
         assert result.get("action") == "spawn_agent"
-        assert result.get("agent") == "architect"
+        assert result.get("agent") == "planner"
 
     def test_next_after_architect(self, clean_tasks_dir):
         init = workflow_initialize(task_id="TASK_ORCH_001B", description="Test task")
@@ -514,7 +533,7 @@ class TestCrewGetNextPhase:
         workflow_set_mode(mode="thorough", task_id="TASK_ORCH_002")
 
         # Complete all thorough mode phases sequentially
-        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer", "quality_guard", "technical_writer"]:
+        for phase in ["planner", "reviewer", "implementer", "quality_guard", "security_auditor", "technical_writer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_002")
             workflow_complete_phase(task_id="TASK_ORCH_002")
 
@@ -525,23 +544,22 @@ class TestCrewGetNextPhase:
         result = crew_get_next_phase(task_id="TASK_NONEXISTENT")
         assert "error" in result
 
-    def test_quality_guard_parallel_with_technical_writer(self, clean_tasks_dir):
-        """quality_guard should carry parallel_with=technical_writer when config enables it."""
+    def test_quality_guard_parallel_with_security_auditor(self, clean_tasks_dir):
+        """quality_guard should carry parallel_with=security_auditor when config enables it."""
         from unittest.mock import patch as mock_patch
         import agentic_workflow_server.orchestration_tools as _orch
 
-        workflow_initialize(task_id="TASK_ORCH_009", description="Test parallel QG+TW")
+        workflow_initialize(task_id="TASK_ORCH_009", description="Test parallel QG+SA")
         workflow_set_mode(mode="thorough", task_id="TASK_ORCH_009")
 
         # Complete all phases up to quality_guard
-        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer"]:
+        for phase in ["planner", "reviewer", "implementer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_009")
             workflow_complete_phase(task_id="TASK_ORCH_009")
 
         mock_config = {
             "parallelization": {
-                "reviewer_skeptic": {"enabled": True},
-                "quality_guard_technical_writer": {"enabled": True},
+                "quality_guard_security_auditor": {"enabled": True},
             },
             "models": {"default": "opus", "thorough": {}},
             "subagent_limits": {"max_turns": {}},
@@ -555,24 +573,61 @@ class TestCrewGetNextPhase:
 
         assert result.get("action") == "spawn_agent"
         assert result.get("agent") == "quality_guard"
-        assert result.get("parallel_with") == "technical_writer"
+        assert result.get("parallel_with") == "security_auditor"
+        assert "parallel_agent_model" in result
+        assert "parallel_effort_level" in result
+
+    def test_parallel_agent_model_from_config(self, clean_tasks_dir):
+        """parallel_agent_model should use mode-specific model config for the parallel agent."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_011", description="Test parallel model")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_011")
+
+        for phase in ["planner", "reviewer", "implementer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_011")
+            workflow_complete_phase(task_id="TASK_ORCH_011")
+
+        mock_config = {
+            "parallelization": {
+                "quality_guard_security_auditor": {"enabled": True},
+            },
+            "models": {
+                "default": "opus",
+                "thorough": {
+                    "quality_guard": "sonnet",
+                    "security_auditor": "sonnet",
+                },
+            },
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"quality_guard": {}},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_011")
+
+        assert result.get("model") == "sonnet"
+        assert result.get("parallel_agent_model") == "sonnet"
+        assert result.get("parallel_effort_level") in ("high", "medium", "low")
 
     def test_quality_guard_no_parallel_when_disabled(self, clean_tasks_dir):
-        """When quality_guard_technical_writer disabled, no parallel_with is set."""
+        """When quality_guard_security_auditor disabled, no parallel_with is set."""
         from unittest.mock import patch as mock_patch
         import agentic_workflow_server.orchestration_tools as _orch
 
         workflow_initialize(task_id="TASK_ORCH_010", description="Test QG no parallel")
         workflow_set_mode(mode="thorough", task_id="TASK_ORCH_010")
 
-        for phase in ["architect", "developer", "reviewer", "skeptic", "implementer"]:
+        for phase in ["planner", "reviewer", "implementer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_010")
             workflow_complete_phase(task_id="TASK_ORCH_010")
 
         mock_config = {
             "parallelization": {
-                "reviewer_skeptic": {"enabled": True},
-                "quality_guard_technical_writer": {"enabled": False},
+                "quality_guard_security_auditor": {"enabled": False},
             },
             "models": {"default": "opus", "thorough": {}},
             "subagent_limits": {"max_turns": {}},
@@ -669,7 +724,7 @@ class TestCrewGetResumeState:
         workflow_initialize(task_id="TASK_ORCH_008", description="Implementation task")
         workflow_set_mode(mode="thorough", task_id="TASK_ORCH_008")
         # Transition through all planning phases to implementer
-        for phase in ["architect", "developer", "reviewer", "skeptic"]:
+        for phase in ["planner", "reviewer"]:
             workflow_transition(to_phase=phase, task_id="TASK_ORCH_008")
             workflow_complete_phase(task_id="TASK_ORCH_008")
         workflow_transition(to_phase="implementer", task_id="TASK_ORCH_008")
@@ -850,12 +905,12 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_001", description="Checkpoint test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_001")
-        workflow_transition("architect", task_id="TASK_ORCH_CP_001")
+        workflow_transition("planner", task_id="TASK_ORCH_CP_001")
 
-        # Config with after_architect: true and threshold=0
+        # Config with after_planner: true and threshold=0
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": True},
+                "planning": {"after_planner": True},
                 "concern_threshold": 0,
             },
             "models": {"default": "opus"},
@@ -875,11 +930,11 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_002", description="Threshold test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_002")
-        workflow_transition("architect", task_id="TASK_ORCH_CP_002")
+        workflow_transition("planner", task_id="TASK_ORCH_CP_002")
 
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": True},
+                "planning": {"after_planner": True},
                 "concern_threshold": 1,
                 "concern_severity_threshold": "low",
             },
@@ -899,11 +954,11 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_003", description="Concern threshold test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_003")
-        workflow_transition("architect", task_id="TASK_ORCH_CP_003")
+        workflow_transition("planner", task_id="TASK_ORCH_CP_003")
 
         # Add a concern
         workflow_add_concern(
-            source="architect",
+            source="planner",
             severity="high",
             description="Security risk in auth flow",
             task_id="TASK_ORCH_CP_003"
@@ -911,7 +966,7 @@ class TestDeterministicCheckpoints:
 
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": True},
+                "planning": {"after_planner": True},
                 "concern_threshold": 1,
                 "concern_severity_threshold": "medium",
             },
@@ -932,11 +987,11 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_004", description="Severity filter test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_004")
-        workflow_transition("architect", task_id="TASK_ORCH_CP_004")
+        workflow_transition("planner", task_id="TASK_ORCH_CP_004")
 
         # Add a low-severity concern
         workflow_add_concern(
-            source="architect",
+            source="planner",
             severity="low",
             description="Minor style issue",
             task_id="TASK_ORCH_CP_004"
@@ -944,7 +999,7 @@ class TestDeterministicCheckpoints:
 
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": True},
+                "planning": {"after_planner": True},
                 "concern_threshold": 1,
                 "concern_severity_threshold": "high",  # Only high+ counts
             },
@@ -963,12 +1018,12 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_005", description="No checkpoint test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_005")
-        # Transition to architect (first phase) — phase is active but not completed
-        workflow_transition("architect", task_id="TASK_ORCH_CP_005")
+        # Transition to planner (first phase) — phase is active but not completed
+        workflow_transition("planner", task_id="TASK_ORCH_CP_005")
 
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": False},  # Explicitly off
+                "planning": {"after_planner": False},  # Explicitly off
             },
             "models": {"default": "opus"},
         }
@@ -985,11 +1040,11 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_006", description="Structured question test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_006")
-        workflow_transition("architect", task_id="TASK_ORCH_CP_006")
+        workflow_transition("planner", task_id="TASK_ORCH_CP_006")
 
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": True},
+                "planning": {"after_planner": True},
                 "concern_threshold": 0,
             },
             "models": {"default": "opus"},
@@ -1016,16 +1071,16 @@ class TestDeterministicCheckpoints:
 
         workflow_initialize(task_id="TASK_ORCH_CP_007", description="Summary test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_007")
-        workflow_transition("architect", task_id="TASK_ORCH_CP_007")
+        workflow_transition("planner", task_id="TASK_ORCH_CP_007")
 
         workflow_add_concern(
-            source="architect",
+            source="planner",
             severity="critical",
             description="SQL injection vulnerability in user input handler",
             task_id="TASK_ORCH_CP_007"
         )
         workflow_add_concern(
-            source="architect",
+            source="planner",
             severity="medium",
             description="Missing rate limiting",
             task_id="TASK_ORCH_CP_007"
@@ -1033,7 +1088,7 @@ class TestDeterministicCheckpoints:
 
         mock_config = {
             "checkpoints": {
-                "planning": {"after_architect": True},
+                "planning": {"after_planner": True},
                 "concern_threshold": 0,
             },
             "models": {"default": "opus"},

@@ -6,7 +6,7 @@ Manages state for the enforced multi-agent workflow. State is stored in JSON fil
 within each task directory (.tasks/TASK_XXX/state.json).
 
 The workflow follows this phase order:
-    architect -> developer -> reviewer -> skeptic -> implementer -> quality_guard -> technical_writer
+    planner -> reviewer -> implementer -> quality_guard -> technical_writer
 
 Usage:
     from workflow_state import WorkflowState
@@ -26,20 +26,18 @@ from typing import Optional
 
 
 PHASE_ORDER = [
-    "architect",
-    "developer",
+    "planner",
     "reviewer",
-    "skeptic",
     "implementer",
     "quality_guard",
+    "security_auditor",
     "technical_writer"
 ]
 
 REQUIRED_PHASES = [
-    "architect",
-    "developer",
+    "planner",
     "implementer",
-    "quality_guard"
+    "technical_writer"
 ]
 
 

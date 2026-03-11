@@ -3,6 +3,14 @@ name: crew-performance-analyst
 description: "Performance Analyst — identifies bottlenecks and scalability issues"
 ---
 
+## Worktree Auto-Resume
+
+If a `.crew-resume` file exists in the repository root, you are in a **git worktree** created by crew-board. On session startup:
+1. Read `.crew-resume` immediately
+2. Note the `task_id` and `tasks_path` values
+3. Run the resume command shown in the file (e.g., `@crew-resume TASK_XXX`)
+4. Do NOT create a new `.tasks/` directory — the symlink already points to the main repo
+
 ## Tool Discipline
 
 Use direct tools for codebase exploration:
@@ -106,6 +114,8 @@ This agent runs automatically when the task involves:
 
 ## Summary
 [1-2 sentences: Overall performance assessment and primary concerns]
+
+See `{knowledge_base}/severity-scale.md` for severity definitions.
 
 ## Critical Issues (Will cause production problems)
 
@@ -247,41 +257,40 @@ Performance debt compounds - fix it early or pay later with downtime.
 
 ## Memory Preservation
 
-During long workflows, context may be compacted. Use the discovery tools to preserve critical learnings:
+See `{knowledge_base}/memory-preservation.md` for the full protocol. Use `workflow_save_discovery()` to save important findings. Categories for this agent: `blocker`, `gotcha`, `pattern`.
 
-### When to Save Discoveries
-
-Save performance findings that must be addressed:
-
-```
-workflow_save_discovery(category="blocker", content="N+1 query in getOrdersWithItems - Step 3.1 makes DB call per order")
-workflow_save_discovery(category="gotcha", content="UserCache has no eviction policy - will grow unbounded")
-workflow_save_discovery(category="pattern", content="Existing code uses connection pool size 20 - maintain for consistency")
-```
-
-### Categories to Use
-
-| Category | What to Save |
-|----------|--------------|
-| `blocker` | Critical performance issues that will cause production problems |
-| `gotcha` | Performance traps or scaling concerns |
-| `pattern` | Existing performance patterns to follow |
+Save critical performance issues, performance traps or scaling concerns, and existing performance patterns to follow.
 
 ---
 
 ## Completion Signals
 
-When your analysis is complete, output:
-```
-<promise>PERFORMANCE_ANALYST_COMPLETE</promise>
-```
+See `{knowledge_base}/completion-signals.md` for the full promise protocol.
 
-If critical performance issues require architecture changes:
-```
-<promise>BLOCKED: [performance issue requiring design change]</promise>
-```
+When your analysis is complete: `<promise>PERFORMANCE_ANALYST_COMPLETE</promise>`
+If critical performance issues require architecture changes: `<promise>BLOCKED: [performance issue requiring design change]</promise>`
+If you find scaling issues that need business decision: `<promise>ESCALATE: [scaling concern requiring capacity planning]</promise>`
 
-If you find scaling issues that need business decision:
-```
-<promise>ESCALATE: [scaling concern requiring capacity planning]</promise>
-```
+## Shared Agent Standards
+
+### Memory Preservation
+
+Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.
+
+At start of your phase, call `workflow_get_discoveries()` or `workflow_flush_context()` to load findings from earlier phases. At end, save decisions, patterns, gotchas, and blockers relevant to downstream agents.
+
+### Documentation Gap Flagging
+
+When you encounter undocumented or outdated code, call `workflow_mark_docs_needed()` to flag it for the Technical Writer. See `{knowledge_base}/doc-gap-flagging.md` for details.
+
+### Completion Signals
+
+See `{knowledge_base}/completion-signals.md` for the full promise protocol. Every agent must emit exactly one of these when finished:
+
+- `<promise>AGENT_COMPLETE</promise>` -- replace AGENT with your role name (e.g., `ARCHITECT_COMPLETE`)
+- `<promise>BLOCKED: [reason]</promise>` -- cannot proceed without human input
+- `<promise>ESCALATE: [reason]</promise>` -- critical concern requiring immediate attention
+
+### Severity Scale
+
+When rating issues use the project severity scale. See `{knowledge_base}/severity-scale.md` for definitions of Critical / High / Medium / Low.

@@ -1178,8 +1178,8 @@ def crew_get_next_phase(
     # Build the full sequence: mode phases + optional phases (after reviewer) + custom phases
     full_sequence = list(mode_phases)
 
-    # Insert optional phases after reviewer (or after developer if no reviewer)
-    insert_after = "reviewer" if "reviewer" in full_sequence else "developer"
+    # Insert optional phases after reviewer (or after planner/developer if no reviewer)
+    insert_after = "reviewer" if "reviewer" in full_sequence else ("planner" if "planner" in full_sequence else "developer")
     if insert_after in full_sequence:
         insert_idx = full_sequence.index(insert_after) + 1
         for opt_phase in optional_phases:
@@ -1249,14 +1249,14 @@ def crew_get_next_phase(
         if "skeptic" not in phases_completed and skeptic_idx > next_idx:
             parallel_with = "skeptic"
 
-    # Check for parallel execution (quality_guard + technical_writer)
+    # Check for parallel execution (quality_guard + security_auditor)
     if parallel_with is None:
-        qg_tw_config = config.get("parallelization", {}).get("quality_guard_technical_writer", {})
-        qg_tw_enabled = qg_tw_config.get("enabled", False)
-        if qg_tw_enabled and next_agent == "quality_guard" and "technical_writer" in full_sequence:
-            tw_idx = full_sequence.index("technical_writer")
-            if "technical_writer" not in phases_completed and tw_idx > next_idx:
-                parallel_with = "technical_writer"
+        qg_sa_config = config.get("parallelization", {}).get("quality_guard_security_auditor", {})
+        qg_sa_enabled = qg_sa_config.get("enabled", False)
+        if qg_sa_enabled and next_agent == "quality_guard" and "security_auditor" in full_sequence:
+            sa_idx = full_sequence.index("security_auditor")
+            if "security_auditor" not in phases_completed and sa_idx > next_idx:
+                parallel_with = "security_auditor"
 
     return _build_phase_action(next_agent, state, config, task_dir, parallel_with=parallel_with)
 
@@ -1337,8 +1337,14 @@ def _build_phase_action(
         "task_id": task_id,
     }
 
+    # Inject convention files for implementer, quality_guard, and security_auditor
+    if agent in ("implementer", "quality_guard", "security_auditor"):
+        convention_files = _get_ai_context_convention_files(state)
+        if convention_files:
+            result["convention_files"] = convention_files
+
     # Provide git diff commands for agents that need code change context
-    if agent in ("technical_writer", "quality_guard"):
+    if agent in ("technical_writer", "quality_guard", "security_auditor"):
         wt = state.get("worktree") or {}
         base_branch = wt.get("base_branch", "main")
         result["git_diff_command"] = f"git diff {base_branch}...HEAD"
@@ -1350,7 +1356,13 @@ def _build_phase_action(
         par_prompt_file = AGENT_PROMPT_FILES.get(parallel_with, f"{parallel_with}.md")
         result["parallel_agent_prompt_path"] = str(agents_dir / par_prompt_file)
         par_category = AGENT_LIMIT_CATEGORY.get(parallel_with, "planning_agents")
-        result["parallel_max_turns"] = SUBAGENT_LIMITS.get(par_category, 30)
+        result["parallel_max_turns"] = subagent_limits.get(par_category, SUBAGENT_LIMITS.get(par_category, 30))
+        # Model for parallel agent (same fallback chain as primary)
+        par_model = mode_models.get(parallel_with) or models_config.get(parallel_with) or default_model
+        result["parallel_agent_model"] = par_model
+        # Effort level for parallel agent
+        par_effort_result = workflow_get_effort_level(agent=parallel_with, task_id=task_id)
+        result["parallel_effort_level"] = par_effort_result.get("effort", "high")
 
     if beads_comment:
         result["beads_comment"] = beads_comment
@@ -1367,16 +1379,25 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
     if task_md.exists():
         files.append(str(task_md))
 
-    # Agent-specific context
+    # Agent-specific context — support both old (architect/developer) and new (planner) outputs
     if agent in ("developer", "reviewer", "skeptic"):
+        # Old pipeline: architect output
         arch_output = task_dir / "architect.md"
         if arch_output.exists():
             files.append(str(arch_output))
+        # New pipeline: planner output
+        planner_output = task_dir / "planner.md"
+        if planner_output.exists():
+            files.append(str(planner_output))
 
     if agent in ("reviewer", "skeptic", "implementer"):
         dev_output = task_dir / "developer.md"
         if dev_output.exists():
             files.append(str(dev_output))
+        # New pipeline: planner output (if not already added)
+        planner_output = task_dir / "planner.md"
+        if planner_output.exists() and str(planner_output) not in files:
+            files.append(str(planner_output))
 
     if agent == "implementer":
         plan = task_dir / "plan.md"
@@ -1388,33 +1409,42 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         skeptic_output = task_dir / "skeptic.md"
         if skeptic_output.exists():
             files.append(str(skeptic_output))
+        context_map = task_dir / "context-map.md"
+        if context_map.exists():
+            files.append(str(context_map))
 
     if agent == "quality_guard":
-        # Quality guard now also handles plan-vs-reality validation (absorbed from feedback)
-        arch_output = task_dir / "architect.md"
-        if arch_output.exists():
-            files.append(str(arch_output))
-        dev_output = task_dir / "developer.md"
-        if dev_output.exists():
-            files.append(str(dev_output))
+        # Quality guard needs planner or architect/developer outputs for plan-vs-reality validation
+        for name in ["planner.md", "architect.md", "developer.md"]:
+            f = task_dir / name
+            if f.exists():
+                files.append(str(f))
         plan = task_dir / "plan.md"
         if plan.exists():
             files.append(str(plan))
         impl_output = task_dir / "implementer.md"
         if impl_output.exists():
             files.append(str(impl_output))
+        context_map = task_dir / "context-map.md"
+        if context_map.exists():
+            files.append(str(context_map))
 
     if agent == "technical_writer":
         # Technical writer needs all prior agent outputs to capture
         # documentation gaps, patterns, and findings from every phase
         for name in [
-            "task.md", "architect.md", "developer.md",
+            "task.md", "planner.md", "architect.md", "developer.md",
             "reviewer.md", "skeptic.md", "implementer.md",
-            "quality-guard.md",
+            "quality-guard.md", "context-map.md",
         ]:
             f = task_dir / name
             if f.exists():
                 files.append(str(f))
+
+    if agent == "security_auditor":
+        context_map = task_dir / "context-map.md"
+        if context_map.exists():
+            files.append(str(context_map))
 
     # Gemini analysis if available
     gemini = task_dir / "gemini-analysis.md"
@@ -1422,6 +1452,37 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         files.append(str(gemini))
 
     return files
+
+
+# Max total bytes for ai-context injection to avoid prompt bloat
+_AI_CONTEXT_MAX_BYTES = 50 * 1024  # 50KB
+
+
+def _get_ai_context_convention_files(state: dict) -> list[str]:
+    """Read ai_context_refs from state and return paths that exist.
+
+    Caps total file size at ~50KB to avoid prompt bloat.
+    """
+    refs = state.get("ai_context_refs", [])
+    if not refs:
+        return []
+
+    result = []
+    total_size = 0
+    for ref in refs:
+        p = Path(ref)
+        if not p.is_absolute():
+            p = _REPO_ROOT / ref
+        if p.exists() and p.is_file():
+            try:
+                size = p.stat().st_size
+                if total_size + size > _AI_CONTEXT_MAX_BYTES:
+                    break
+                total_size += size
+                result.append(str(p))
+            except OSError:
+                continue
+    return result
 
 
 def _get_checkpoint_for_phase(phase: str, config: dict) -> Optional[str]:
@@ -1611,7 +1672,23 @@ def crew_parse_agent_output(
         if recommendation == "REVISE":
             has_blocking_issues = True
 
-    # Parse <concerns> (from skeptic)
+    # Parse <ai_context_refs> (from planner)
+    ai_ctx_match = re.search(r'<ai_context_refs>\s*(\[.*?\])\s*</ai_context_refs>', output_text, re.DOTALL)
+    if ai_ctx_match:
+        try:
+            refs = json.loads(ai_ctx_match.group(1))
+            extracted["ai_context_refs"] = refs
+            # Persist to state so implementer/quality_guard can use them
+            if task_id:
+                task_dir = find_task_dir(task_id)
+                if task_dir:
+                    st = _load_state(task_dir)
+                    st["ai_context_refs"] = refs
+                    _save_state(task_dir, st)
+        except json.JSONDecodeError:
+            extracted["ai_context_refs_parse_error"] = ai_ctx_match.group(1)
+
+    # Parse <concerns> (from reviewer or skeptic)
     concerns_match = re.search(r'<concerns>\s*(\[.*?\])\s*</concerns>', output_text, re.DOTALL)
     if concerns_match:
         try:

@@ -15,7 +15,7 @@ Read `.tasks/TASK_XXX/state.json`:
   "task_id": "TASK_042",
   "description": "Add user authentication with JWT",
   "phase": "implementer",
-  "phases_completed": ["architect", "developer", "reviewer", "skeptic"],
+  "phases_completed": ["planner", "reviewer"],
   "review_issues": [],
   "iteration": 1,
   "docs_needed": [],
@@ -32,10 +32,8 @@ Read `.tasks/TASK_XXX/state.json`:
 ### Step 2: Load Context
 
 Load all saved artifacts:
-- `.tasks/TASK_XXX/architect.md` - Architect analysis
-- `.tasks/TASK_XXX/developer.md` - Developer plan
+- `.tasks/TASK_XXX/planner.md` - Planner analysis and plan
 - `.tasks/TASK_XXX/reviewer.md` - Reviewer feedback
-- `.tasks/TASK_XXX/skeptic.md` - Skeptic concerns
 - `.tasks/TASK_XXX/plan.md` - Final implementation plan
 
 ### Step 3: Determine Resume Point
