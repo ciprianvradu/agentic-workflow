@@ -13,6 +13,14 @@
 #
 # This allows different repos and tasks to have different settings
 
+# Permission Profile — controls checkpoints and auto_actions as a unit
+# Profiles: strict | standard | autonomous
+#   strict:     All checkpoints enabled; create_files and modify_files disabled
+#   standard:   Default — balanced checkpoints; file creation/modification enabled
+#   autonomous: Minimal checkpoints (only before_commit); git_add and git_commit enabled
+# Individual checkpoints and auto_actions keys always override the profile.
+permission_profile: standard
+
 # Checkpoint configuration - when to pause for human approval
 checkpoints:
   planning:

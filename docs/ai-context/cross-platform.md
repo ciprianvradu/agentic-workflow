@@ -170,6 +170,18 @@ Each platform limits what tools sub-agents can use, defined in `build-agents.py`
 - **Gemini**: Explicit tool allowlists per agent (`GEMINI_AGENT_TOOLS` dict), plus `max_turns` limits (`GEMINI_MAX_TURNS`)
 - **OpenCode**: Tool deny-maps per agent (`OPENCODE_AGENT_TOOLS` dict), e.g., `{"write": false, "edit": false}` to restrict read-only agents
 
+### Permission Profile Presets
+
+The `permission_profile` config key (`strict` / `standard` / `autonomous`) applies uniformly across all platforms because it is resolved at the MCP server level before any platform-specific logic runs. A `--profile <name>` flag passed to `/crew` or the orchestrator CLI overrides the config file value.
+
+| Profile | Checkpoints | Auto-actions | Typical use |
+|---|---|---|---|
+| `strict` | All phases | Minimal (read-only) | Regulated codebases, security-sensitive work |
+| `standard` | Key phases | Default | Normal development (default) |
+| `autonomous` | Minimal | Git operations enabled | Batch / CI-like runs with low interruption |
+
+No platform-specific installer changes are needed when switching profiles — the setting lives in `workflow-config.yaml` (or as a CLI flag) and the MCP server handles it uniformly.
+
 ### Host-aware Planner Mode
 
 When the orchestrator spawns the planner agent, it injects a `planner_mode` variable based on the `host_aware` config section (see [architecture.md](./architecture.md#host-aware-planner-mode) for the full resolution logic).

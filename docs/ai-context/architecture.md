@@ -147,11 +147,12 @@ The detection logic is in `workflow_detect_mode()` — pure Python, no LLM invol
 **Config caching**: `config_get_effective()` caches merged results with a 5-minute TTL. The cache key is based on file paths and their `mtime` values, so editing any config file invalidates the cache on the next call. The cache is per-process only — restarting the MCP server always starts fresh.
 
 Key config sections:
-- `checkpoints` — Which human approval points are active per phase
+- `permission_profile` — Preset that controls both `checkpoints` and `auto_actions` as a single setting. Values: `strict` (all checkpoints, minimal auto), `standard` (current default), `autonomous` (minimal checkpoints, git auto-enabled). Can be overridden by the `--profile` CLI flag passed to `crew_parse_args()`.
+- `checkpoints` — Which human approval points are active per phase (overrides `permission_profile` when set explicitly)
 - `knowledge_base` — Path to AI context docs (default: `docs/ai-context/`)
 - `models` — Which AI model each agent uses
 - `worktree` — Worktree settings (base_path, auto_launch, terminal_launch_mode, ai_host, jira, etc.)
-- `auto_actions` — What agents can do without asking (run_tests, git_add, etc.)
+- `auto_actions` — What agents can do without asking (run_tests, git_add, etc.) (overrides `permission_profile` when set explicitly)
 - `loop_mode` — Autonomous execution settings
 - `max_iterations` — Retry limits per phase type
 - `documentation` — Async documentation mode settings (async_mode, auto_commit_docs, notify_on_complete)

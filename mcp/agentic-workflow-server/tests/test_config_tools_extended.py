@@ -20,6 +20,7 @@ from agentic_workflow_server.config_tools import (
     _get_task_config_path,
     _is_beads_installed,
     _is_beads_initialized,
+    _resolve_permission_profile,
     config_get_effective,
     config_get_checkpoint,
     config_get_model,
@@ -27,6 +28,7 @@ from agentic_workflow_server.config_tools import (
     config_get_loop_mode,
     config_get_beads,
     DEFAULT_CONFIG,
+    PERMISSION_PROFILES,
     PLATFORM_DIRS,
 )
 
@@ -636,6 +638,206 @@ class TestGetValidKeys:
         assert "checkpoints.planning" in keys
         assert "checkpoints.planning.after_architect" in keys
         assert "models.architect" in keys
+
+
+# ============================================================================
+# TestPermissionProfiles
+# ============================================================================
+
+class TestPermissionProfiles:
+    """Tests for PERMISSION_PROFILES constant and _resolve_permission_profile()."""
+
+    # --- Profile constant validation ---
+
+    def test_all_three_profiles_exist(self):
+        assert "strict" in PERMISSION_PROFILES
+        assert "standard" in PERMISSION_PROFILES
+        assert "autonomous" in PERMISSION_PROFILES
+
+    def test_each_profile_has_checkpoints_and_auto_actions(self):
+        for name, profile in PERMISSION_PROFILES.items():
+            assert "checkpoints" in profile, f"{name} missing checkpoints"
+            assert "auto_actions" in profile, f"{name} missing auto_actions"
+
+    def test_strict_all_checkpoints_true(self):
+        strict = PERMISSION_PROFILES["strict"]
+        planning = strict["checkpoints"]["planning"]
+        impl = strict["checkpoints"]["implementation"]
+        for key, val in planning.items():
+            assert val is True, f"strict.checkpoints.planning.{key} should be True"
+        for key, val in impl.items():
+            assert val is True, f"strict.checkpoints.implementation.{key} should be True"
+
+    def test_strict_create_and_modify_files_false(self):
+        strict = PERMISSION_PROFILES["strict"]
+        actions = strict["auto_actions"]
+        assert actions["create_files"] is False
+        assert actions["modify_files"] is False
+
+    def test_autonomous_only_before_commit_true(self):
+        autonomous = PERMISSION_PROFILES["autonomous"]
+        impl = autonomous["checkpoints"]["implementation"]
+        assert impl["before_commit"] is True
+        assert impl["at_25_percent"] is False
+        assert impl["at_50_percent"] is False
+        assert impl["at_75_percent"] is False
+
+    def test_autonomous_git_add_and_commit_true(self):
+        autonomous = PERMISSION_PROFILES["autonomous"]
+        actions = autonomous["auto_actions"]
+        assert actions["git_add"] is True
+        assert actions["git_commit"] is True
+
+    def test_autonomous_git_push_false(self):
+        autonomous = PERMISSION_PROFILES["autonomous"]
+        assert autonomous["auto_actions"]["git_push"] is False
+
+    def test_standard_profile_matches_default_config(self):
+        """standard profile checkpoints should match DEFAULT_CONFIG checkpoints."""
+        standard = PERMISSION_PROFILES["standard"]
+        default_cp = DEFAULT_CONFIG["checkpoints"]
+        for category in ["planning", "implementation"]:
+            for key, val in standard["checkpoints"][category].items():
+                assert default_cp[category][key] == val, (
+                    f"standard.checkpoints.{category}.{key} mismatch with DEFAULT_CONFIG"
+                )
+
+    def test_standard_auto_actions_match_default_config(self):
+        """standard profile auto_actions should match DEFAULT_CONFIG auto_actions."""
+        standard = PERMISSION_PROFILES["standard"]
+        default_aa = DEFAULT_CONFIG["auto_actions"]
+        for key, val in standard["auto_actions"].items():
+            assert default_aa[key] == val, (
+                f"standard.auto_actions.{key} mismatch with DEFAULT_CONFIG"
+            )
+
+    # --- _resolve_permission_profile() ---
+
+    def test_standard_profile_returns_equivalent_to_no_profile(self):
+        """Resolving standard with empty user overrides returns standard defaults."""
+        config = {"permission_profile": "standard"}
+        resolved = _resolve_permission_profile(config)
+        assert resolved["checkpoints"]["planning"]["after_architect"] is True
+        assert resolved["auto_actions"]["create_files"] is True
+
+    def test_strict_profile_disables_create_files(self):
+        config = {"permission_profile": "strict"}
+        resolved = _resolve_permission_profile(config)
+        assert resolved["auto_actions"]["create_files"] is False
+        assert resolved["auto_actions"]["modify_files"] is False
+
+    def test_strict_profile_enables_all_planning_checkpoints(self):
+        config = {"permission_profile": "strict"}
+        resolved = _resolve_permission_profile(config)
+        planning = resolved["checkpoints"]["planning"]
+        assert planning["after_architect"] is True
+        assert planning["after_developer"] is True
+        assert planning["after_reviewer"] is True
+        assert planning["after_skeptic"] is True
+
+    def test_autonomous_profile_disables_most_checkpoints(self):
+        config = {"permission_profile": "autonomous"}
+        resolved = _resolve_permission_profile(config)
+        planning = resolved["checkpoints"]["planning"]
+        assert planning["after_architect"] is False
+        assert planning["after_reviewer"] is False
+        impl = resolved["checkpoints"]["implementation"]
+        assert impl["before_commit"] is True
+        assert impl["at_50_percent"] is False
+
+    def test_autonomous_profile_enables_git_add_and_commit(self):
+        config = {"permission_profile": "autonomous"}
+        resolved = _resolve_permission_profile(config)
+        assert resolved["auto_actions"]["git_add"] is True
+        assert resolved["auto_actions"]["git_commit"] is True
+
+    def test_unknown_profile_leaves_config_unchanged(self):
+        config = {"permission_profile": "nonexistent", "auto_actions": {"create_files": True}}
+        resolved = _resolve_permission_profile(config)
+        # Should not raise; config returned unchanged
+        assert resolved["auto_actions"]["create_files"] is True
+
+    # --- Override precedence ---
+
+    def test_explicit_user_key_overrides_profile(self):
+        """User-set create_files: false should win even with standard profile."""
+        config = {
+            "permission_profile": "standard",
+            "auto_actions": {"create_files": False},
+        }
+        resolved = _resolve_permission_profile(config)
+        assert resolved["auto_actions"]["create_files"] is False
+
+    def test_explicit_checkpoint_overrides_strict_profile(self):
+        """User setting after_developer: false should win over strict profile."""
+        config = {
+            "permission_profile": "strict",
+            "checkpoints": {"planning": {"after_developer": False}},
+        }
+        resolved = _resolve_permission_profile(config)
+        # Strict enables after_developer=True as base, but user set False explicitly
+        assert resolved["checkpoints"]["planning"]["after_developer"] is False
+
+    def test_profile_does_not_mutate_input(self):
+        config = {"permission_profile": "strict"}
+        _resolve_permission_profile(config)
+        # Original config should not have auto_actions added to it
+        assert "auto_actions" not in config
+
+    # --- Integration with config_get_effective ---
+
+    def test_effective_config_resolves_strict_profile(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "workflow-config.yaml").write_text(
+            "permission_profile: strict\n"
+        )
+
+        with patch("agentic_workflow_server.config_tools.Path.home", return_value=tmp_path / "nohome"):
+            result = config_get_effective(project_dir=str(project_dir))
+
+        cfg = result["config"]
+        assert cfg["auto_actions"]["create_files"] is False
+        assert cfg["auto_actions"]["modify_files"] is False
+        assert cfg["checkpoints"]["planning"]["after_developer"] is True
+
+    def test_effective_config_resolves_autonomous_profile(self, tmp_path):
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "workflow-config.yaml").write_text(
+            "permission_profile: autonomous\n"
+        )
+
+        with patch("agentic_workflow_server.config_tools.Path.home", return_value=tmp_path / "nohome"):
+            result = config_get_effective(project_dir=str(project_dir))
+
+        cfg = result["config"]
+        assert cfg["auto_actions"]["git_add"] is True
+        assert cfg["auto_actions"]["git_commit"] is True
+        assert cfg["checkpoints"]["planning"]["after_architect"] is False
+
+    def test_effective_config_explicit_key_overrides_profile(self, tmp_path):
+        """Explicit auto_action override in YAML wins over profile setting."""
+        project_dir = tmp_path / "project"
+        project_dir.mkdir()
+        claude_dir = project_dir / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / "workflow-config.yaml").write_text(
+            "permission_profile: autonomous\nauto_actions:\n  git_push: true\n"
+        )
+
+        with patch("agentic_workflow_server.config_tools.Path.home", return_value=tmp_path / "nohome"):
+            result = config_get_effective(project_dir=str(project_dir))
+
+        # Explicit git_push: true wins over autonomous profile (which has git_push: false)
+        assert result["config"]["auto_actions"]["git_push"] is True
+
+    def test_default_permission_profile_is_standard(self):
+        assert DEFAULT_CONFIG["permission_profile"] == "standard"
 
 
 if __name__ == "__main__":

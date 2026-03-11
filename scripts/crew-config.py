@@ -113,6 +113,13 @@ def print_config(config: dict, sources: list[str]) -> None:
         print(f"|   {s:<{w-2}} |")
     print("+" + "-" * w + "+")
 
+    # Permission Profile
+    profile = config.get("permission_profile", "standard")
+    print(f"|  {'PERMISSION PROFILE':<{w-1}}|")
+    print(f"|    {'Active profile:':<30}{profile:>{w-35}}|")
+    print(f"|    {'(strict | standard | autonomous)':<{w-1}}|")
+    print("|" + " " * w + "|")
+
     # Checkpoints
     cp = config.get("checkpoints", {})
     print(f"|  {'PLANNING CHECKPOINTS':<{w-1}}|")

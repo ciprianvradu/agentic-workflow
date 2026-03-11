@@ -178,6 +178,40 @@ class TestCrewParseArgs:
         assert result["task_description"] == "Add caching"
         assert result["options"]["mode"] == "fast"
 
+    def test_profile_strict(self):
+        result = crew_parse_args('--profile strict "Fix auth bug"')
+        assert result["options"]["profile"] == "strict"
+        assert result["errors"] == []
+
+    def test_profile_standard(self):
+        result = crew_parse_args('--profile standard "Add feature"')
+        assert result["options"]["profile"] == "standard"
+        assert result["errors"] == []
+
+    def test_profile_autonomous(self):
+        result = crew_parse_args('--profile autonomous "Overnight task"')
+        assert result["options"]["profile"] == "autonomous"
+        assert result["errors"] == []
+
+    def test_profile_invalid(self):
+        result = crew_parse_args('--profile invalid "Task"')
+        assert len(result["errors"]) > 0
+        assert "Invalid --profile" in result["errors"][0]
+        assert "invalid" in result["errors"][0]
+
+    def test_profile_combined_with_no_checkpoints(self):
+        """--profile and --no-checkpoints can coexist in parsed options."""
+        result = crew_parse_args('--profile autonomous --no-checkpoints "Task"')
+        assert result["options"]["profile"] == "autonomous"
+        assert result["options"]["no_checkpoints"] is True
+        assert result["errors"] == []
+
+    def test_profile_combined_with_mode(self):
+        result = crew_parse_args('--profile strict --mode thorough "Critical task"')
+        assert result["options"]["profile"] == "strict"
+        assert result["options"]["mode"] == "thorough"
+        assert result["errors"] == []
+
 
 # ============================================================================
 # crew_apply_config_overrides tests
@@ -229,6 +263,35 @@ class TestCrewApplyConfigOverrides:
             "no_checkpoints": True
         })
         assert len(result["applied"]) == 3
+
+    def test_profile_strict_disables_create_files(self):
+        result = crew_apply_config_overrides({"profile": "strict"})
+        assert result["overrides"]["auto_actions"]["create_files"] is False
+        assert result["overrides"]["auto_actions"]["modify_files"] is False
+        assert any("permission_profile" in a for a in result["applied"])
+
+    def test_profile_autonomous_enables_git_add_commit(self):
+        result = crew_apply_config_overrides({"profile": "autonomous"})
+        assert result["overrides"]["auto_actions"]["git_add"] is True
+        assert result["overrides"]["auto_actions"]["git_commit"] is True
+        assert result["overrides"]["auto_actions"]["git_push"] is False
+
+    def test_profile_standard_sets_permission_profile_key(self):
+        result = crew_apply_config_overrides({"profile": "standard"})
+        assert result["overrides"]["permission_profile"] == "standard"
+
+    def test_no_checkpoints_overrides_profile(self):
+        """--no-checkpoints runs after profile expansion and should win."""
+        result = crew_apply_config_overrides({"profile": "autonomous", "no_checkpoints": True})
+        # After profile, autonomous sets before_commit=True. After --no-checkpoints, all False.
+        checkpoints = result["overrides"]["checkpoints"]
+        assert checkpoints["implementation"]["before_commit"] is False
+        assert checkpoints["planning"]["after_architect"] is False
+
+    def test_profile_not_in_options_no_effect(self):
+        result = crew_apply_config_overrides({})
+        assert "permission_profile" not in result["overrides"]
+        assert result["applied"] == []
 
 
 # ============================================================================

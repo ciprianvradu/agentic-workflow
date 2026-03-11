@@ -30,7 +30,111 @@ except ImportError:
     yaml = None
 
 
+PERMISSION_PROFILES = {
+    "strict": {
+        "checkpoints": {
+            "planning": {
+                "after_architect": True,
+                "after_developer": True,
+                "after_reviewer": True,
+                "after_skeptic": True,
+            },
+            "implementation": {
+                "at_25_percent": True,
+                "at_50_percent": True,
+                "at_75_percent": True,
+                "before_commit": True,
+            },
+            "documentation": {
+                "after_technical_writer": True,
+            },
+            "quality_guard": {
+                "on_deviation": True,
+                "on_test_failure": True,
+                "on_major_change": True,
+            },
+        },
+        "auto_actions": {
+            "run_tests": True,
+            "create_files": False,
+            "modify_files": False,
+            "run_build": True,
+            "git_add": False,
+            "git_commit": False,
+            "git_push": False,
+        },
+    },
+    "standard": {
+        "checkpoints": {
+            "planning": {
+                "after_architect": True,
+                "after_developer": False,
+                "after_reviewer": True,
+                "after_skeptic": True,
+            },
+            "implementation": {
+                "at_25_percent": False,
+                "at_50_percent": True,
+                "at_75_percent": False,
+                "before_commit": True,
+            },
+            "documentation": {
+                "after_technical_writer": True,
+            },
+            "quality_guard": {
+                "on_deviation": True,
+                "on_test_failure": True,
+                "on_major_change": True,
+            },
+        },
+        "auto_actions": {
+            "run_tests": True,
+            "create_files": True,
+            "modify_files": True,
+            "run_build": True,
+            "git_add": False,
+            "git_commit": False,
+            "git_push": False,
+        },
+    },
+    "autonomous": {
+        "checkpoints": {
+            "planning": {
+                "after_architect": False,
+                "after_developer": False,
+                "after_reviewer": False,
+                "after_skeptic": False,
+            },
+            "implementation": {
+                "at_25_percent": False,
+                "at_50_percent": False,
+                "at_75_percent": False,
+                "before_commit": True,
+            },
+            "documentation": {
+                "after_technical_writer": False,
+            },
+            "quality_guard": {
+                "on_deviation": False,
+                "on_test_failure": False,
+                "on_major_change": False,
+            },
+        },
+        "auto_actions": {
+            "run_tests": True,
+            "create_files": True,
+            "modify_files": True,
+            "run_build": True,
+            "git_add": True,
+            "git_commit": True,
+            "git_push": False,
+        },
+    },
+}
+
+
 DEFAULT_CONFIG = {
+    "permission_profile": "standard",
     "checkpoints": {
         "planning": {
             "after_architect": True,
@@ -240,6 +344,52 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _resolve_permission_profile(config: dict) -> dict:
+    """Expand permission_profile into checkpoints and auto_actions.
+
+    The profile acts as the base layer for checkpoints and auto_actions.
+    Any keys present in config's checkpoints/auto_actions override the profile.
+
+    Intended usage in config_get_effective():
+      1. Build base = DEFAULT_CONFIG with profile_name set
+      2. resolved_base = _resolve_permission_profile(base)  ← profile applied
+      3. config = _deep_merge(resolved_base, user_overrides) ← user wins
+
+    When called directly (e.g. tests with user-only overrides):
+      config should contain only user-set keys (not DEFAULT_CONFIG), so
+      profile values fill in the gaps and user keys override the profile.
+
+    Args:
+        config: Config dict containing at least "permission_profile"
+
+    Returns:
+        New config dict with profile values as base for checkpoints/auto_actions,
+        overridden by any keys already present in config
+    """
+    profile_name = config.get("permission_profile", "standard")
+    if profile_name not in PERMISSION_PROFILES:
+        # Unknown profile — leave config unchanged
+        return config
+
+    profile_values = PERMISSION_PROFILES[profile_name]
+
+    # Profile is base; config keys win on top.
+    # We only replace checkpoints and auto_actions sections, leaving other
+    # config keys untouched.
+    result = config.copy()
+    if "checkpoints" in profile_values:
+        result["checkpoints"] = _deep_merge(
+            profile_values["checkpoints"],
+            config.get("checkpoints", {})
+        )
+    if "auto_actions" in profile_values:
+        result["auto_actions"] = _deep_merge(
+            profile_values["auto_actions"],
+            config.get("auto_actions", {})
+        )
+    return result
+
+
 def _load_yaml(path: Path) -> Optional[dict]:
     if not path.exists():
         return None
@@ -334,22 +484,25 @@ def config_get_effective(
             return cached_result
 
     # Cache miss or expired — perform the full merge.
-    config = DEFAULT_CONFIG.copy()
     warnings = []
     sources = []
+
+    # Collect all user YAML overrides (without DEFAULT_CONFIG mixed in).
+    # This lets _resolve_permission_profile treat profile as base, user values as override.
+    user_overrides: dict = {}
 
     # --- Global level ---
     global_config = _load_yaml(global_path)
     if global_config:
         warnings.extend(_validate_config(global_config, DEFAULT_CONFIG))
-        config = _deep_merge(config, global_config)
+        user_overrides = _deep_merge(user_overrides, global_config)
         sources.append(str(global_path))
 
     # --- Project level ---
     project_config = _load_yaml(project_path)
     if project_config:
         warnings.extend(_validate_config(project_config, DEFAULT_CONFIG))
-        config = _deep_merge(config, project_config)
+        user_overrides = _deep_merge(user_overrides, project_config)
         sources.append(str(project_path))
 
     # --- Task level ---
@@ -358,10 +511,36 @@ def config_get_effective(
         task_config = _load_yaml(task_path)
         if task_config:
             warnings.extend(_validate_config(task_config, DEFAULT_CONFIG))
-            config = _deep_merge(config, task_config)
+            user_overrides = _deep_merge(user_overrides, task_config)
 
     if task_path is not None and task_path.exists():
         sources.append(str(task_path))
+
+    # Determine the permission_profile from user YAML (or DEFAULT_CONFIG fallback).
+    profile_name = user_overrides.get("permission_profile", DEFAULT_CONFIG.get("permission_profile", "standard"))
+
+    # Build base config: start from DEFAULT_CONFIG, then replace checkpoints and
+    # auto_actions with the profile values. This gives us a base where the
+    # profile drives permission-related settings rather than DEFAULT_CONFIG.
+    if profile_name in PERMISSION_PROFILES:
+        profile_values = PERMISSION_PROFILES[profile_name]
+        base_config = dict(DEFAULT_CONFIG)
+        base_config["permission_profile"] = profile_name
+        if "checkpoints" in profile_values:
+            base_config["checkpoints"] = _deep_merge(
+                DEFAULT_CONFIG.get("checkpoints", {}),
+                profile_values["checkpoints"]
+            )
+        if "auto_actions" in profile_values:
+            base_config["auto_actions"] = _deep_merge(
+                DEFAULT_CONFIG.get("auto_actions", {}),
+                profile_values["auto_actions"]
+            )
+    else:
+        base_config = dict(DEFAULT_CONFIG)
+
+    # Now merge user YAML overrides on top — explicit user keys always win.
+    config = _deep_merge(base_config, user_overrides)
 
     result = {
         "config": config,

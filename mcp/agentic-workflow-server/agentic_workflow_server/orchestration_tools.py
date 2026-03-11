@@ -43,6 +43,7 @@ from .config_tools import (
     config_get_beads,
     _deep_merge,
     DEFAULT_CONFIG,
+    PERMISSION_PROFILES,
 )
 
 # ============================================================================
@@ -619,6 +620,14 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
             else:
                 errors.append(f"Invalid --verify method '{method}'. Must be: tests, build, lint, all")
             i += 2
+        elif token == "--profile" and i + 1 < len(tokens):
+            profile_val = tokens[i + 1]
+            if profile_val in PERMISSION_PROFILES:
+                options["profile"] = profile_val
+            else:
+                valid_profiles = ", ".join(PERMISSION_PROFILES.keys())
+                errors.append(f"Invalid --profile '{profile_val}'. Must be: {valid_profiles}")
+            i += 2
         elif token == "--no-checkpoints":
             options["no_checkpoints"] = True
             i += 1
@@ -961,6 +970,15 @@ def crew_apply_config_overrides(
     """
     overrides: dict[str, Any] = {}
     applied = []
+
+    # Apply permission profile first — later flags (e.g. --no-checkpoints) override it.
+    if "profile" in options:
+        profile_name = options["profile"]
+        if profile_name in PERMISSION_PROFILES:
+            profile_values = PERMISSION_PROFILES[profile_name]
+            overrides = _deep_merge(overrides, profile_values)
+            overrides["permission_profile"] = profile_name
+            applied.append(f"permission_profile = {profile_name}")
 
     if options.get("loop_mode") is True:
         overrides.setdefault("loop_mode", {})["enabled"] = True
