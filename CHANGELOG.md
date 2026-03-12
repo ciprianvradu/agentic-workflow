@@ -19,6 +19,8 @@ This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`DEFAULT_CONFIG` parallelization key typo** — `quality_guard_technical_writer` corrected to `quality_guard_security_auditor` to match orchestration code
 - **`__init__.py` version sync** — was stuck at 0.4.0, now matches pyproject.toml
 - **Test task directory leaks** — `clean_tasks_dir` fixture now snapshots pre-existing TASK_* dirs and only cleans auto-generated ones
+- **Interaction logging hooks not installed** — `build-agents.py claude` now merges hooks from `config/hooks-settings.json` into `~/.claude/settings.json` (idempotent, preserves existing hooks). Adds `UserPromptSubmit` and `Stop` entries for `log-crew-interaction.py`
+- **crew-board F2 missing interaction hooks** — `settings.local.json` written by crew-board now includes `UserPromptSubmit` and `Stop` hooks for `log-crew-interaction.py` alongside the HTTP hooks (crew-board 0.6.2)
 
 ## [0.9.0] - 2026-03-09
 

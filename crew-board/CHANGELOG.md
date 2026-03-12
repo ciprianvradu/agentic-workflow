@@ -3,6 +3,11 @@
 All notable changes to crew-board are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.2] - 2026-03-12
+
+### Added
+- **Interaction logging hooks in `settings.local.json`** — F2 terminal launch now includes `UserPromptSubmit` and `Stop` hooks for `log-crew-interaction.py` alongside the HTTP crew-board hooks. This ensures user prompts and agent answers are captured in `interactions.jsonl` even when the global `~/.claude/settings.json` is missing these hooks.
+
 ## [0.6.1] - 2026-03-09
 
 ### Added

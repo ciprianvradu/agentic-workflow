@@ -2777,6 +2777,12 @@ impl App {
                         "allowedEnvVars": ["CREW_BOARD_TOKEN"]
                     }]
                 }],
+                "UserPromptSubmit": [{
+                    "hooks": [{
+                        "type": "command",
+                        "command": "python3 ~/.claude/scripts/log-crew-interaction.py"
+                    }]
+                }],
                 "Stop": [{
                     "hooks": [{
                         "type": "http",
@@ -2784,6 +2790,11 @@ impl App {
                         "timeout": 5,
                         "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
                         "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                    }]
+                }, {
+                    "hooks": [{
+                        "type": "command",
+                        "command": "python3 ~/.claude/scripts/log-crew-interaction.py"
                     }]
                 }],
                 "PermissionRequest": [{

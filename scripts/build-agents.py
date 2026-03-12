@@ -297,6 +297,59 @@ def _claude_command_wrap(name: str, body: str) -> str:
     return body.rstrip() + "\n" + suffix
 
 
+def _merge_hooks_settings(output_dir: Path) -> int:
+    """Merge hooks from config/hooks-settings.json into settings.json without overwriting existing hooks.
+
+    Returns the number of new hook entries added.
+    """
+    import json
+
+    hooks_src = REPO_ROOT / "config" / "hooks-settings.json"
+    if not hooks_src.exists():
+        return 0
+
+    settings_path = output_dir / "settings.json"
+
+    # Load reference hooks
+    ref = json.loads(hooks_src.read_text(encoding="utf-8"))
+    ref_hooks = ref.get("hooks", {})
+    if not ref_hooks:
+        return 0
+
+    # Load or create existing settings
+    if settings_path.exists():
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    else:
+        settings = {}
+
+    existing_hooks = settings.setdefault("hooks", {})
+    added = 0
+
+    for event_type, entries in ref_hooks.items():
+        existing_entries = existing_hooks.setdefault(event_type, [])
+
+        # Collect all existing command strings for dedup
+        existing_commands = set()
+        for entry in existing_entries:
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command", "")
+                if cmd:
+                    existing_commands.add(cmd)
+
+        for entry in entries:
+            # Check if this entry's command is already present
+            entry_commands = [h.get("command", "") for h in entry.get("hooks", [])]
+            if any(cmd in existing_commands for cmd in entry_commands if cmd):
+                continue
+            existing_entries.append(entry)
+            added += 1
+
+    if added > 0:
+        settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+
+    return added
+
+
 def build_claude(output_dir: Path):
     """Build agents in Claude Code format: plain markdown in {output}/agents/ and commands/."""
     agents_out = output_dir / "agents"
@@ -357,8 +410,13 @@ def build_claude(output_dir: Path):
             dest.write_text(read_file(src), encoding="utf-8")
             scripts_copied += 1
 
+    # Merge hooks from config/hooks-settings.json into ~/.claude/settings.json
+    hooks_merged = _merge_hooks_settings(output_dir)
+
     _assert_no_raw_placeholders(output_dir, "claude")
     print(f"\n  {agent_count} agents + {cmd_count} commands written to {output_dir}")
+    if hooks_merged:
+        print(f"  + {hooks_merged} hook(s) merged into settings.json")
 
 
 # ---------------------------------------------------------------------------
