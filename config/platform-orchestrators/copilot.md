@@ -37,16 +37,25 @@ Loop on the returned JSON action from the orchestrator:
 1. Read agent prompt from `next.agent_prompt_path`
 2. Compose prompt using Agent Prompt Composition (below)
 3. If `next.beads_comment`, run: `bd comments add <issue> "<comment>"`
-4. Invoke sub-agent:
+4. If `next.parallel_agents` is set (list of agent dicts):
+   - Call `workflow_start_parallel_phase` MCP tool with all phase names (primary + all parallel agents)
+   - Invoke primary sub-agent: `runSubagent("crew-<agent_name>", { prompt: "<composed prompt>" })`
+   - Save output, call `agent-done`, call `workflow_complete_parallel_phase` for primary
+   - For each parallel agent in the list: compose prompt, invoke `runSubagent("crew-<par_agent>", ...)`, save output, call `agent-done`, call `workflow_complete_parallel_phase`
+   - Call `workflow_merge_parallel_results` MCP tool to combine concerns
+   - Continue loop with `result.next`
+   Alternatively, if only `next.parallel_with` is set (single string, backwards compat):
+   - Same as above but with just 2 agents (primary + one parallel agent)
+5. Otherwise invoke single sub-agent:
    ```
    runSubagent("crew-<agent_name>", {
      prompt: "<composed prompt>"
    })
    ```
-5. Save agent output to `.tasks/<task_id>/<agent>.md`
-6. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path>`
-7. If `result.has_blocking_issues` and recommendation is REVISE → inform user, loop continues via `result.next`
-8. Continue loop with `result.next`
+6. Save agent output to `.tasks/<task_id>/<agent>.md`
+7. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path>`
+8. If `result.has_blocking_issues` and recommendation is REVISE → inform user, loop continues via `result.next`
+9. Continue loop with `result.next`
 
 #### action: "checkpoint"
 

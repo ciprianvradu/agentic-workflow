@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-03-12
+
+### Added
+- **N-way agent parallelism** — `parallel_agents` list in orchestrator responses enables spawning 3+ agents simultaneously (e.g., quality_guard + security_auditor + optional agents), up from the previous 2-agent `parallel_with` limit. Backwards-compatible: `parallel_with` still works for 2-agent cases
+- **Position-aware optional agent insertion** — optional agents now respect their `position` config (`after_planner`, `after_reviewer`) instead of always inserting after reviewer. Agents at the same position are grouped for parallel execution
+- **Optional agent parallel detection** — consecutive optional agents in the phase sequence are automatically grouped for parallel execution, controlled by `parallelization.optional_agents.enabled` and `max_concurrent` (default: 4)
+- **Async documentation for thorough mode** — `documentation.async_mode_thorough` config key enables the Technical Writer to run asynchronously after commit in thorough mode (same as existing `async_mode` for standard mode)
+- **Multi-platform parallel agent support** — Copilot, Gemini, and OpenCode orchestrator docs updated with parallel agent execution patterns using their native delegation mechanisms
+- 7 new tests: `TestOptionalAgentsParallel` (3), `TestPositionAwareOptionalAgents` (2), `TestAsyncDocsThorough` (2) — 829 total
+
+### Fixed
+- **`DEFAULT_CONFIG` parallelization key typo** — `quality_guard_technical_writer` corrected to `quality_guard_security_auditor` to match orchestration code
+- **`__init__.py` version sync** — was stuck at 0.4.0, now matches pyproject.toml
+- **Test task directory leaks** — `clean_tasks_dir` fixture now snapshots pre-existing TASK_* dirs and only cleans auto-generated ones
+
 ## [0.9.0] - 2026-03-09
 
 ### Added

@@ -65,6 +65,17 @@ For each phase in the detected mode's agent chain:
    - If blocking concerns → loop back to appropriate phase
    - If clean → proceed to next phase
 
+#### Parallel Agent Execution
+
+When phases can run in parallel (e.g., quality_guard + security_auditor, or multiple optional agents at the same position):
+
+1. **Start parallel tracking**: Call `agentic-workflow__workflow_start_parallel_phase({ phases: ["quality_guard", "security_auditor"], task_id: "TASK_042" })`
+2. **Delegate each agent** (sequentially, but all tracked as parallel):
+   - Transition to each agent, @mention to invoke, save output
+   - Call `agentic-workflow__workflow_complete_parallel_phase({ phase: "<agent>", result_summary: "<summary>", task_id: "TASK_042" })` for each
+3. **Merge results**: Call `agentic-workflow__workflow_merge_parallel_results({ task_id: "TASK_042" })`
+4. Complete all parallel phases, then proceed to next sequential phase
+
 ### Step 4: Completion
 
 ```

@@ -63,12 +63,20 @@ def clean_tasks_dir():
     if active_file.exists():
         active_file.unlink()
 
+    # Snapshot existing TASK_XXX dirs so we can clean up auto-generated ones
+    pre_existing = {d.name for d in tasks_dir.glob("TASK_*") if d.is_dir()}
+
     yield tasks_dir
 
     for pattern in prefixes:
         for d in tasks_dir.glob(pattern):
             if d.is_dir():
                 shutil.rmtree(d)
+
+    # Clean up any auto-generated TASK_XXX dirs created during the test
+    for d in tasks_dir.glob("TASK_*"):
+        if d.is_dir() and d.name not in pre_existing:
+            shutil.rmtree(d)
 
     if active_file.exists():
         active_file.unlink()

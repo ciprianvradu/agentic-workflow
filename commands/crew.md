@@ -40,12 +40,15 @@ Loop on the returned JSON action from the orchestrator:
 1. Read agent prompt from `next.agent_prompt_path`
 2. Compose prompt using Agent Prompt Composition (below)
 3. If `next.beads_comment`, run: `bd comments add <issue> "<comment>"`
-4. If `next.parallel_with` is set:
-   - Spawn both agents simultaneously using parallel Task calls with `run_in_background: true`
-   - Primary agent uses `model: next.model`, parallel agent uses `model: next.parallel_agent_model`
-   - Wait for both with TaskOutput
-   - Call `workflow_start_parallel_phase`, `workflow_complete_parallel_phase` for each, then `workflow_merge_parallel_results`
-   - In `agent-done` calls, pass the actual model used: `--model <next.model>` for primary, `--model <next.parallel_agent_model>` for parallel
+4. If `next.parallel_agents` is set (list of agent dicts with agent, model, max_turns, effort_level, agent_prompt_path):
+   - Spawn ALL agents simultaneously: the primary agent in foreground + each parallel agent with `run_in_background: true`
+   - Primary agent uses `model: next.model`; each parallel agent uses its own `model` from the list
+   - Call `workflow_start_parallel_phase` with all phase names (primary + all parallel)
+   - Wait for all parallel agents with TaskOutput
+   - Call `workflow_complete_parallel_phase` for each, then `workflow_merge_parallel_results`
+   - In `agent-done` calls, pass the actual model used for each agent
+   Alternatively, if only `next.parallel_with` is set (single string, backwards compat):
+   - Same as above but with just 2 agents (primary + one parallel agent using `next.parallel_agent_model`)
 5. Otherwise spawn single agent:
    ```
    Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: "<composed prompt>")

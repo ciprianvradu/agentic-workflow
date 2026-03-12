@@ -1584,3 +1584,284 @@ class TestCrewLearnParsing:
         result = crew_parse_args("learn --unknown-flag")
         assert result["action"] == "learn"
         assert any("Unknown option" in e for e in result["errors"])
+
+
+# ============================================================================
+# Parallelization tests
+# ============================================================================
+
+class TestOptionalAgentsParallel:
+    """Tests for N-way parallel optional agents."""
+
+    def test_multiple_optional_agents_parallel(self, clean_tasks_dir):
+        """Multiple optional agents at same position should be grouped for parallel execution."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_PAR_001", description="Test parallel optional")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_PAR_001")
+
+        # Enable multiple optional agents
+        from agentic_workflow_server.state_tools import workflow_enable_optional_phase
+        workflow_enable_optional_phase(phase="performance_analyst", reason="test", task_id="TASK_ORCH_PAR_001")
+        workflow_enable_optional_phase(phase="accessibility_reviewer", reason="test", task_id="TASK_ORCH_PAR_001")
+
+        # Complete planner and reviewer
+        for phase in ["planner", "reviewer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_PAR_001")
+            workflow_complete_phase(task_id="TASK_ORCH_PAR_001")
+
+        mock_config = {
+            "parallelization": {
+                "quality_guard_security_auditor": {"enabled": False},
+                "optional_agents": {"enabled": True, "max_concurrent": 4},
+            },
+            "specialized_agents": {
+                "performance_analyst": {"position": "after_reviewer"},
+                "accessibility_reviewer": {"position": "after_reviewer"},
+            },
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_PAR_001")
+
+        assert result["action"] == "spawn_agent"
+        # Primary is first optional agent
+        assert result["agent"] in ("performance_analyst", "accessibility_reviewer")
+        # parallel_agents list should contain the other
+        assert "parallel_agents" in result
+        assert len(result["parallel_agents"]) == 1
+        assert result["parallel_agents"][0]["agent"] in ("performance_analyst", "accessibility_reviewer")
+        assert result["parallel_agents"][0]["agent"] != result["agent"]
+
+    def test_optional_agents_parallel_disabled(self, clean_tasks_dir):
+        """When optional_agents parallel disabled, agents run sequentially."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_PAR_002", description="Test no parallel")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_PAR_002")
+
+        from agentic_workflow_server.state_tools import workflow_enable_optional_phase
+        workflow_enable_optional_phase(phase="performance_analyst", reason="test", task_id="TASK_ORCH_PAR_002")
+        workflow_enable_optional_phase(phase="accessibility_reviewer", reason="test", task_id="TASK_ORCH_PAR_002")
+
+        for phase in ["planner", "reviewer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_PAR_002")
+            workflow_complete_phase(task_id="TASK_ORCH_PAR_002")
+
+        mock_config = {
+            "parallelization": {
+                "quality_guard_security_auditor": {"enabled": False},
+                "optional_agents": {"enabled": False},
+            },
+            "specialized_agents": {
+                "performance_analyst": {"position": "after_reviewer"},
+                "accessibility_reviewer": {"position": "after_reviewer"},
+            },
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_PAR_002")
+
+        assert result["action"] == "spawn_agent"
+        # No parallel_agents when disabled
+        assert "parallel_agents" not in result
+
+    def test_parallel_agents_backwards_compat(self, clean_tasks_dir):
+        """parallel_with and parallel_agent_model set for backwards compat."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_PAR_003", description="Test compat")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_PAR_003")
+
+        for phase in ["planner", "reviewer", "implementer"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_PAR_003")
+            workflow_complete_phase(task_id="TASK_ORCH_PAR_003")
+
+        mock_config = {
+            "parallelization": {
+                "quality_guard_security_auditor": {"enabled": True},
+            },
+            "models": {"default": "opus", "thorough": {"security_auditor": "sonnet"}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_PAR_003")
+
+        assert result["action"] == "spawn_agent"
+        assert result["agent"] == "quality_guard"
+        # New: parallel_agents list
+        assert "parallel_agents" in result
+        assert len(result["parallel_agents"]) == 1
+        assert result["parallel_agents"][0]["agent"] == "security_auditor"
+        assert result["parallel_agents"][0]["model"] == "sonnet"
+        # Backwards compat: flat fields still present
+        assert result["parallel_with"] == "security_auditor"
+        assert result["parallel_agent_model"] == "sonnet"
+        assert "parallel_effort_level" in result
+
+
+class TestPositionAwareOptionalAgents:
+    """Tests for position-aware optional agent insertion."""
+
+    def test_api_guardian_after_planner(self, clean_tasks_dir):
+        """api_guardian with after_planner should be inserted after planner, before reviewer."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_POS_001", description="Test position")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_POS_001")
+
+        from agentic_workflow_server.state_tools import workflow_enable_optional_phase
+        workflow_enable_optional_phase(phase="api_guardian", reason="test", task_id="TASK_ORCH_POS_001")
+
+        # Complete planner
+        workflow_transition(to_phase="planner", task_id="TASK_ORCH_POS_001")
+        workflow_complete_phase(task_id="TASK_ORCH_POS_001")
+
+        mock_config = {
+            "parallelization": {
+                "quality_guard_security_auditor": {"enabled": False},
+                "optional_agents": {"enabled": False},
+            },
+            "specialized_agents": {
+                "api_guardian": {"position": "after_planner"},
+            },
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_POS_001")
+
+        # api_guardian should come before reviewer (after planner)
+        assert result["action"] == "spawn_agent"
+        assert result["agent"] == "api_guardian"
+
+    def test_mixed_positions(self, clean_tasks_dir):
+        """Agents at different positions should be inserted at their correct anchors."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_POS_002", description="Test mixed")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_POS_002")
+
+        from agentic_workflow_server.state_tools import workflow_enable_optional_phase
+        workflow_enable_optional_phase(phase="api_guardian", reason="test", task_id="TASK_ORCH_POS_002")
+        workflow_enable_optional_phase(phase="performance_analyst", reason="test", task_id="TASK_ORCH_POS_002")
+
+        # Complete planner, api_guardian, then reviewer
+        workflow_transition(to_phase="planner", task_id="TASK_ORCH_POS_002")
+        workflow_complete_phase(task_id="TASK_ORCH_POS_002")
+
+        mock_config = {
+            "parallelization": {
+                "quality_guard_security_auditor": {"enabled": False},
+                "optional_agents": {"enabled": False},
+            },
+            "specialized_agents": {
+                "api_guardian": {"position": "after_planner"},
+                "performance_analyst": {"position": "after_reviewer"},
+            },
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_POS_002")
+
+        # api_guardian (after_planner) should come first, before reviewer
+        assert result["action"] == "spawn_agent"
+        assert result["agent"] == "api_guardian"
+
+
+class TestAsyncDocsThorough:
+    """Tests for async documentation in thorough mode."""
+
+    def test_async_docs_thorough_mode_enabled(self, clean_tasks_dir):
+        """async_mode_thorough=true should trigger async docs in thorough mode."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_ASYNC_T1", description="Test async thorough")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_ASYNC_T1")
+
+        for phase in ["planner", "reviewer", "implementer", "quality_guard", "security_auditor"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_ASYNC_T1")
+            workflow_complete_phase(task_id="TASK_ORCH_ASYNC_T1")
+
+        mock_config = {
+            "documentation": {"async_mode": False, "async_mode_thorough": True,
+                              "auto_commit_docs": False, "notify_on_complete": True},
+            "parallelization": {"quality_guard_security_auditor": {"enabled": False}},
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}, "documentation": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_ASYNC_T1")
+
+        assert result["action"] == "complete_with_async_docs"
+        assert "async_docs" in result
+        assert result["async_docs"]["agent"] == "technical_writer"
+
+    def test_async_docs_thorough_mode_disabled(self, clean_tasks_dir):
+        """async_mode_thorough=false should run TW synchronously in thorough mode."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_ASYNC_T2", description="Test sync thorough")
+        workflow_set_mode(mode="thorough", task_id="TASK_ORCH_ASYNC_T2")
+
+        for phase in ["planner", "reviewer", "implementer", "quality_guard", "security_auditor"]:
+            workflow_transition(to_phase=phase, task_id="TASK_ORCH_ASYNC_T2")
+            workflow_complete_phase(task_id="TASK_ORCH_ASYNC_T2")
+
+        mock_config = {
+            "documentation": {"async_mode": True, "async_mode_thorough": False},
+            "parallelization": {"quality_guard_security_auditor": {"enabled": False}},
+            "models": {"default": "opus", "thorough": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}, "documentation": {}},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_ASYNC_T2")
+
+        # Should spawn TW normally, not async
+        assert result["action"] == "spawn_agent"
+        assert result["agent"] == "technical_writer"

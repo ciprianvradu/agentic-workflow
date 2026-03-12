@@ -273,6 +273,7 @@ DEFAULT_CONFIG = {
     },
     "documentation": {
         "async_mode": False,
+        "async_mode_thorough": False,
         "auto_commit_docs": False,
         "notify_on_complete": True,
     },
@@ -283,8 +284,13 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 300,
             "merge_strategy": "deduplicate",
         },
-        "quality_guard_technical_writer": {
+        "quality_guard_security_auditor": {
             "enabled": True,
+            "timeout_seconds": 300,
+        },
+        "optional_agents": {
+            "enabled": True,
+            "max_concurrent": 4,
             "timeout_seconds": 300,
         },
     },

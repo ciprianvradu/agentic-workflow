@@ -194,8 +194,9 @@ auto_actions:
 # Documentation Settings
 # Controls how the Technical Writer agent runs at the end of the workflow
 documentation:
-  async_mode: false              # When true (standard mode only): complete workflow immediately,
+  async_mode: false              # When true (standard mode): complete workflow immediately,
                                  # then run Technical Writer in the background
+  async_mode_thorough: false     # When true: also use async TW in thorough mode
   auto_commit_docs: false        # Auto-commit doc changes after async TW completes
   notify_on_complete: true       # Show notification when async TW finishes
 
@@ -504,6 +505,19 @@ parallelization:
   # Run Quality Guard and Security Auditor in parallel (thorough mode, post-implementation)
   quality_guard_security_auditor:
     enabled: true
+    timeout_seconds: 300
+
+  # When both Reviewer and Skeptic are in the phase sequence, run them in parallel
+  # (Skeptic is NOT added to phases by this setting — only parallelized when already present)
+  reviewer_skeptic:
+    enabled: true
+    timeout_seconds: 300
+
+  # Run multiple optional/specialized agents in parallel when triggered at the same position
+  # e.g., security_auditor + performance_analyst + accessibility_reviewer all run after reviewer
+  optional_agents:
+    enabled: true
+    max_concurrent: 4              # Max agents to run simultaneously
     timeout_seconds: 300
 
 # Agent Teams (experimental)

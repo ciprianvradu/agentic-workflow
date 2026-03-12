@@ -1248,13 +1248,33 @@ def crew_get_next_phase(
     # Build the full sequence: mode phases + optional phases (after reviewer) + custom phases
     full_sequence = list(mode_phases)
 
-    # Insert optional phases after reviewer (or after planner/developer if no reviewer)
-    insert_after = "reviewer" if "reviewer" in full_sequence else ("planner" if "planner" in full_sequence else "developer")
-    if insert_after in full_sequence:
-        insert_idx = full_sequence.index(insert_after) + 1
-        for opt_phase in optional_phases:
-            if opt_phase not in full_sequence:
-                full_sequence.insert(insert_idx, opt_phase)
+    # Insert optional phases at their configured positions
+    # Each specialized agent has a position (e.g., after_planner, after_reviewer)
+    specialized_config = config.get("specialized_agents", {})
+    position_groups: dict[str, list[str]] = {}
+    for opt_phase in optional_phases:
+        agent_cfg = specialized_config.get(opt_phase, {})
+        position = agent_cfg.get("position", "after_reviewer")
+        anchor = position.replace("after_", "")
+        # Fall back if anchor not in sequence
+        if anchor not in full_sequence:
+            if "reviewer" in full_sequence:
+                anchor = "reviewer"
+            elif "planner" in full_sequence:
+                anchor = "planner"
+            else:
+                anchor = full_sequence[0] if full_sequence else None
+        if anchor:
+            position_groups.setdefault(anchor, []).append(opt_phase)
+
+    # Insert groups in sequence order (later anchors first to preserve indices)
+    for anchor in reversed(list(dict.fromkeys(
+        a for a in full_sequence if a in position_groups
+    ))):
+        insert_idx = full_sequence.index(anchor) + 1
+        for agent in position_groups[anchor]:
+            if agent not in full_sequence:
+                full_sequence.insert(insert_idx, agent)
                 insert_idx += 1
 
     # Insert custom phases from config
@@ -1290,20 +1310,26 @@ def crew_get_next_phase(
     while next_idx < len(full_sequence):
         candidate = full_sequence[next_idx]
         if candidate not in phases_completed:
-            # Check async documentation mode for technical_writer in standard mode
-            if candidate == "technical_writer" and effective_mode == "standard":
+            # Check async documentation mode for technical_writer
+            if candidate == "technical_writer":
                 doc_config = config.get("documentation", {})
-                async_mode = doc_config.get("async_mode", False)
+                if effective_mode == "standard":
+                    async_mode = doc_config.get("async_mode", False)
+                elif effective_mode == "thorough":
+                    async_mode = doc_config.get("async_mode_thorough", False)
+                else:
+                    async_mode = False
                 if async_mode:
                     # Async mode: signal completion with async docs pending
                     return _build_async_docs_completion(
                         state, config, task_dir, full_sequence, phases_completed
                     )
-                # Non-async: skip TW if no docs needed (existing behavior)
-                docs_needed = state.get("docs_needed", [])
-                if not docs_needed:
-                    next_idx += 1
-                    continue
+                # Non-async standard mode: skip TW if no docs needed
+                if effective_mode == "standard":
+                    docs_needed = state.get("docs_needed", [])
+                    if not docs_needed:
+                        next_idx += 1
+                        continue
             break
         next_idx += 1
 
@@ -1335,6 +1361,23 @@ def crew_get_next_phase(
             sa_idx = full_sequence.index("security_auditor")
             if "security_auditor" not in phases_completed and sa_idx > next_idx:
                 parallel_with = "security_auditor"
+
+    # Check for parallel optional agents at the same position
+    if parallel_with is None:
+        opt_parallel = config.get("parallelization", {}).get("optional_agents", {})
+        if opt_parallel.get("enabled", False) and next_agent in optional_phases:
+            max_concurrent = opt_parallel.get("max_concurrent", 4)
+            parallel_group = []
+            check_idx = next_idx + 1
+            while check_idx < len(full_sequence) and len(parallel_group) < max_concurrent - 1:
+                candidate = full_sequence[check_idx]
+                if candidate in optional_phases and candidate not in phases_completed:
+                    parallel_group.append(candidate)
+                    check_idx += 1
+                else:
+                    break
+            if parallel_group:
+                parallel_with = parallel_group  # List of agents
 
     return _build_phase_action(next_agent, state, config, task_dir, parallel_with=parallel_with)
 
@@ -1459,18 +1502,34 @@ def _build_phase_action(
         result["git_diff_uncommitted_command"] = "git diff"
 
     if parallel_with:
-        result["parallel_with"] = parallel_with
-        # Also provide info for the parallel agent
-        par_prompt_file = AGENT_PROMPT_FILES.get(parallel_with, f"{parallel_with}.md")
-        result["parallel_agent_prompt_path"] = str(agents_dir / par_prompt_file)
-        par_category = AGENT_LIMIT_CATEGORY.get(parallel_with, "planning_agents")
-        result["parallel_max_turns"] = subagent_limits.get(par_category, SUBAGENT_LIMITS.get(par_category, 30))
-        # Model for parallel agent (same fallback chain as primary)
-        par_model = mode_models.get(parallel_with) or models_config.get(parallel_with) or default_model
-        result["parallel_agent_model"] = par_model
-        # Effort level for parallel agent
-        par_effort_result = workflow_get_effort_level(agent=parallel_with, task_id=task_id)
-        result["parallel_effort_level"] = par_effort_result.get("effort", "high")
+        # Normalize to list
+        par_list = parallel_with if isinstance(parallel_with, list) else [parallel_with]
+
+        # Build info for each parallel agent
+        parallel_agents_info = []
+        for par_agent in par_list:
+            par_prompt_file = AGENT_PROMPT_FILES.get(par_agent, f"{par_agent.replace('_', '-')}.md")
+            par_category = AGENT_LIMIT_CATEGORY.get(par_agent, "planning_agents")
+            par_max_turns = subagent_limits.get(par_category, SUBAGENT_LIMITS.get(par_category, 30))
+            par_model = mode_models.get(par_agent) or models_config.get(par_agent) or default_model
+            par_effort_result = workflow_get_effort_level(agent=par_agent, task_id=task_id)
+            par_effort = par_effort_result.get("effort", "high")
+            parallel_agents_info.append({
+                "agent": par_agent,
+                "agent_prompt_path": str(agents_dir / par_prompt_file),
+                "model": par_model,
+                "max_turns": par_max_turns,
+                "effort_level": par_effort,
+            })
+
+        result["parallel_agents"] = parallel_agents_info
+
+        # Backwards compatibility: set flat fields from first parallel agent
+        result["parallel_with"] = parallel_agents_info[0]["agent"]
+        result["parallel_agent_prompt_path"] = parallel_agents_info[0]["agent_prompt_path"]
+        result["parallel_max_turns"] = parallel_agents_info[0]["max_turns"]
+        result["parallel_agent_model"] = parallel_agents_info[0]["model"]
+        result["parallel_effort_level"] = parallel_agents_info[0]["effort_level"]
 
     if beads_comment:
         result["beads_comment"] = beads_comment
@@ -1727,7 +1786,8 @@ def _build_async_docs_completion(
     The main workflow completes immediately, but the orchestrator is instructed
     to spawn the technical writer in the background afterward.
 
-    Only applies in standard mode when documentation.async_mode is true.
+    Applies when documentation.async_mode (standard) or
+    documentation.async_mode_thorough (thorough) is true.
     """
     task_id = state.get("task_id", "")
     doc_config = config.get("documentation", {})
