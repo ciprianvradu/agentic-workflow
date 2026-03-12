@@ -866,7 +866,8 @@ def main():
     p_log.add_argument("--content", required=True, help="Message content")
     p_log.add_argument("--type", default="message",
                        choices=["message", "checkpoint_question", "checkpoint_response",
-                                "guidance", "escalation_question", "escalation_response"])
+                                "guidance", "escalation_question", "escalation_response",
+                                "state_change", "correction", "new_requirement", "question"])
     p_log.add_argument("--agent", help="Agent context (e.g., orchestrator, architect)")
     p_log.add_argument("--phase", help="Current workflow phase")
     p_log.add_argument("--metadata", help="JSON metadata string")

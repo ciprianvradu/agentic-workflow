@@ -57,6 +57,9 @@ INTERACTION_TYPES = [
     "escalation_question",
     "escalation_response",
     "state_change",
+    "correction",
+    "new_requirement",
+    "question",
 ]
 
 # 8 dark color schemes for worktree terminal tabs.  Cycled by task number.

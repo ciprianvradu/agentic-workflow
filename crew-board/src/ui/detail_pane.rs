@@ -1220,8 +1220,16 @@ fn render_interactions_section(lines: &mut Vec<Line>, interactions: &[Interactio
         return;
     }
 
+    // Count human vs agent vs system entries
+    let human_count = interactions.iter().filter(|i| i.role == "human").count();
+    let agent_count = interactions.iter().filter(|i| i.role == "agent").count();
     lines.push(Line::from(Span::styled(
-        format!("── Interactions ({} entries) ──", interactions.len()),
+        format!(
+            "── Interactions ({} entries | {} human, {} agent) ──",
+            interactions.len(),
+            human_count,
+            agent_count,
+        ),
         styles::header_style(),
     )));
 
@@ -1245,6 +1253,9 @@ fn render_interactions_section(lines: &mut Vec<Line>, interactions: &[Interactio
             "escalation_question" => ("[?]", Color::Magenta),
             "escalation_response" => ("[!]", Color::Magenta),
             "guidance" => ("[G]", Color::Blue),
+            "correction" => ("[C]", Color::Yellow),
+            "new_requirement" => ("[N]", Color::LightYellow),
+            "question" => ("[q]", Color::Cyan),
             _ => match entry.role.as_str() {
                 "agent" => ("[>]", Color::DarkGray),
                 "human" => ("[H]", Color::Green),
@@ -1252,6 +1263,16 @@ fn render_interactions_section(lines: &mut Vec<Line>, interactions: &[Interactio
                 _ => ("[-]", Color::DarkGray),
             },
         };
+
+        // Build timestamp + source suffix
+        let time_str = if !entry.timestamp.is_empty() {
+            format!(" {}", format_timestamp(&entry.timestamp))
+        } else {
+            String::new()
+        };
+
+        // Source indicator: hook-captured (auto) vs manual
+        let source_indicator = if entry.source == "hook" { "·" } else { "" };
 
         // Truncate content to 120 chars
         let content = if entry.content.len() > 120 {
@@ -1261,15 +1282,16 @@ fn render_interactions_section(lines: &mut Vec<Line>, interactions: &[Interactio
         };
 
         // Wrap content lines
-        let content_lines = wrap_text(&content, 70);
+        let content_lines = wrap_text(&content, 65);
         if let Some((first, rest)) = content_lines.split_first() {
             lines.push(Line::from(vec![
-                Span::styled(format!("    {} ", marker), Style::default().fg(marker_color)),
+                Span::styled(format!("    {}{} ", marker, source_indicator), Style::default().fg(marker_color)),
                 Span::raw(first.clone()),
+                Span::styled(time_str, Style::default().fg(Color::DarkGray)),
             ]));
             for continuation in rest {
                 lines.push(Line::from(Span::styled(
-                    format!("        {}", continuation),
+                    format!("         {}", continuation),
                     styles::dim_style(),
                 )));
             }

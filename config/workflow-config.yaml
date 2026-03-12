@@ -459,6 +459,7 @@ context_management:
     - "developer.md"
     - "reviewer.md"
     - "skeptic.md"
+    - "interactions.jsonl"
 
 # Server-Side Compaction (Anthropic API beta)
 # Auto-summarizes conversation when approaching context limits
@@ -469,7 +470,8 @@ compaction:
   pause_after_compaction: true       # Pause to inject workflow state after compaction
   instructions: |
     Preserve: current task ID, workflow phase, implementation progress,
-    active concerns, file paths being modified, test status.
+    active concerns, file paths being modified, test status,
+    human guidance entries from interactions.jsonl.
     Discard: verbose tool outputs, intermediate search results,
     full file contents already processed.
 

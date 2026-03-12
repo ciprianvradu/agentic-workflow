@@ -211,6 +211,10 @@ pub struct Interaction {
     pub agent: String,
     #[serde(default)]
     pub phase: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
 }
 
 /// A discovery entry from memory/discoveries.jsonl.

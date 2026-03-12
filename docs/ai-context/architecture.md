@@ -417,8 +417,43 @@ Claude Code supports lifecycle hooks that run scripts at specific trigger points
 | `validate-transition.py` | PreToolUse | `Task` | Validates workflow phase transitions follow the correct sequence |
 | `check-bash-safety.py` | PreToolUse | `Bash` | Warns about destructive git commands, git push during workflows, git commit during planning |
 | `check-workflow-complete.py` | Stop | (none) | Blocks exit if workflow incomplete; emits session-close reminders when complete |
+| `log-crew-interaction.py` | UserPromptSubmit + Stop | (none) | Captures all human input and agent responses to `interactions.jsonl` |
 
 **Session isolation**: All hooks use `_find_session_task()` which checks `.active_task` file and worktree detection. Non-crew sessions are never affected.
+
+### Interaction Capture System
+
+`log-crew-interaction.py` provides deterministic, automatic capture of the full conversation trail during active crew sessions. It fires on two events:
+
+- **UserPromptSubmit**: Logs every user prompt as `{role: "human", type: "guidance"}`. Skips `/crew` and `/crew-resume` prefixes (already logged by the orchestrator) and internal orchestrator calls (`python3`, `crew_orchestrator`, etc.).
+- **Stop**: Reads the transcript file and extracts the last assistant response (truncated to 500 chars), logged as `{role: "agent", type: "message"}`.
+
+**Interaction entry format:**
+```json
+{
+  "timestamp": "2026-03-12T10:00:00+00:00",
+  "role": "human",
+  "type": "guidance",
+  "content": "...",
+  "phase": "implementer",
+  "agent": "user",
+  "source": "hook"
+}
+```
+
+The `source: "hook"` field distinguishes entries written by the hook script from entries written explicitly by the orchestrator via `log-interaction`.
+
+**Interaction types** (`type` field):
+- `guidance` — ad-hoc user input mid-workflow (hook-captured or explicit log-interaction)
+- `correction` — user corrects agent output (explicit log-interaction only)
+- `new_requirement` — user adds a requirement mid-workflow (explicit log-interaction only)
+- `question` — user asks a clarifying question (explicit log-interaction only)
+- `message` — agent response (hook-captured on Stop)
+- `escalation_question` / `escalation_response` — implementer escalation exchanges
+
+**Human Guidance Trail**: When the orchestrator spawns an agent (step 8 of Agent Prompt Composition in `crew.md`), it reads `interactions.jsonl` and injects any entries with `role: "human"` and `type` in `["guidance", "correction", "new_requirement", "question"]` under a `## Human Guidance` header. This ensures agents see all user corrections and requirements accumulated during the workflow.
+
+**Compaction safety**: `interactions.jsonl` is listed in `preserve_patterns` in the compaction config so it survives context compaction. The file uses append-only JSONL with `filelock` for safe concurrent access.
 
 **Hook response format**:
 - `{"decision": "approve", "reason": "..."}` — Allow the action, display reason as informational message

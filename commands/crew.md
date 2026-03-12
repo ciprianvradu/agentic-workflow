@@ -162,6 +162,7 @@ When building prompts for agents, include:
 5. **Knowledge base inventory** (list files, substitute `{knowledge_base}` path)
 6. **Variable substitution**: Replace `{knowledge_base}` and `{task_directory}` with config values
 7. **Convention injection** (implementer + quality_guard): If `next.convention_files` exists, read each file and include under a `## Mandatory Conventions (from ai-context)` header in the prompt. These are actual convention files referenced by the Planner for the implementer to follow exactly.
+8. **Human guidance trail**: Read `.tasks/<task_id>/interactions.jsonl` and include any entries with `role: "human"` and `type` in `["guidance", "correction", "new_requirement", "question"]` under a `## Human Guidance` header. This ensures agents have full context of user corrections and requirements given during the workflow. Skip if the file is empty or missing.
 
 ## Error Handling
 
@@ -172,9 +173,43 @@ If an agent fails or produces invalid output:
 
 ## Interaction Logging
 
-When the user provides ad-hoc guidance mid-workflow (outside of checkpoints), log it:
+**All user input during active crew sessions is captured automatically** via Claude Code
+hooks (`log-crew-interaction.py` fires on `UserPromptSubmit` and `Stop`). This provides:
+
+- Complete conversation trail without relying on LLM logging
+- Automatic classification of input type (guidance, correction, new_requirement, question)
+- Context preserved across session recovery and compaction
+- Visibility in crew-board's History view and agent prompt composition
+
+The hook auto-classifies user input based on content signals:
+- **Question**: Ends with `?` or starts with interrogative words (how, what, why...)
+- **Correction**: Starts with negation/redirection (no, don't, actually, instead, fix...)
+- **New requirement**: Contains additive signals (also, add, additionally, include...)
+- **Guidance**: Default — general direction or instruction
+
+Classified interactions are included in agent prompts via the Human Guidance Trail
+(see Agent Prompt Composition), ensuring all agents see user corrections and requirements.
+
+As a safety net, also log explicitly when the hook may not have captured context:
+
+When the user provides ad-hoc guidance mid-workflow (outside of checkpoints):
 ```
 python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user input>" --type guidance --phase <current_phase>
+```
+
+When the user provides a correction to agent output:
+```
+python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<correction>" --type correction --phase <current_phase>
+```
+
+When the user adds a new requirement mid-workflow:
+```
+python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<new requirement>" --type new_requirement --phase <current_phase>
+```
+
+When the user asks a clarifying question:
+```
+python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<question>" --type question --phase <current_phase>
 ```
 
 ## Output to User
