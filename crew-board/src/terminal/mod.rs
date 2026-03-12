@@ -53,6 +53,12 @@ pub struct HookState {
     pub tool_counts: HashMap<String, u32>,
     /// Whether a Claude Code session is currently active.
     pub session_active: bool,
+    /// Total cost in USD accumulated across all sessions for this terminal.
+    pub total_cost_usd: f64,
+    /// Total input tokens accumulated across all sessions.
+    pub total_input_tokens: u64,
+    /// Total output tokens accumulated across all sessions.
+    pub total_output_tokens: u64,
 }
 
 /// Stored launch parameters for relaunching a terminal.

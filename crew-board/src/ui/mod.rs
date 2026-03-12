@@ -141,9 +141,10 @@ fn draw_quit_confirm(frame: &mut Frame, app: &App) {
 }
 
 fn draw_dual_pane(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let left_pct = app.pane_width_tasks as u16;
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([Constraint::Percentage(left_pct), Constraint::Percentage(100 - left_pct)])
         .split(area);
 
     task_list::draw(frame, app, chunks[0]);

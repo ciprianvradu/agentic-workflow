@@ -67,8 +67,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Line::from(""),
         key_line("\u{2191}/\u{2193} or j/k", "Move up/down", key_style),
         key_line("Enter/Space", "Expand/collapse repo", key_style),
-        key_line("Tab", "Switch pane focus", key_style),
+        key_line("Tab", "Switch pane focus / Toggle terminal focus (Terminals view)", key_style),
         key_line("PgUp/PgDn", "Scroll detail pane", key_style),
+        key_line("Home/End", "Jump to top/bottom of detail", key_style),
         key_line("`", "Cycle views", key_style),
         Line::from(""),
         Line::from(Span::styled("Detail Pane", bold)),
@@ -91,8 +92,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
         key_line("F5", "Previous terminal (skip exited)", key_style),
         key_line("F6", "Next terminal (skip exited)", key_style),
         key_line("F7", "Jump to next attention terminal", key_style),
-        key_line("F12", "Exit focus (back to Normal)", key_style),
-        key_line("Shift+F1-F5", "Switch view (global, even while focused)", mod_style),
+        key_line("F12 / Tab", "Exit focus (back to Normal)", key_style),
+        key_line("Shift+F1-F6", "Switch view (global, even while focused)", mod_style),
         Line::from(""),
         Line::from(Span::styled("  Scroll-Back Mode:", dim)),
         key_line("\u{2191}\u{2193}/j/k", "Scroll line by line", key_style),
@@ -127,19 +128,23 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(Span::styled(kitty_note, dim)),
         Line::from(""),
-        Line::from(Span::styled("Press any key to close", dim)),
+        Line::from(Span::styled("Esc close  \u{2191}\u{2193}/PgUp/PgDn scroll", dim)),
     ];
 
     let total_lines = lines.len() as u16;
     let visible_lines = inner.height;
+    let max_scroll = total_lines.saturating_sub(visible_lines);
+    let scroll_offset = app.help_scroll.min(max_scroll);
 
-    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
     frame.render_widget(paragraph, inner);
 
     // Scrollbar if content overflows
     if total_lines > visible_lines {
         let mut scrollbar_state =
-            ScrollbarState::new(total_lines.saturating_sub(visible_lines) as usize);
+            ScrollbarState::new(max_scroll as usize).position(scroll_offset as usize);
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             inner,

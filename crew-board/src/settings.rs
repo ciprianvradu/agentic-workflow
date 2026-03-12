@@ -34,6 +34,18 @@ pub struct Settings {
     #[serde(default = "default_scrollback_lines")]
     pub scrollback_lines: u32,
 
+    /// Left pane width percentage for Tasks view (default: 40).
+    #[serde(default = "default_pane_width_tasks")]
+    pub pane_width_tasks: u8,
+
+    /// Left pane width percentage for Issues view (default: 40).
+    #[serde(default = "default_pane_width_issues")]
+    pub pane_width_issues: u8,
+
+    /// Crew list width in characters for Terminals view (default: 20).
+    #[serde(default = "default_pane_width_terminals")]
+    pub pane_width_terminals: u8,
+
     /// Auto-launch embedded terminal on F4 worktree creation.
     #[serde(default = "default_true")]
     pub auto_embed_on_create: bool,
@@ -149,6 +161,9 @@ impl Default for Settings {
             prefix_key: "C-b".to_string(),
             terminal_layout: "focused".to_string(),
             scrollback_lines: 10000,
+            pane_width_tasks: 40,
+            pane_width_issues: 40,
+            pane_width_terminals: 20,
             auto_embed_on_create: true,
             idle_timeout_secs: 120,
             visual_bell: true,
@@ -188,6 +203,18 @@ fn default_terminal_layout() -> String {
 
 fn default_scrollback_lines() -> u32 {
     10000
+}
+
+fn default_pane_width_tasks() -> u8 {
+    40
+}
+
+fn default_pane_width_issues() -> u8 {
+    40
+}
+
+fn default_pane_width_terminals() -> u8 {
+    20
 }
 
 fn default_idle_timeout() -> u64 {

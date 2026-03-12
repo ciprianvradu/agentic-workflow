@@ -78,7 +78,7 @@ pub struct TaskState {
     pub description: String,
     #[serde(default)]
     pub workflow_mode: Option<WorkflowMode>,
-    #[serde(default)]
+    #[serde(default, alias = "cost_tracking")]
     pub cost_summary: Option<serde_json::Value>,
     #[serde(default)]
     pub status: Option<String>,

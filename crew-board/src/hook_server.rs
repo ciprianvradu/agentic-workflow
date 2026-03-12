@@ -96,6 +96,7 @@ pub enum HookEvent {
     Stop {
         terminal_id: String,
         preview: String,
+        session_cost: Option<SessionCost>,
     },
     SessionEnd {
         terminal_id: String,
@@ -111,6 +112,22 @@ pub enum HookEvent {
         terminal_id: String,
         prompt_preview: String,
     },
+}
+
+/// Session cost data from Claude Code Stop hook events.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+pub struct SessionCost {
+    #[serde(default)]
+    pub cost_usd: f64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub num_turns: u32,
+    #[serde(default)]
+    pub model: String,
 }
 
 /// The HTTP hook server handle.
@@ -659,9 +676,46 @@ fn parse_hook_event(terminal_id: String, body: &str) -> Result<HookEvent> {
                 .or_else(|| v.get("transcript_path").and_then(|s| s.as_str()))
                 .unwrap_or("")
                 .to_string();
+            // Parse session cost from various Claude Code payload formats
+            let session_cost = v.get("session_cost")
+                .or_else(|| v.get("cost"))
+                .or_else(|| v.get("sessionCost"))
+                .and_then(|cost_val| {
+                    if cost_val.is_object() {
+                        let cost_usd = cost_val.get("costUsd")
+                            .or_else(|| cost_val.get("cost_usd"))
+                            .or_else(|| cost_val.get("total_cost"))
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0);
+                        let input_tokens = cost_val.get("inputTokens")
+                            .or_else(|| cost_val.get("input_tokens"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let output_tokens = cost_val.get("outputTokens")
+                            .or_else(|| cost_val.get("output_tokens"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let num_turns = cost_val.get("numTurns")
+                            .or_else(|| cost_val.get("num_turns"))
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+                        let model = cost_val.get("model")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        if cost_usd > 0.0 || input_tokens > 0 || output_tokens > 0 {
+                            Some(SessionCost { cost_usd, input_tokens, output_tokens, num_turns, model })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                });
             HookEvent::Stop {
                 terminal_id,
                 preview,
+                session_cost,
             }
         }
         "SessionEnd" => HookEvent::SessionEnd { terminal_id },

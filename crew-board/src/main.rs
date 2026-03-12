@@ -108,6 +108,9 @@ fn main() -> Result<()> {
 
     // Apply terminal settings from config
     app.terminal_layout = initial_layout;
+    app.pane_width_tasks = cfg.pane_width_tasks.clamp(10, 90);
+    app.pane_width_issues = cfg.pane_width_issues.clamp(10, 90);
+    app.pane_width_terminals = cfg.pane_width_terminals.clamp(10, 50);
     app.kitty_protocol_enabled = kitty_enabled;
     app.system_bell = cfg.system_bell;
     app.visual_bell = cfg.visual_bell;
@@ -330,35 +333,89 @@ fn run_app(
                         }
                     }
                 }
-                // Priority 0: Help overlay (any key closes)
+                // Priority 0: Help overlay (scrollable)
                 else if app.show_help {
-                    app.show_help = false;
+                    match key.code {
+                        KeyCode::Esc | KeyCode::F(1) => {
+                            app.show_help = false;
+                            app.help_scroll = 0;
+                        }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            app.help_scroll = app.help_scroll.saturating_sub(1);
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            app.help_scroll = app.help_scroll.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            app.help_scroll = app.help_scroll.saturating_sub(10);
+                        }
+                        KeyCode::PageDown => {
+                            app.help_scroll = app.help_scroll.saturating_add(10);
+                        }
+                        KeyCode::Home => {
+                            app.help_scroll = 0;
+                        }
+                        KeyCode::End => {
+                            app.help_scroll = u16::MAX; // clamped during render
+                        }
+                        _ => {} // ignore other keys (no longer closes)
+                    }
                 }
                 // Priority 0.5: Stats popup
                 else if app.stats_popup.is_some() {
-                    match key.code {
-                        KeyCode::Esc => { app.stats_popup = None; }
-                        KeyCode::PageUp => {
-                            if let Some(ref mut popup) = app.stats_popup {
-                                popup.scroll = popup.scroll.saturating_sub(10);
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        match key.code {
+                            KeyCode::F(1) => {
+                                app.stats_popup = None;
+                                app.set_view(ActiveView::Tasks);
                             }
-                        }
-                        KeyCode::PageDown => {
-                            if let Some(ref mut popup) = app.stats_popup {
-                                popup.scroll = popup.scroll.saturating_add(10);
+                            KeyCode::F(2) => {
+                                app.stats_popup = None;
+                                app.set_view(ActiveView::BeadsIssues);
                             }
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if let Some(ref mut popup) = app.stats_popup {
-                                popup.scroll = popup.scroll.saturating_sub(1);
+                            KeyCode::F(3) => {
+                                app.stats_popup = None;
+                                app.set_view(ActiveView::Config);
                             }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if let Some(ref mut popup) = app.stats_popup {
-                                popup.scroll = popup.scroll.saturating_add(1);
+                            KeyCode::F(4) => {
+                                app.stats_popup = None;
+                                app.set_view(ActiveView::CostSummary);
                             }
+                            KeyCode::F(5) => {
+                                app.stats_popup = None;
+                                app.set_view(ActiveView::Terminals);
+                            }
+                            KeyCode::F(6) => {
+                                app.stats_popup = None;
+                                app.set_view(ActiveView::ActivityFeed);
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                    } else {
+                        match key.code {
+                            KeyCode::Esc => { app.stats_popup = None; }
+                            KeyCode::PageUp => {
+                                if let Some(ref mut popup) = app.stats_popup {
+                                    popup.scroll = popup.scroll.saturating_sub(10);
+                                }
+                            }
+                            KeyCode::PageDown => {
+                                if let Some(ref mut popup) = app.stats_popup {
+                                    popup.scroll = popup.scroll.saturating_add(10);
+                                }
+                            }
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if let Some(ref mut popup) = app.stats_popup {
+                                    popup.scroll = popup.scroll.saturating_sub(1);
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if let Some(ref mut popup) = app.stats_popup {
+                                    popup.scroll = popup.scroll.saturating_add(1);
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 // Priority 0.6: Scroll-back mode
@@ -383,10 +440,39 @@ fn run_app(
                                 }
                             }
                         }
+                    // Shift+F-keys: global view switching (even from scroll-back)
+                    } else if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        match key.code {
+                            KeyCode::F(1) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::Tasks);
+                            }
+                            KeyCode::F(2) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::BeadsIssues);
+                            }
+                            KeyCode::F(3) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::Config);
+                            }
+                            KeyCode::F(4) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::CostSummary);
+                            }
+                            KeyCode::F(5) => {
+                                // Already in Terminals — just exit scroll-back
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                            }
+                            KeyCode::F(6) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::ActivityFeed);
+                            }
+                            _ => {}
+                        }
                     } else {
                         match key.code {
                             KeyCode::Esc | KeyCode::Char('q') => {
-                                // Keep scroll position — Ctrl+F5 or End resets to live
+                                // Keep scroll position — Ctrl+F5 resets to live, End scrolls to bottom
                                 app.terminal_search_query.clear();
                                 app.terminal_search_matches.clear();
                                 app.terminal_input_mode = TerminalInputMode::Normal;
@@ -408,7 +494,6 @@ fn run_app(
                             }
                             KeyCode::End => {
                                 app.terminal_scroll_reset();
-                                app.terminal_input_mode = TerminalInputMode::Normal;
                             }
                             KeyCode::Char('/') => {
                                 app.terminal_search_start();
@@ -427,8 +512,8 @@ fn run_app(
                 else if app.active_view == ActiveView::Terminals
                     && app.terminal_input_mode == TerminalInputMode::TerminalFocused
                 {
-                    // F12: toggle back to Normal mode (single-key exit)
-                    if key.code == KeyCode::F(12) {
+                    // F12 or Tab: toggle back to Normal mode (single-key exit)
+                    if key.code == KeyCode::F(12) || key.code == KeyCode::Tab {
                         app.terminal_input_mode = TerminalInputMode::Normal;
                     }
                     // F5: previous terminal (bypass focused mode)
@@ -465,6 +550,10 @@ fn run_app(
                             KeyCode::F(5) => {
                                 // Already in Terminals — just exit focus
                                 app.terminal_input_mode = TerminalInputMode::Normal;
+                            }
+                            KeyCode::F(6) => {
+                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.set_view(ActiveView::ActivityFeed);
                             }
                             _ => {
                                 // Other Shift keys: forward to PTY
@@ -513,28 +602,69 @@ fn run_app(
                 else if app.focus_pane == FocusPane::Right
                     && app.detail_mode != DetailMode::Overview
                 {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Backspace => app.detail_back(),
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if matches!(app.detail_mode, DetailMode::DocList { .. }) {
-                                app.detail_nav_up();
-                            } else {
-                                app.scroll_detail_up();
+                    // Shift+F-keys: global view switching (even from detail pane)
+                    if key.modifiers.contains(KeyModifiers::SHIFT) {
+                        match key.code {
+                            KeyCode::F(1) => {
+                                app.detail_back();
+                                app.set_view(ActiveView::Tasks);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
                             }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if matches!(app.detail_mode, DetailMode::DocList { .. }) {
-                                app.detail_nav_down();
-                            } else {
-                                app.scroll_detail_down();
+                            KeyCode::F(2) => {
+                                app.detail_back();
+                                app.set_view(ActiveView::BeadsIssues);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
                             }
+                            KeyCode::F(3) => {
+                                app.detail_back();
+                                app.set_view(ActiveView::Config);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(4) => {
+                                app.detail_back();
+                                app.set_view(ActiveView::CostSummary);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(5) => {
+                                app.detail_back();
+                                app.set_view(ActiveView::Terminals);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            KeyCode::F(6) => {
+                                app.detail_back();
+                                app.set_view(ActiveView::ActivityFeed);
+                                app.flash_modifier_bar(ModifierBarState::Shift);
+                            }
+                            _ => {}
                         }
-                        KeyCode::Enter => app.detail_open_doc(),
-                        KeyCode::PageDown => app.scroll_detail_page_down(page_size),
-                        KeyCode::PageUp => app.scroll_detail_page_up(page_size),
-                        KeyCode::Tab => app.toggle_focus(),
-                        KeyCode::Char('q') | KeyCode::F(10) => app.quit_confirm = true,
-                        _ => {}
+                    } else {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Backspace => app.detail_back(),
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if matches!(app.detail_mode, DetailMode::DocList { .. }) {
+                                    app.detail_nav_up();
+                                } else {
+                                    app.scroll_detail_up();
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if matches!(app.detail_mode, DetailMode::DocList { .. }) {
+                                    app.detail_nav_down();
+                                } else {
+                                    app.scroll_detail_down();
+                                }
+                            }
+                            KeyCode::Enter => app.detail_open_doc(),
+                            KeyCode::PageDown => app.scroll_detail_page_down(page_size),
+                            KeyCode::PageUp => app.scroll_detail_page_up(page_size),
+                            KeyCode::Home => { app.detail_scroll = 0; }
+                            KeyCode::End => {
+                                app.detail_scroll = app.detail_scroll_max.get();
+                            }
+                            KeyCode::Tab => app.toggle_focus(),
+                            KeyCode::Char('q') | KeyCode::F(10) => app.quit_confirm = true,
+                            _ => {}
+                        }
                     }
                 }
                 // Priority 5: Default key handling
@@ -628,8 +758,39 @@ fn run_app(
                             }
                             // Fall through to existing Ctrl+key handlers below
                             _ => {
-                                if let KeyCode::Char('c') = key.code {
-                                    app.should_quit = true;
+                                match key.code {
+                                    KeyCode::Char('c') => {
+                                        app.should_quit = true;
+                                    }
+                                    KeyCode::Left => {
+                                        match app.active_view {
+                                            ActiveView::Tasks => {
+                                                app.pane_width_tasks = app.pane_width_tasks.saturating_sub(5).max(10);
+                                            }
+                                            ActiveView::BeadsIssues => {
+                                                app.pane_width_issues = app.pane_width_issues.saturating_sub(5).max(10);
+                                            }
+                                            ActiveView::Terminals => {
+                                                app.pane_width_terminals = app.pane_width_terminals.saturating_sub(2).max(10);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    KeyCode::Right => {
+                                        match app.active_view {
+                                            ActiveView::Tasks => {
+                                                app.pane_width_tasks = (app.pane_width_tasks + 5).min(90);
+                                            }
+                                            ActiveView::BeadsIssues => {
+                                                app.pane_width_issues = (app.pane_width_issues + 5).min(90);
+                                            }
+                                            ActiveView::Terminals => {
+                                                app.pane_width_terminals = (app.pane_width_terminals + 2).min(50);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
@@ -652,7 +813,10 @@ fn run_app(
                         }
 
                         // Help
-                        (_, KeyCode::F(1)) => app.show_help = true,
+                        (_, KeyCode::F(1)) => {
+                            app.show_help = true;
+                            app.help_scroll = 0;
+                        }
 
                         // Launch terminal
                         (_, KeyCode::F(2)) => app.open_launch_popup(),
@@ -763,8 +927,19 @@ fn run_app(
                         (_, KeyCode::PageDown) => app.tree_page_down(page_size),
                         (_, KeyCode::PageUp) => app.tree_page_up(page_size),
 
-                        // Pane focus
-                        (_, KeyCode::Tab) => app.toggle_focus(),
+                        // Pane focus / Terminal focus toggle
+                        (_, KeyCode::Tab) => {
+                            if app.active_view == ActiveView::Terminals
+                                && app
+                                    .terminal_manager
+                                    .as_ref()
+                                    .is_some_and(|m| !m.terminals.is_empty())
+                            {
+                                app.terminal_input_mode = TerminalInputMode::TerminalFocused;
+                            } else {
+                                app.toggle_focus();
+                            }
+                        }
 
                         // Permission queue
                         (_, KeyCode::F(8)) => app.open_permission_popup(),

@@ -51,9 +51,11 @@ Tasks  Issues  Config  Cost  [Terms]  Activity    ↑↓ crew  ! 1 attn  5 repos
 
 **Full Modifier Encoding** — Ctrl+Arrow (word jump), Ctrl+Enter (newline), Shift+Up/Down, and all other modifier+key combinations work correctly inside embedded terminals.
 
-**Six Dashboard Views** — Tasks, Issues, Config, Cost, Terminals, and Activity Feed. Switch instantly with Shift+F1-F6 (even while focused in a terminal).
+**Six Dashboard Views** — Tasks, Issues, Config, Cost, Terminals, and Activity Feed. Switch instantly with Shift+F1-F6 (even while focused in a terminal or in the Statistics popup).
 
-**Hook-Based Communication** — HTTP hook server receives structured events from Claude Code hooks. Real-time visibility into tool usage, permission requests, and session lifecycle.
+**Configurable Pane Widths** — Resize panes on the fly with Ctrl+Left/Right. Persist defaults with `pane_width_tasks`, `pane_width_issues`, and `pane_width_terminals` in settings.
+
+**Hook-Based Communication** — HTTP hook server receives structured events from Claude Code hooks. Real-time visibility into tool usage, permission requests, and session lifecycle. Session cost is automatically captured from `Stop` hook events and displayed in the Cost view.
 
 **Activity Feed (View 6)** — Real-time event stream from all terminals with filtering by terminal, event type, or tool name. Includes a Gantt timeline view showing tool execution spans across terminals.
 
@@ -117,7 +119,7 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 
 | Key | Action |
 |-----|--------|
-| `F1` | Help overlay (all keybindings) |
+| `F1` | Scrollable help overlay (all keybindings). Navigate with Up/Down/PgUp/PgDn, close with Esc. |
 | `F2` | Launch terminal with AI host |
 | `F3` | Search across tasks & documents |
 | `F5` | Force refresh |
@@ -158,8 +160,11 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 |-----|--------|
 | `↑`/`↓` or `j`/`k` | Move up/down |
 | `Enter`/`Space` | Expand/collapse repo |
-| `Tab` | Switch focus between panes |
+| `Tab` | Switch pane focus (most views) / Enter terminal focused mode (Terminals view) |
 | `PgUp`/`PgDn` | Scroll detail pane |
+| `Home`/`End` | Jump to top/bottom of detail pane |
+| `Ctrl+Left` | Narrow left pane (Tasks/Issues: −5%, Terminals: −2 chars) |
+| `Ctrl+Right` | Widen left pane (Tasks/Issues: +5%, Terminals: +2 chars) |
 | `Shift+F1`-`F6` | Switch views |
 | `` ` `` | Cycle views |
 | `q` / `Ctrl+C` | Quit |
@@ -183,11 +188,12 @@ View 5 is a full terminal multiplexer with three input modes:
 | Key | Action |
 |-----|--------|
 | `↑`/`↓` or `j`/`k` | Focus previous/next terminal |
-| `F9` / `F12` | Enter focused mode (all keys go to PTY) |
+| `Tab` / `F9` / `F12` | Enter focused mode (all keys go to PTY) |
 | `Enter` | Relaunch exited terminal |
 | `F6` / `Delete` | Dismiss exited terminal |
 | `Ctrl+F4` | Dismiss ALL exited terminals |
 | `F4` | Cycle layout (focused → tiled-2 → tiled-4 → stacked) |
+| `Ctrl+Left` / `Ctrl+Right` | Narrow / widen the crew list |
 | `Ctrl+F8` | Enter scroll-back mode |
 
 **Focused Mode** — All keystrokes go to the active terminal:
@@ -198,7 +204,7 @@ View 5 is a full terminal multiplexer with three input modes:
 | `F6` | Focus next running terminal (skips exited) |
 | `F7` | Jump to next terminal needing attention |
 | `F12` | Exit focus (back to Normal) |
-| `Shift+F1`-`F5` | Switch view (works even while focused) |
+| `Shift+F1`-`F6` | Switch view (works even while focused) |
 | All other keys | Sent to PTY with full modifier encoding |
 
 **Scroll-Back Mode** — Browse terminal history:
@@ -207,9 +213,11 @@ View 5 is a full terminal multiplexer with three input modes:
 |-----|--------|
 | `↑`/`↓` or `j`/`k` | Scroll line by line |
 | `PgUp`/`PgDn` | Scroll by page |
-| `Home`/`End` | Jump to top / live view |
+| `Home` | Jump to top of scroll-back buffer |
+| `End` | Jump to bottom (stay in scroll-back mode) |
 | `/` | Search terminal output |
 | `n` / `N` | Next / previous search match |
+| `Shift+F1`-`F6` | Exit scroll-back and switch to view |
 | `q` / `Esc` | Exit scroll-back |
 
 ### Mouse (Terminal Panels)
@@ -249,6 +257,7 @@ View 5 is a full terminal multiplexer with three input modes:
 |-----|--------|
 | `↑`/`↓` | Scroll by line |
 | `PgUp`/`PgDn` | Scroll by page |
+| `Shift+F1`-`F6` | Close popup and switch to the corresponding view |
 | `Esc` | Close |
 
 ### Worktree Creation (F4)
@@ -294,6 +303,15 @@ terminal_layout = "focused"
 
 # Scrollback buffer size per terminal (default: 10000)
 scrollback_lines = 10000
+
+# Left pane width % for Tasks view, 10-90 (default: 40). Runtime: Ctrl+Left/Right
+# pane_width_tasks = 40
+
+# Left pane width % for Issues view, 10-90 (default: 40). Runtime: Ctrl+Left/Right
+# pane_width_issues = 40
+
+# Crew list width in chars for Terminals view, 10-50 (default: 20). Runtime: Ctrl+Left/Right
+# pane_width_terminals = 20
 
 # Auto-launch embedded terminal on F4 worktree creation (default: true)
 auto_embed_on_create = true

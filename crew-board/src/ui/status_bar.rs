@@ -398,7 +398,7 @@ fn draw_scrollback_bar(frame: &mut Frame, app: &App, area: Rect) {
         prefix_key_span("\u{2191}\u{2193}/jk", "Line"),
         prefix_key_span("PgUp/Dn", "Page"),
         prefix_key_span("Home", "Top"),
-        prefix_key_span("End", "Live+Exit"),
+        prefix_key_span("End", "Bottom"),
         prefix_key_span("/", "Search"),
         prefix_key_span("Esc", "Exit (keep pos)"),
         Span::styled(

@@ -79,6 +79,7 @@ src/
 - Tree cursor clamps at boundaries (does not wrap around)
 - Navigation methods: `tree_down()`, `tree_up()`, `tree_page_down(page_size)`, `tree_page_up(page_size)`, `tree_expand()`, `tree_collapse()`
 - Key bindings: Up/Down/j/k for single step, PgUp/PgDn for page, Right/l to expand repo, Left to collapse repo
+- **Pane resize**: `Ctrl+Left` / `Ctrl+Right` resize the left pane in the active view. Tasks and Issues views adjust by ±5 percentage points (clamped to 10-90%); Terminals view adjusts crew list by ±2 characters (clamped to 10-50). The values are stored on `App` as `pane_width_tasks`, `pane_width_issues`, `pane_width_terminals` and reset to config defaults at startup.
 
 ### Detail Pane Modes
 ```
@@ -100,7 +101,7 @@ Keys are routed in priority order:
 3. Paste events (`Event::Paste`) → wrapped in bracketed paste sequences (`\x1b[200~`...`\x1b[201~`) and sent to PTY in focused mode; forwarded char-by-char (stripping newlines) to `tui_input` widgets in search/permission/create popups
 4. Key release events (kitty protocol) → update `modifier_bar_state` based on remaining modifiers
 5. Modifier-only key press events (kitty protocol) → update `modifier_bar_state`, continue
-6. Help overlay open → any key closes it
+6. Help overlay open → `Esc`/`F1` closes it; `Up`/`Down`/`j`/`k` scroll by line; `PgUp`/`PgDn` scroll by page; `Home`/`End` jump to top/bottom; all other keys are ignored (overlay stays open)
 7. Terminal view + `ScrollBack` mode → scroll navigation keys
 8. Terminal view + `TerminalFocused` mode → `F12` exits, F5/F6 cycle prev/next terminal, F7 jumps to attention, Shift+F-keys switch views, all other keys forwarded to PTY via `key_to_bytes()`
 9. Search popup open → search-specific keys
@@ -146,8 +147,18 @@ When `hook_communication = true` (default), crew-board opens a lightweight HTTP 
 | `PostToolUse` | `tool_name`, `tool_input_summary`, `success` |
 | `PermissionRequest` | `tool_name`, `tool_input: serde_json::Value` |
 | `Notification` | `message` |
-| `Stop` | `preview` |
+| `Stop` | `preview`, `session_cost: Option<SessionCost>` |
 | `SessionEnd` | — |
+
+**`SessionCost`** (in `hook_server.rs`): Cost data parsed from Claude Code `Stop` hook payloads. The server tries three JSON keys for the cost object: `session_cost`, `cost`, `sessionCost`. Within the object it accepts `costUsd`/`cost_usd`/`total_cost` for the dollar amount.
+
+| Field | Description |
+|-------|-------------|
+| `cost_usd` | Total cost of the session in USD. |
+| `input_tokens` | Total input tokens consumed. |
+| `output_tokens` | Total output tokens generated. |
+| `num_turns` | Number of conversation turns. |
+| `model` | Model identifier string (e.g. `"claude-opus-4-5"`). |
 
 **`HookState`** (per-terminal, in `terminal/mod.rs`):
 
@@ -158,6 +169,9 @@ When `hook_communication = true` (default), crew-board opens a lightweight HTTP 
 | `activity_label` | Human-readable tool activity (e.g. `"Edit src/main.rs"`). Set on `PreToolUse`, cleared on `PostToolUse`. |
 | `tool_counts` | `HashMap<String, u32>` of cumulative tool invocations per tool name. |
 | `session_active` | `true` between `SessionStart` and `SessionEnd`. |
+| `total_cost_usd` | Cumulative session cost in USD, accumulated from `SessionCost` on each `Stop` event. |
+| `total_input_tokens` | Cumulative input token count, accumulated from `Stop` events. |
+| `total_output_tokens` | Cumulative output token count, accumulated from `Stop` events. |
 
 `HookState` is `Option<HookState>` on `EmbeddedTerminal` — `None` until the first hook event arrives for that terminal.
 
@@ -297,6 +311,7 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 |-----|--------|
 | `↑` / `k` | Focus previous terminal |
 | `↓` / `j` | Focus next terminal |
+| `Tab` | Enter `TerminalFocused` mode (same as F9 — unified entry point) |
 | `F9` / `F12` | Enter `TerminalFocused` mode (running terminal required) |
 | `Enter` (exited) | Relaunch the exited terminal |
 | `Delete` (exited) | Dismiss (remove) the exited terminal |
@@ -304,6 +319,8 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 | `F6` (exited) | Dismiss the focused exited terminal |
 | `Ctrl+F4` | Dismiss ALL exited terminals at once |
 | `Ctrl+F8` | Enter scroll-back mode |
+| `Ctrl+Left` | Narrow crew list by 2 chars (min 10) |
+| `Ctrl+Right` | Widen crew list by 2 chars (max 50) |
 | `F7` | Jump focus to next terminal needing attention |
 | `F8` | Open Permission Queue popup |
 
@@ -335,6 +352,7 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 | `/` | Enter search mode (type query, Enter to search) |
 | `n` | Jump to next search match |
 | `N` | Jump to previous search match |
+| `Shift+F1-F6` | Exit scroll-back + switch to view |
 | `q` / `Esc` | Exit scroll-back, return to Normal |
 
 Scrollback offset is stored per-terminal (`EmbeddedTerminal.scroll_offset`). The border turns magenta in scroll-back mode, with a `[N/total]` indicator at the bottom. Mouse scroll wheel also enters scroll-back mode (see Mouse Support below).
@@ -553,6 +571,7 @@ Press `Ctrl+F6` to open a scrollable statistics overlay. Shows four sections:
 |-----|--------|
 | `Up` / `Down` | Scroll by line |
 | `PgUp` / `PgDn` | Scroll by page |
+| `Shift+F1`-`F6` | Close popup and switch to the corresponding view |
 | `Esc` | Close popup |
 
 ### Security Rules Engine
@@ -634,6 +653,9 @@ The hook bridge (`hook_bridge.rs`) enables non-Claude AI hosts to communicate wi
 | `prefix_key` | `string` | `"C-b"` | Prefix key for terminal commands (tmux syntax) |
 | `terminal_layout` | `string` | `"focused"` | Default layout: focused/tiled-2/tiled-4/stacked |
 | `scrollback_lines` | `u32` | `10000` | Scrollback buffer per terminal |
+| `pane_width_tasks` | `u8` | `40` | Left pane width % for Tasks view (10-90). Adjust at runtime with Ctrl+Left/Right. |
+| `pane_width_issues` | `u8` | `40` | Left pane width % for Issues view (10-90). Adjust at runtime with Ctrl+Left/Right. |
+| `pane_width_terminals` | `u8` | `20` | Crew list width in chars for Terminals view (10-50). Adjust at runtime with Ctrl+Left/Right. |
 | `auto_embed_on_create` | `bool` | `true` | Embed terminal on F4 worktree creation |
 | `idle_timeout_secs` | `u64` | `120` | Idle detection threshold |
 | `visual_bell` | `bool` | `true` | Flash status indicator on attention |
@@ -728,6 +750,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Modifier+F-key priority**: Shift+F-key and Ctrl+F-key bindings are checked BEFORE the base `match` in Priority 12. This prevents `Shift+F(1)` from falling through to the plain `F(1)` handler.
 - **Shift+F-keys DO bypass TerminalFocused mode**: Unlike regular keys, Shift+F1-F5 in TerminalFocused mode exit focus and switch views. F5/F6 cycle prev/next terminals while staying focused. F7 jumps to attention terminals. Other key combinations are forwarded to the PTY. `F12` is the sole single-key exit from focused mode.
 - **F9/F12 Focus is contextual**: F9 and F12 both enter TerminalFocused mode, but only when in Terminals view with at least one terminal. F9 shows a label ("Focus") in the base F-key bar only in Terminals view Normal mode; otherwise it renders as a dimmed empty placeholder.
+- **Tab is unified with F9 in Terminals view**: In Normal mode with terminals present, `Tab` enters `TerminalFocused` (same as `F9`). Outside the Terminals view, `Tab` calls `toggle_focus()` to switch between left and right panes (existing behavior). In `TerminalFocused` mode, `Tab` exits back to Normal (same as `F12`). This makes Tab a single consistent "toggle focus" key across all contexts.
 - **Mouse capture scope**: Mouse capture is always enabled (`EnableMouseCapture`). Click/drag/release are handled only when `active_view == Terminals`. Scroll events also only apply in Terminals view. Clicking outside any terminal panel clears the selection.
 - **`terminal_panel_rects` is RefCell**: Because panel rects are written during `draw()` (immutable `&App`) and read during mouse handling (mutable `&mut App`), the rects use `RefCell<Vec<(usize, Rect)>>`. This is the only `RefCell` in `App`.
 - **OSC 52 clipboard**: Text is copied via OSC 52 (`\x1b]52;c;{base64}\x07`). This requires terminal support (WezTerm, iTerm2, modern Windows Terminal). The `base64` crate is a dependency for this feature.
@@ -741,6 +764,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Crew summary line**: In Focused layout with 2+ terminals, a one-line summary appears above the terminal panel showing all terminals' status icons and short IDs. Uses `●` (running), `◆` (attention), `✓`/`✗` (exited ok/failed).
 - **Phase+progress in terminal title**: `lookup_task_phase()` scans `app.repos` for a task matching the terminal's ID and appends `[phase]` or `[phase N%]` to the border title of running terminals.
 - **Terminal dismiss via Fn keys**: F6 dismisses the focused exited terminal. Ctrl+F4 dismisses ALL exited terminals at once via `dismiss_all_exited()`.
+- **Auto cost capture from Stop events**: When Claude Code sends a `Stop` hook event, `hook_server.rs` attempts to parse a cost object from the payload (tries keys `session_cost`, `cost`, `sessionCost`; within the object tries `costUsd`, `cost_usd`, `total_cost`). If a non-zero value is found, a `SessionCost` is attached to `HookEvent::Stop`. `process_hook_event()` accumulates these into `HookState.total_cost_usd`, `total_input_tokens`, `total_output_tokens`. The Cost view (Shift+F4) reads these fields to show live per-terminal and aggregate totals.
 - **Hook server port is dynamic**: `HookServer::start()` binds to `127.0.0.1:0`, so the OS assigns the port. The port is stored in `App.hook_server.port` and written into each terminal's `settings.local.json` and env vars at spawn time. There is no fixed port to configure.
 - **`settings.local.json` cleanup is best-effort**: On terminal dismiss or app exit, crew-board removes the file at `{worktree}/.claude/settings.local.json`. If crew-board crashes, the file is left behind and must be removed manually. It does not persist any user settings — it is solely crew-board's hook injection file.
 - **Hook events only flow for Claude Code terminals**: `generate_hook_config()` checks the `command` value and only writes hook config when the command is `claude`. Non-Claude terminals (Copilot, Gemini, OpenCode) get no hook injection and `hook_state` remains `None`.

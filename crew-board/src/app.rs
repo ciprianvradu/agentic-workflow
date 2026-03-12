@@ -330,6 +330,7 @@ pub struct App {
     pub should_quit: bool,
     pub quit_confirm: bool,
     pub show_help: bool,
+    pub help_scroll: u16,
     pub last_refresh: std::time::Instant,
     pub detail_scroll: u16,
     /// Max scroll offset computed during rendering (clamping target).
@@ -373,6 +374,14 @@ pub struct App {
     pub terminal_layout: TerminalLayout,
     /// Last known terminal area dimensions (rows, cols) for proper PTY sizing.
     pub last_terminal_size: (u16, u16),
+
+    // Configurable pane widths
+    /// Left pane width percentage for Tasks view (configurable, 10-90).
+    pub pane_width_tasks: u8,
+    /// Left pane width percentage for Issues/Beads view (configurable, 10-90).
+    pub pane_width_issues: u8,
+    /// Crew list width in chars for Terminals view (configurable, 10-50).
+    pub pane_width_terminals: u8,
 
     // Modifier F-key bar state
     /// Which modifier layer is currently shown on the F-key bar.
@@ -672,6 +681,7 @@ impl App {
             should_quit: false,
             quit_confirm: false,
             show_help: false,
+            help_scroll: 0,
             last_refresh: std::time::Instant::now(),
             detail_scroll: 0,
             detail_scroll_max: Cell::new(0),
@@ -693,6 +703,9 @@ impl App {
             terminal_input_mode: TerminalInputMode::Normal,
             terminal_layout: TerminalLayout::Focused,
             last_terminal_size: (24, 80),
+            pane_width_tasks: 40,
+            pane_width_issues: 40,
+            pane_width_terminals: 20,
             modifier_bar_state: ModifierBarState::Normal,
             modifier_bar_flash_until: None,
             attention_flash_until: None,
@@ -845,6 +858,9 @@ impl App {
                 activity_label: String::new(),
                 tool_counts: std::collections::HashMap::new(),
                 session_active: false,
+                total_cost_usd: 0.0,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
             });
         }
 
@@ -884,11 +900,16 @@ impl App {
                 // Notification triggers attention (handled below)
                 let _ = message;
             }
-            HookEvent::Stop { .. } => {
+            HookEvent::Stop { session_cost, .. } => {
                 state.last_event = "Stop".to_string();
                 state.last_event_at = now;
                 state.session_active = false;
                 state.activity_label.clear();
+                if let Some(ref cost) = session_cost {
+                    state.total_cost_usd += cost.cost_usd;
+                    state.total_input_tokens += cost.input_tokens;
+                    state.total_output_tokens += cost.output_tokens;
+                }
             }
             HookEvent::PermissionRequest { tool_name, .. } => {
                 state.last_event = "PermissionRequest".to_string();

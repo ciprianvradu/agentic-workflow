@@ -45,12 +45,13 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Calculate crew list width based on layout mode
+    // Calculate crew list width based on layout mode and configurable base width
+    let base_width = app.pane_width_terminals as u16;
     let list_width = match app.terminal_layout {
-        TerminalLayout::Focused => 20u16,
-        TerminalLayout::Tiled2 => 18,
-        TerminalLayout::Tiled4 => 15,
-        TerminalLayout::Stacked => 20,
+        TerminalLayout::Focused => base_width,
+        TerminalLayout::Tiled2 => base_width.saturating_sub(2),
+        TerminalLayout::Tiled4 => base_width.saturating_sub(5),
+        TerminalLayout::Stacked => base_width,
     };
 
     let chunks = Layout::default()
