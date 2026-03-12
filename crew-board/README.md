@@ -47,6 +47,8 @@ Tasks  Issues  Config  Cost  [Terms]  Activity    ↑↓ crew  ! 1 attn  5 repos
 
 **Four Layout Modes** — Focused (one large terminal), Tiled-2 (side-by-side), Tiled-4 (2x2 grid), Stacked (vertical). Cycle with `F4` in Terminals view.
 
+**Bracketed Paste** — Pasting multi-line text into embedded terminals works correctly. Paste content is wrapped in bracketed paste sequences so receiving applications (Claude Code, bash, etc.) treat it as a single paste rather than executing each line.
+
 **Full Modifier Encoding** — Ctrl+Arrow (word jump), Ctrl+Enter (newline), Shift+Up/Down, and all other modifier+key combinations work correctly inside embedded terminals.
 
 **Six Dashboard Views** — Tasks, Issues, Config, Cost, Terminals, and Activity Feed. Switch instantly with Shift+F1-F6 (even while focused in a terminal).

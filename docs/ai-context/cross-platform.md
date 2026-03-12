@@ -574,6 +574,11 @@ Commands (slash commands) are platform-specific entry points for workflow operat
 | `crew-resume.md` | `/crew-resume TASK_XXX` | `/crew-resume TASK_XXX` | Resume interrupted workflow |
 | `crew-checkpoint.md` | `/crew-checkpoint [note]` | `/crew-checkpoint [note]` | Save manual workflow checkpoint with discovery |
 | `crew-cost-report.md` | `/crew-cost-report [TASK_XXX]` | `/crew-cost-report [TASK_XXX]` | Display cost breakdown by agent/model |
+| `crew-learn.md` | `/crew learn` | `/crew learn` | Run Technical Writer standalone on recent changes |
+| `crew-permissions.md` | `/crew-permissions` | `/crew-permissions` | View/configure permission profiles |
+| `crew-docs-export.md` | `/crew-docs-export` | `/crew-docs-export` | Export documentation templates |
+| `crew-docs-import.md` | `/crew-docs-import` | `/crew-docs-import` | Import documentation templates |
+| `crew-docs-report.md` | `/crew-docs-report` | `/crew-docs-report` | Documentation health report |
 
 Copilot and Gemini use agent-based invocation (`@crew "task"`, `@crew-resume TASK_XXX`) rather than slash commands.
 

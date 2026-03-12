@@ -399,11 +399,14 @@ Invoke a single agent for quick consultation without starting a full workflow.
 
 | Agent | Best For |
 |-------|----------|
+| `planner` | Planning, architecture, implementation strategy |
 | `architect` | System design, trade-offs, architectural decisions |
 | `developer` | Implementation approach, code structure |
 | `reviewer` | Code review, plan validation, correctness checks |
 | `skeptic` | Edge cases, failure modes, what could go wrong |
-| `feedback` | Comparing implementation vs plan |
+| `technical-writer` | Documentation accuracy, coverage, updates needed |
+| `security-auditor` | Security review, vulnerability assessment |
+| `quality-guard` | Code quality, testing gaps, maintainability |
 
 **Options:**
 
@@ -437,6 +440,45 @@ We're considering two approaches:
 What are the trade-offs for future multi-provider support?
 ```
 
+### `/crew learn`
+Run the Technical Writer agent standalone to update documentation based on recent changes.
+
+```bash
+/crew learn
+```
+
+Analyzes recent git changes and updates `docs/ai-context/` accordingly — useful after manual code changes or when documentation drifts out of sync.
+
+### `/crew-permissions`
+View and configure permission profiles for the workflow.
+
+```bash
+/crew-permissions
+```
+
+Permission profiles control how much autonomy agents have: `strict` (approve everything), `standard` (approve destructive actions), `autonomous` (minimal prompts).
+
+### `/crew-docs-export`
+Export documentation templates from `docs/ai-context/` for sharing or backup.
+
+```bash
+/crew-docs-export [--output <path>]
+```
+
+### `/crew-docs-import`
+Import documentation templates into a project's `docs/ai-context/` directory.
+
+```bash
+/crew-docs-import [--source <path>]
+```
+
+### `/crew-docs-report`
+Generate a documentation health report showing coverage, staleness, and gaps.
+
+```bash
+/crew-docs-report
+```
+
 ## Configuration
 
 Configuration uses a cascade system where each level overrides the previous:
@@ -465,24 +507,17 @@ Control when the workflow pauses for human approval:
 ```yaml
 checkpoints:
   planning:
-    after_architect: true      # Review architectural concerns
-    after_developer: false     # Auto-proceed to reviewer
-    after_reviewer: true       # Review gaps found
-    after_skeptic: true        # Review edge cases
+    after_planner: true        # Review plan before implementation
+    after_reviewer: true       # Review gaps found before implementation
 
   implementation:
-    at_25_percent: false       # Auto-proceed early
-    at_50_percent: true        # Halfway review
+    at_25_percent: false       # Auto-proceed through early stages
+    at_50_percent: true        # Halfway review - critical checkpoint
     at_75_percent: false       # Auto-proceed to completion
-    before_commit: true        # Always review before commit
+    before_commit: true        # Always review before committing
 
   documentation:
-    after_technical_writer: true
-
-  feedback:
-    on_deviation: true         # When implementation deviates
-    on_test_failure: true      # When tests fail
-    on_major_change: true      # When scope creeps
+    after_technical_writer: true  # Review documentation updates before applying
 ```
 
 #### Loop Mode
@@ -523,14 +558,19 @@ loop_mode:
 
 ```yaml
 models:
-  orchestrator: opus
-  architect: opus
-  developer: opus
-  reviewer: opus
-  skeptic: opus
-  implementer: opus
-  feedback: opus
-  technical-writer: opus
+  default: opus                  # Fallback for any agent not configured below
+  orchestrator: opus             # Orchestrator always uses the best model
+
+  # Per-mode overrides (quick, standard, thorough):
+  standard:
+    planner: opus
+    implementer: sonnet
+    technical_writer: sonnet
+
+  thorough:
+    planner: opus
+    reviewer: sonnet
+    implementer: sonnet
 ```
 
 #### Gemini Integration

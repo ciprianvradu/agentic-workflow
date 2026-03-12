@@ -19,4 +19,4 @@ workflow_mark_docs_needed(task_id: "<task_id>", files: ["path/to/undocumented-or
 
 The Technical Writer runs after every workflow and checks the `docs_needed` list in the task state. Flagged gaps are prioritized for documentation updates.
 
-All agents (Architect, Developer, Reviewer, Skeptic, Implementer, Quality Guard) can and should flag gaps they discover.
+The Planner is the primary agent that flags documentation gaps during planning. All other agents (Reviewer, Implementer, Quality Guard, Security Auditor) can and should also flag gaps they discover during their phases.

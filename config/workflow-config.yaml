@@ -604,7 +604,7 @@ specialized_agents:
         - "**/schemas/**"
         - "**/openapi*"
     checkpoint_after: true
-    position: after_developer
+    position: after_planner
 
   accessibility_reviewer:
     enabled: auto

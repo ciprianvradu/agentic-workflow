@@ -97,16 +97,17 @@ Overview ──F6──> DocList ──Enter──> DocReader
 Keys are routed in priority order:
 1. Resize events → `terminal_resize_all()`
 2. Mouse events → selection (Down/Drag/Up) + scroll (ScrollUp/ScrollDown) in terminal panels
-3. Key release events (kitty protocol) → update `modifier_bar_state` based on remaining modifiers
-4. Modifier-only key press events (kitty protocol) → update `modifier_bar_state`, continue
-5. Help overlay open → any key closes it
-6. Terminal view + `ScrollBack` mode → scroll navigation keys
-7. Terminal view + `TerminalFocused` mode → `F12` exits, F5/F6 cycle prev/next terminal, F7 jumps to attention, Shift+F-keys switch views, all other keys forwarded to PTY via `key_to_bytes()`
-8. Search popup open → search-specific keys
-9. Create worktree popup open → popup keys (text input, selection, toggles)
-10. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
-11. Permission queue popup open → popup keys (approve/deny/view)
-12. Launch popup open → popup keys only
+3. Paste events (`Event::Paste`) → wrapped in bracketed paste sequences (`\x1b[200~`...`\x1b[201~`) and sent to PTY in focused mode; forwarded char-by-char (stripping newlines) to `tui_input` widgets in search/permission/create popups
+4. Key release events (kitty protocol) → update `modifier_bar_state` based on remaining modifiers
+5. Modifier-only key press events (kitty protocol) → update `modifier_bar_state`, continue
+6. Help overlay open → any key closes it
+7. Terminal view + `ScrollBack` mode → scroll navigation keys
+8. Terminal view + `TerminalFocused` mode → `F12` exits, F5/F6 cycle prev/next terminal, F7 jumps to attention, Shift+F-keys switch views, all other keys forwarded to PTY via `key_to_bytes()`
+9. Search popup open → search-specific keys
+10. Create worktree popup open → popup keys (text input, selection, toggles)
+11. Cleanup worktree popup open → popup keys (multi-select, toggles, preview)
+12. Permission queue popup open → popup keys (approve/deny/view)
+13. Launch popup open → popup keys only
 13. Right pane focused + non-Overview mode → doc/history navigation
 14. Default → Shift+F-key layer → Ctrl+F-key layer → base F-keys, tree nav, view switching
 
@@ -730,6 +731,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Mouse capture scope**: Mouse capture is always enabled (`EnableMouseCapture`). Click/drag/release are handled only when `active_view == Terminals`. Scroll events also only apply in Terminals view. Clicking outside any terminal panel clears the selection.
 - **`terminal_panel_rects` is RefCell**: Because panel rects are written during `draw()` (immutable `&App`) and read during mouse handling (mutable `&mut App`), the rects use `RefCell<Vec<(usize, Rect)>>`. This is the only `RefCell` in `App`.
 - **OSC 52 clipboard**: Text is copied via OSC 52 (`\x1b]52;c;{base64}\x07`). This requires terminal support (WezTerm, iTerm2, modern Windows Terminal). The `base64` crate is a dependency for this feature.
+- **Bracketed paste mode**: `EnableBracketedPaste` is enabled at startup, `DisableBracketedPaste` at teardown. In TerminalFocused mode, `Event::Paste(text)` is wrapped in `\x1b[200~`...`\x1b[201~` before sending to PTY. In popup text inputs (search, permission quick-send, create worktree description), paste text is fed char-by-char to `tui_input` with newlines stripped. Without this, pasted newlines would be interpreted as Enter keypresses, splitting input across multiple prompts.
 - **`key_to_bytes()` CSI u encoding**: Modified Enter and Backspace use CSI u encoding (`\x1b[13;{mod}u`, `\x1b[127;{mod}u`) so that programs like Claude Code can distinguish e.g. Ctrl+Enter from plain Enter.
 - **PrefixPending is legacy**: The `PrefixPending` variant of `TerminalInputMode` is kept for enum compatibility but no code path enters this state. The `Ctrl+B` prefix system was replaced by `F12` toggle + `Shift+F-key` view switching.
 - **Permission profile auto-approval**: In `Autonomous` profile, `auto_approve_permissions()` sends `y\n` to every terminal with `PermissionPrompt` attention on each poll tick. In `Trusted` profile, only prompts matching `auto_approve_patterns` are approved. In `Interactive` (default), no auto-approval occurs.
