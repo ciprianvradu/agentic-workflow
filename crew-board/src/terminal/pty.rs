@@ -39,6 +39,8 @@ pub enum AttentionKind {
     PermissionPrompt { line: String },
     Idle { seconds: u64 },
     Error { line: String },
+    /// Agent finished and is showing an input prompt (e.g. `❯`).
+    WaitingForInput,
 }
 
 /// Notification that a terminal needs user attention.
@@ -129,6 +131,18 @@ fn scan_for_attention(parser: &Arc<Mutex<vt100::Parser>>) -> Option<AttentionKin
             return Some(AttentionKind::Error {
                 line: line.to_string(),
             });
+        }
+    }
+
+    // Waiting-for-input detection: Claude Code shows ❯ (U+276F) as input prompt.
+    // The last non-empty line being just the prompt char (with optional leading
+    // whitespace or box-drawing decoration) means the agent is done and waiting.
+    if let Some(last_line) = recent_lines.last().filter(|l| !l.is_empty()) {
+        let trimmed = last_line.trim();
+        // Match standalone ❯ prompt, or lines ending with ❯ (Claude Code formats
+        // the prompt line with optional ANSI decoration that vt100 strips)
+        if trimmed == "\u{276f}" || trimmed == ">" || trimmed.ends_with("\u{276f}") {
+            return Some(AttentionKind::WaitingForInput);
         }
     }
 

@@ -116,6 +116,7 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
                     terminal::AttentionReason::Idle { .. } => ("\u{25cb} ", Color::DarkGray),  // ○ idle
                     terminal::AttentionReason::Error { .. } => ("\u{2716} ", Color::Red),             // ✖ error
                     terminal::AttentionReason::HookNotification { .. } => ("\u{25c6} ", Color::Yellow), // ◆ notification
+                    terminal::AttentionReason::WaitingForInput => ("\u{25b6} ", Color::Green), // ▶ waiting
                 };
                 Span::styled(
                     icon,
@@ -189,8 +190,14 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
 
         let time_style = Style::default().fg(Color::DarkGray);
 
+        let auto_badge = if term.auto_accept {
+            Span::styled("\u{26a1}", Style::default().fg(Color::Yellow)) // ⚡
+        } else {
+            Span::raw("")
+        };
         lines.push(Line::from(vec![
             icon,
+            auto_badge,
             Span::styled(label, style),
             Span::styled(format!(" {}", elapsed_str), time_style),
         ]));
@@ -297,6 +304,7 @@ fn draw_crew_summary_line(frame: &mut Frame, mgr: &TerminalManager, area: Rect) 
 
         let (icon, icon_color) = match &term.status {
             TerminalStatus::Running => ("\u{25cf}", Color::Green),           // ●
+            TerminalStatus::NeedsAttention(terminal::AttentionReason::WaitingForInput) => ("\u{25b6}", Color::Green), // ▶
             TerminalStatus::NeedsAttention(_) => ("\u{25c6}", Color::Yellow), // ◆
             TerminalStatus::Exited(code) => {
                 if *code == 0 {
@@ -315,7 +323,12 @@ fn draw_crew_summary_line(frame: &mut Frame, mgr: &TerminalManager, area: Rect) 
             Style::default().fg(Color::DarkGray)
         };
 
-        spans.push(Span::styled(icon.to_string(), Style::default().fg(icon_color)));
+        // Use lightning bolt icon when auto-accept is ON and terminal is running
+        if term.auto_accept && matches!(term.status, TerminalStatus::Running) {
+            spans.push(Span::styled("\u{26a1}", Style::default().fg(Color::Yellow))); // ⚡
+        } else {
+            spans.push(Span::styled(icon.to_string(), Style::default().fg(icon_color)));
+        }
         spans.push(Span::styled(short_id, label_style));
         spans.push(Span::styled(" ", Style::default()));
     }
@@ -518,6 +531,9 @@ fn draw_single_terminal(
             }
             terminal::AttentionReason::HookNotification { .. } => {
                 format!(" {} ({}) [\u{25c6} NOTIFY] ", term.id, term.label)
+            }
+            terminal::AttentionReason::WaitingForInput => {
+                format!(" {} ({}) [\u{25b6} INPUT] ", term.id, term.label)
             }
         },
         TerminalStatus::Exited(code) => {

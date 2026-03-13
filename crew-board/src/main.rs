@@ -122,6 +122,7 @@ fn main() -> Result<()> {
         .filter_map(|p| regex::Regex::new(p).ok())
         .collect();
     app.desktop_notifications = cfg.desktop_notifications;
+    app.auto_accept_default = cfg.auto_accept_default;
     app.hook_communication = cfg.hook_communication;
 
     // Initialize security rules engine
@@ -472,7 +473,7 @@ fn run_app(
                     } else {
                         match key.code {
                             KeyCode::Esc | KeyCode::Char('q') => {
-                                // Keep scroll position — Ctrl+F5 resets to live, End scrolls to bottom
+                                app.terminal_scroll_reset();
                                 app.terminal_search_query.clear();
                                 app.terminal_search_matches.clear();
                                 app.terminal_input_mode = TerminalInputMode::Normal;
@@ -494,6 +495,9 @@ fn run_app(
                             }
                             KeyCode::End => {
                                 app.terminal_scroll_reset();
+                                app.terminal_search_query.clear();
+                                app.terminal_search_matches.clear();
+                                app.terminal_input_mode = TerminalInputMode::Normal;
                             }
                             KeyCode::Char('/') => {
                                 app.terminal_search_start();
@@ -512,8 +516,8 @@ fn run_app(
                 else if app.active_view == ActiveView::Terminals
                     && app.terminal_input_mode == TerminalInputMode::TerminalFocused
                 {
-                    // F12 or Tab: toggle back to Normal mode (single-key exit)
-                    if key.code == KeyCode::F(12) || key.code == KeyCode::Tab {
+                    // F12: toggle back to Normal mode (single-key exit)
+                    if key.code == KeyCode::F(12) {
                         app.terminal_input_mode = TerminalInputMode::Normal;
                     }
                     // F5: previous terminal (bypass focused mode)
@@ -731,9 +735,13 @@ fn run_app(
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
                             }
                             KeyCode::F(7) => {
-                                // Ctrl+F7: Activity=Auto-scroll toggle
-                                if app.active_view == ActiveView::ActivityFeed {
-                                    app.activity_filter.auto_scroll = !app.activity_filter.auto_scroll;
+                                // Ctrl+F7: Terminals=Auto-accept toggle, Activity=Auto-scroll toggle
+                                match app.active_view {
+                                    ActiveView::Terminals => app.toggle_auto_accept(),
+                                    ActiveView::ActivityFeed => {
+                                        app.activity_filter.auto_scroll = !app.activity_filter.auto_scroll;
+                                    }
+                                    _ => {}
                                 }
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
                             }
@@ -929,16 +937,7 @@ fn run_app(
 
                         // Pane focus / Terminal focus toggle
                         (_, KeyCode::Tab) => {
-                            if app.active_view == ActiveView::Terminals
-                                && app
-                                    .terminal_manager
-                                    .as_ref()
-                                    .is_some_and(|m| !m.terminals.is_empty())
-                            {
-                                app.terminal_input_mode = TerminalInputMode::TerminalFocused;
-                            } else {
-                                app.toggle_focus();
-                            }
+                            app.toggle_focus();
                         }
 
                         // Permission queue

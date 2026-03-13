@@ -126,7 +126,7 @@ fn ctrl_layer(view: ActiveView) -> [FKeyBinding; 10] {
             FKeyBinding::new(4,  "DsmAll", "Dismiss All"),
             FKeyBinding::new(5,  "Live",   "Live View"),
             FKeyBinding::new(6,  "Stats",  "Statistics"),
-            FKeyBinding::inactive(7),
+            FKeyBinding::new(7,  "AutoAc", "Auto Accept"),
             FKeyBinding::new(8,  "ScrlBk", "Scroll Back"),
             FKeyBinding::inactive(9),
             FKeyBinding::inactive(10),

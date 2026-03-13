@@ -88,6 +88,12 @@ pub struct Settings {
     #[serde(default)]
     pub desktop_notifications: bool,
 
+    /// Default value for per-terminal auto-accept toggle.
+    /// When true, new terminals start with auto-accept enabled.
+    /// Default: false (safe — all prompts require approval).
+    #[serde(default)]
+    pub auto_accept_default: bool,
+
     // ── Hook Communication ──────────────────────────────────────────
 
     /// Enable HTTP hook communication with embedded Claude Code terminals.
@@ -172,6 +178,7 @@ impl Default for Settings {
             permission_profile: "interactive".to_string(),
             auto_approve_patterns: Vec::new(),
             desktop_notifications: false,
+            auto_accept_default: false,
             hook_communication: true,
             security_enabled: false,
             security_rules: Vec::new(),
@@ -388,6 +395,21 @@ log_directory = "/tmp/crew-logs"
         assert!(settings.auto_approve_patterns.is_empty());
         assert!(!settings.desktop_notifications);
         assert!(settings.log_directory.is_none());
+    }
+
+    #[test]
+    fn test_default_auto_accept_settings() {
+        let settings = Settings::default();
+        assert!(!settings.auto_accept_default);
+    }
+
+    #[test]
+    fn test_load_auto_accept_config() {
+        let tmp = std::env::temp_dir().join("crew-board-test-auto-accept.toml");
+        fs::write(&tmp, "auto_accept_default = true\n").unwrap();
+        let settings = Settings::load_from(&tmp);
+        assert!(settings.auto_accept_default);
+        let _ = fs::remove_file(&tmp);
     }
 
     #[test]

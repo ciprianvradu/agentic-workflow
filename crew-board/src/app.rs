@@ -415,6 +415,8 @@ pub struct App {
     pub auto_approve_patterns: Vec<regex::Regex>,
     /// Send desktop notifications on attention events.
     pub desktop_notifications: bool,
+    /// Default auto-accept state for newly spawned terminals (from config).
+    pub auto_accept_default: bool,
 
     // Terminal search (scroll-back mode)
     /// Active search input in scroll-back mode (None = not searching).
@@ -718,6 +720,7 @@ impl App {
             permission_profile: PermissionProfile::Interactive,
             auto_approve_patterns: Vec::new(),
             desktop_notifications: false,
+            auto_accept_default: false,
             terminal_search_input: None,
             terminal_search_query: String::new(),
             terminal_search_matches: Vec::new(),
@@ -938,6 +941,20 @@ impl App {
                 if !matches!(&term.status, TerminalStatus::Exited(_)) {
                     term.status = TerminalStatus::NeedsAttention(reason);
                 }
+            }
+        }
+
+        // Stop event means Claude finished — flag as waiting for input
+        if matches!(&event, HookEvent::Stop { .. }) {
+            if !matches!(&term.status, TerminalStatus::Exited(_)) {
+                term.status = TerminalStatus::NeedsAttention(AttentionReason::WaitingForInput);
+            }
+        }
+
+        // Clear WaitingForInput when Claude starts working again
+        if matches!(&event, HookEvent::PreToolUse { .. } | HookEvent::UserPromptSubmit { .. }) {
+            if matches!(&term.status, TerminalStatus::NeedsAttention(AttentionReason::WaitingForInput)) {
+                term.status = TerminalStatus::Running;
             }
         }
 
@@ -2693,9 +2710,12 @@ impl App {
                 env_vars,
             );
 
-            // Store the hook settings cwd for cleanup
-            if let Some(ref settings_cwd) = hook_settings_cwd {
-                if let Some(term) = mgr.terminals.last_mut() {
+            // Apply auto_accept_default and hook settings to newly spawned terminal
+            if let Some(term) = mgr.terminals.last_mut() {
+                if self.auto_accept_default {
+                    term.auto_accept = true;
+                }
+                if let Some(ref settings_cwd) = hook_settings_cwd {
                     term.hook_settings_cwd = Some(settings_cwd.clone());
                 }
             }
@@ -3076,7 +3096,7 @@ impl App {
                 context,
             }) = &term.status
             {
-                let should_approve = match self.permission_profile {
+                let should_approve = term.auto_accept || match self.permission_profile {
                     PermissionProfile::Autonomous => true,
                     PermissionProfile::Trusted => {
                         self.auto_approve_patterns.iter().any(|p| p.is_match(context))
@@ -3089,6 +3109,51 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Toggle auto-accept for the currently focused terminal.
+    /// When enabled, permission prompts are automatically approved.
+    pub fn toggle_auto_accept(&mut self) {
+        let mgr = match self.terminal_manager.as_mut() {
+            Some(m) => m,
+            None => return,
+        };
+        let term = match mgr.terminals.get_mut(mgr.focused) {
+            Some(t) => t,
+            None => return,
+        };
+        // Don't toggle on exited terminals
+        if matches!(term.status, crate::terminal::TerminalStatus::Exited(_)) {
+            return;
+        }
+        term.auto_accept = !term.auto_accept;
+        let new_state = term.auto_accept;
+        let terminal_id = term.id.clone();
+
+        // Update hook server registration to match new profile
+        if let Some(ref server) = self.hook_server {
+            let profile = if new_state {
+                "autonomous"
+            } else {
+                match self.permission_profile {
+                    PermissionProfile::Autonomous => "autonomous",
+                    PermissionProfile::Trusted => "trusted",
+                    PermissionProfile::Interactive => "interactive",
+                }
+            };
+            server.update_token_profile(&terminal_id, profile);
+        }
+
+        // Log to activity feed
+        let label = if new_state { "auto-accept ON" } else { "auto-accept OFF" };
+        self.activity_log.push(crate::data::activity::ActivityEvent {
+            timestamp: std::time::Instant::now(),
+            terminal_id: terminal_id.clone(),
+            event_type: "AutoAcceptToggle".to_string(),
+            tool_name: None,
+            tool_input_summary: Some(label.to_string()),
+            success: None,
+        });
     }
 
     /// Dismiss (remove) the currently focused terminal.

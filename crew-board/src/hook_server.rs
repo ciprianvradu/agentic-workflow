@@ -226,6 +226,20 @@ impl HookServer {
         }
     }
 
+    /// Update the permission profile for an already-registered terminal.
+    /// Called when per-terminal auto-accept is toggled.
+    pub fn update_token_profile(
+        &self,
+        terminal_id: &str,
+        permission_profile: &str,
+    ) {
+        if let Ok(mut map) = self.tokens.write() {
+            if let Some(reg) = map.get_mut(terminal_id) {
+                reg.permission_profile = permission_profile.to_string();
+            }
+        }
+    }
+
     /// Deregister a terminal's token (on dismiss or exit).
     pub fn deregister_token(&self, terminal_id: &str) {
         if let Ok(mut map) = self.tokens.write() {

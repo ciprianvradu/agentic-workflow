@@ -534,7 +534,7 @@ fn context_hints(app: &App) -> String {
             }
             TerminalInputMode::ScrollBack => {
                 format!(
-                    "SCROLL: \u{2191}\u{2193}/PgUp/Dn  Home/End  q/Esc exit  offset:{}",
+                    "SCROLL: \u{2191}\u{2193}/PgUp/Dn  Home:Top  End/Esc:Exit  offset:{}",
                     app.terminal_manager
                         .as_ref()
                         .and_then(|m| m.focused_terminal())

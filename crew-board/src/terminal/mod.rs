@@ -34,6 +34,8 @@ pub enum AttentionReason {
     Error { context: String },
     /// Attention triggered by a Claude Code Notification hook event.
     HookNotification { message: String },
+    /// Agent finished its turn and is waiting for user input.
+    WaitingForInput,
 }
 
 /// Hook-based activity and status tracking for an embedded terminal.
@@ -97,6 +99,10 @@ pub struct EmbeddedTerminal {
     /// Additional hook config files to clean up on terminal dismiss (for non-Claude hosts).
     #[allow(dead_code)]
     pub hook_cleanup_paths: Vec<PathBuf>,
+    /// Per-terminal auto-accept toggle. When true, permission prompts for this
+    /// terminal are automatically approved (overrides global permission_profile).
+    /// Toggled via 'a' key in Terminals view Normal mode. Default: false.
+    pub auto_accept: bool,
 }
 
 /// Manages all embedded terminals.
@@ -185,6 +191,7 @@ impl TerminalManager {
             hook_state: None,
             hook_settings_cwd: None,
             hook_cleanup_paths: Vec::new(),
+            auto_accept: false,
         });
 
         // Focus the newly spawned terminal
@@ -385,6 +392,9 @@ impl TerminalManager {
                     }
                     pty::AttentionKind::Error { line } => {
                         AttentionReason::Error { context: line.clone() }
+                    }
+                    pty::AttentionKind::WaitingForInput => {
+                        AttentionReason::WaitingForInput
                     }
                 };
                 if term.status != TerminalStatus::NeedsAttention(reason.clone()) {

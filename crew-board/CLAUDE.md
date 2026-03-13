@@ -148,6 +148,7 @@ When `hook_communication = true` (default), crew-board opens a lightweight HTTP 
 | `PermissionRequest` | `tool_name`, `tool_input: serde_json::Value` |
 | `Notification` | `message` |
 | `Stop` | `preview`, `session_cost: Option<SessionCost>` |
+| `UserPromptSubmit` | `prompt_preview` (truncated to 200 chars) |
 | `SessionEnd` | — |
 
 **`SessionCost`** (in `hook_server.rs`): Cost data parsed from Claude Code `Stop` hook payloads. The server tries three JSON keys for the cost object: `session_cost`, `cost`, `sessionCost`. Within the object it accepts `costUsd`/`cost_usd`/`total_cost` for the dollar amount.
@@ -175,7 +176,9 @@ When `hook_communication = true` (default), crew-board opens a lightweight HTTP 
 
 `HookState` is `Option<HookState>` on `EmbeddedTerminal` — `None` until the first hook event arrives for that terminal.
 
-**`AttentionReason::HookNotification`:** A `Notification` hook event triggers `NeedsAttention(HookNotification { message })`. The border turns bold yellow, border title shows `[NOTIFY]`, and the status bar attention count increments. Icon in the crew summary line: `◆` (same as other attention states).
+**`AttentionReason::HookNotification`:** A `Notification` hook event triggers `NeedsAttention(HookNotification { message })`. The border turns bold yellow, border title shows `[◆ NOTIFY]`, and the status bar attention count increments. Icon in the crew summary line: `◆` (same as other attention states).
+
+**`AttentionReason::WaitingForInput`:** Set when a `Stop` hook event arrives (agent finished its turn) or when the PTY screen scan detects a standalone `❯` prompt. Border title shows `[▶ INPUT]`. Icon in crew list and summary: `▶` (green). Cleared when `PreToolUse` or `UserPromptSubmit` hook event arrives (agent is working again). Unlike other attention reasons, the green color distinguishes this as an informational state rather than an error.
 
 **Permission approval via hooks (Phase 2):** For `PreToolUse` and `PermissionRequest` events, the hook server applies the permission profile before responding:
 - **Autonomous**: Immediate `200` with `{"hookSpecificOutput": {"permissionDecision": "allow"}}` — server thread never blocks.
@@ -205,7 +208,7 @@ When queued, the server thread creates an `mpsc::channel`, sends a `PendingPermi
 
 ### Embedded Terminal Multiplexer (View 5)
 
-View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Key types live in `src/terminal/`:
+View 5 (`Shift+F5`) hosts PTY terminals that run agent processes inside the TUI. Key types live in `src/terminal/`:
 
 **`pty.rs` — low-level PTY primitives**
 
@@ -213,7 +216,7 @@ View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Ke
 |------|-------------|
 | `PtyHandles` | Returned by `spawn_pty()`. Bundles `parser`, `writer`, `master`, `exit_signal`, `attention_signal`, `last_output`. |
 | `ExitEvent` | `{ code: i32, timestamp: Instant }` — written by the reader thread on EOF. |
-| `AttentionKind` | Enum: `PermissionPrompt { line }`, `Idle { seconds }`, `Error { line }`. |
+| `AttentionKind` | Enum: `PermissionPrompt { line }`, `Idle { seconds }`, `Error { line }`, `WaitingForInput`. |
 | `AttentionEvent` | `{ kind: AttentionKind, timestamp: Instant }` — written by the reader thread. |
 | `SharedExitSignal` | `Arc<Mutex<Option<ExitEvent>>>` shared between reader thread and `poll_status()`. |
 | `SharedAttentionSignal` | `Arc<Mutex<Option<AttentionEvent>>>` shared between reader thread and `poll_status()`. |
@@ -222,11 +225,11 @@ View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Ke
 
 | Type | Description |
 |------|-------------|
-| `EmbeddedTerminal` | Holds all `PtyHandles` fields plus `id`, `label`, `status`, `color_scheme_index`, `launch_params`, `scroll_offset`, `spawned_at`, `hook_state`, `hook_settings_cwd`. |
+| `EmbeddedTerminal` | Holds all `PtyHandles` fields plus `id`, `label`, `status`, `color_scheme_index`, `launch_params`, `scroll_offset`, `spawned_at`, `hook_state`, `hook_settings_cwd`, `auto_accept`. |
 | `LaunchParams` | `{ command: String, args: Vec<String>, cwd: PathBuf }` — stored on each terminal for relaunch. |
 | `TerminalStatus` | Enum: `Running`, `NeedsAttention(AttentionReason)`, `Exited(i32)`. |
-| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt { context: String }`, `Idle { seconds }`, `Error { context: String }`, `HookNotification { message: String }`. Context carries the actual prompt/error line for display in the F8 popup. `HookNotification` is triggered by Claude Code `Notification` hook events. |
-| `HookState` | Per-terminal hook activity tracker: `last_event`, `last_event_at`, `activity_label`, `tool_counts`, `session_active`. `None` until first hook event arrives. |
+| `AttentionReason` | Public mirror of `AttentionKind`: `PermissionPrompt { context: String }`, `Idle { seconds }`, `Error { context: String }`, `HookNotification { message: String }`, `WaitingForInput`. Context carries the actual prompt/error line for display in the F8 popup. `HookNotification` is triggered by Claude Code `Notification` hook events. `WaitingForInput` is set when the agent finishes and is waiting for user input (detected via PTY screen scan for `❯` prompt or hook `Stop` event). |
+| `HookState` | Per-terminal hook activity tracker: `last_event`, `last_event_at`, `activity_label`, `tool_counts`, `session_active`, `total_cost_usd`, `total_input_tokens`, `total_output_tokens`. `None` until first hook event arrives. |
 | `TerminalManager` | `Vec<EmbeddedTerminal>` + `focused: usize`. Entry point for all terminal operations. Includes `focus_next_running()` / `focus_prev_running()` which skip exited terminals. |
 
 #### Reader Thread Architecture
@@ -235,12 +238,12 @@ View 5 (`5` key) hosts PTY terminals that run agent processes inside the TUI. Ke
 
 1. Reads PTY output in a 4096-byte loop, feeding bytes into the `vt100::Parser`.
 2. Updates `last_output` (an `Arc<Mutex<Instant>>`) on every successful read.
-3. Every 500ms (throttled) calls `scan_for_attention()` which scans the last 5 vt100 screen rows for permission prompts (`Allow`/`Deny`, `(y/n)`, `(yes/no)`, `do you want to proceed`, `press enter to continue`) and error prefixes (`error:`, `fatal:`, `panic at`). Writes result to `attention_signal`.
+3. Every 500ms (throttled) calls `scan_for_attention()` which scans up to the last 10 non-empty vt100 screen rows for permission prompts (`Allow`/`Deny`, `(y/n)`, `(yes/no)`, `do you want to proceed`, `press enter to continue`, `enter to select`, `how would you like to proceed`, `tab to amend`) and error prefixes (`error:`, `fatal:`, `panic at`). Also detects waiting-for-input state when the last non-empty line is a standalone `❯` (U+276F) or `>` prompt. Writes result to `attention_signal`.
 4. On EOF, calls `child.wait()` to get the exit code, then writes `ExitEvent` to `exit_signal`.
 
 The reader thread exits only when the child process closes the slave PTY (EOF).
 
-Scrollback is set to **1000 lines** (`vt100::Parser::new(rows, cols, 1000)`).
+Scrollback is set to **10,000 lines** (`vt100::Parser::new(rows, cols, 10_000)`).
 
 #### Status Polling
 
@@ -269,11 +272,12 @@ When a terminal exits:
 
 When a terminal needs attention:
 
-- Status becomes `NeedsAttention(reason)`. Border turns bold yellow.
-- Border title appends `[PROMPT]`, `[idle Ns]`, or `[ERROR]` depending on the reason.
-- The status bar "5:Terms" tab shows `5:Terms[⚠N]` (N = count of attention terminals).
+- Status becomes `NeedsAttention(reason)`. Border turns bold yellow (or green for WaitingForInput).
+- Border title appends `[PROMPT]`, `[idle Ns]`, `[ERROR]`, `[◆ NOTIFY]`, or `[▶ INPUT]` depending on the reason.
+- The status bar view label shows a `◆N` badge (N = count of attention terminals).
 - **F7** — calls `terminal_focus_next_attention()`, cycling through terminals that need attention.
 - Sending any input to a terminal clears its attention signal (`send_input()` sets `attention_signal` to `None`).
+- **WaitingForInput** specifically: set by PTY scan (detecting `❯` prompt) or hook `Stop` event. Cleared by `PreToolUse` or `UserPromptSubmit` hook events (i.e., when the agent starts working again). Icon: `▶` (green) in crew list and summary line.
 
 #### Adaptive Refresh
 
@@ -311,7 +315,6 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 |-----|--------|
 | `↑` / `k` | Focus previous terminal |
 | `↓` / `j` | Focus next terminal |
-| `Tab` | Enter `TerminalFocused` mode (same as F9 — unified entry point) |
 | `F9` / `F12` | Enter `TerminalFocused` mode (running terminal required) |
 | `Enter` (exited) | Relaunch the exited terminal |
 | `Delete` (exited) | Dismiss (remove) the exited terminal |
@@ -321,6 +324,7 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 | `Ctrl+F8` | Enter scroll-back mode |
 | `Ctrl+Left` | Narrow crew list by 2 chars (min 10) |
 | `Ctrl+Right` | Widen crew list by 2 chars (max 50) |
+| `Ctrl+F7` | Toggle auto-accept ⚡ for focused terminal (overrides global permission_profile) |
 | `F7` | Jump focus to next terminal needing attention |
 | `F8` | Open Permission Queue popup |
 
@@ -348,12 +352,11 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 | `PgUp` | Scroll up one page |
 | `PgDn` | Scroll down one page |
 | `Home` | Scroll to top of scrollback buffer |
-| `End` | Scroll to live view (bottom) |
+| `End` / `Esc` / `q` | Exit scroll-back, return to live view + Normal mode |
 | `/` | Enter search mode (type query, Enter to search) |
 | `n` | Jump to next search match |
 | `N` | Jump to previous search match |
 | `Shift+F1-F6` | Exit scroll-back + switch to view |
-| `q` / `Esc` | Exit scroll-back, return to Normal |
 
 Scrollback offset is stored per-terminal (`EmbeddedTerminal.scroll_offset`). The border turns magenta in scroll-back mode, with a `[N/total]` indicator at the bottom. Mouse scroll wheel also enters scroll-back mode (see Mouse Support below).
 
@@ -496,7 +499,7 @@ The F-key bar is driven by a **single keybinding registry** (`src/ui/keybindings
 - **Activity Feed**: Global keys only on base layer
 
 **Per-view Ctrl layer:**
-- **Terminals**: Ctrl+F4=Dismiss All, Ctrl+F5=Live, Ctrl+F6=Stats, Ctrl+F8=ScrollBack
+- **Terminals**: Ctrl+F4=Dismiss All, Ctrl+F5=Live, Ctrl+F6=Stats, Ctrl+F7=Auto Accept, Ctrl+F8=ScrollBack
 - **Activity Feed**: Ctrl+F4=Crew filter, Ctrl+F5=Event filter, Ctrl+F6=Tool filter, Ctrl+F7=Auto-scroll, Ctrl+F8=Gantt
 
 **Adaptive label width:** When terminal width >= 130 columns, the bar shows long labels (e.g. "F6 Documents", "F4 Layout"). Below 130, compact 9-char labels are used (e.g. "F6Docs", "F4Layot").
@@ -510,7 +513,7 @@ The F-key bar is driven by a **single keybinding registry** (`src/ui/keybindings
 In Terminals view, the bar changes based on the input mode:
 
 - **TerminalFocused**: `━━ INPUT → TERMINAL ━━  F12 exit  F7 Attn  S+F1 Tasks  F2 Issues  F3 Cfg  F4 Cost  F5 Prev  F6 Next`
-- **ScrollBack**: `SCROLL▶  ↑↓/jk:Line  PgUp/Dn:Page  Home:Top  End:Live  q/Esc:Exit  offset:N`
+- **ScrollBack**: `SCROLL:  ↑↓/PgUp/Dn  Home:Top  End/Esc:Exit  offset:N`
 
 The PrefixPending bar is no longer shown (the prefix system is legacy; F12 is now the sole focus toggle).
 
@@ -522,10 +525,10 @@ Unbound F-key slots show a dimmed F-number with no label (e.g., F9 appears in da
 
 When a popup is open, line 2 shows popup-specific hints instead of the F-key bar (unchanged from before).
 
-The "5:Terms" tab in line 1 carries a status badge when terminals need attention:
-- `5:Terms[⚠N]` — N terminals have `NeedsAttention` status (attention count > 0, takes priority)
-- `5:Terms[✗N]` — N terminals have exited (exited count > 0, shown when no attention)
-- `5:Terms` — all terminals running or none present
+The view label in line 1 carries a status badge when terminals need attention:
+- `◆N` — N terminals have `NeedsAttention` status (attention count > 0, takes priority)
+- `✗N` — N terminals have exited (exited count > 0, shown when no attention)
+- (blank) — all terminals running or none present
 
 ### Color Schemes
 8 schemes from Python `CREW_COLOR_SCHEMES` (state_tools.py), indexed by `color_scheme_index` from worktree state. Used for tree row accents, detail pane colors, and terminal tab colors.
@@ -664,6 +667,7 @@ The hook bridge (`hook_bridge.rs`) enables non-Claude AI hosts to communicate wi
 | `permission_profile` | `string` | `"interactive"` | Permission profile: interactive/trusted/autonomous |
 | `auto_approve_patterns` | `string[]` | `[]` | Regex patterns for auto-approval in trusted profile |
 | `desktop_notifications` | `bool` | `false` | Send desktop notification on attention events |
+| `auto_accept_default` | `bool` | `false` | Default auto-accept state for new terminals (per-terminal override of permission_profile) |
 | `hook_communication` | `bool` | `true` | Enable HTTP hook server for structured Claude Code activity tracking |
 | `security_enabled` | `bool` | `false` | Enable security rules enforcement |
 | `security_rules` | `SecurityRuleConfig[]` | `[]` | Security rules for tool governance |
@@ -740,6 +744,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Attention cleared on input**: `TerminalManager::send_input()` always sets `attention_signal` to `None`. This means typing in a terminal immediately clears any attention badge, even if the screen still shows the prompt.
 - **Idle threshold in `poll_status()`**: Idle detection (120s) is handled in `poll_status()`, not in the reader thread. The reader thread only sets `attention_signal` for screen-content patterns (prompts/errors). Idle is a time-based check against `last_output` done each tick.
 - **Reader thread lifetime**: The reader thread for each PTY runs until the child process exits (EOF on the master reader). It is not killed explicitly — it exits naturally. After EOF it waits for the child exit code via `child.wait()` before writing the exit signal.
+- **Scroll-back exit is unified**: `End`, `Esc`, and `q` all do the same thing in scroll-back mode: reset scroll to live (offset 0), clear search state, and return to Normal mode. `Home` scrolls to top without exiting.
 - **Scroll-back via `set_scrollback()`**: The vt100 crate's `Parser::set_scrollback(n)` controls how many scrollback lines appear in the visible view. `draw_terminal()` temporarily sets it during rendering and restores it after. The parser lock is held for the entire render — the reader thread will block during this brief period.
 - **`PrefixPending` timeout (legacy)**: The prefix-pending state is no longer reachable in the current code. This gotcha is retained for reference only.
 - **Layout mode in tiled views**: `terminal_indices_for_layout()` selects which terminals to show. It always includes the focused terminal and fills remaining slots with neighbors. The focused terminal's border uses `focused_border_style()` to distinguish it from inactive tiles.
@@ -750,18 +755,19 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Modifier+F-key priority**: Shift+F-key and Ctrl+F-key bindings are checked BEFORE the base `match` in Priority 12. This prevents `Shift+F(1)` from falling through to the plain `F(1)` handler.
 - **Shift+F-keys DO bypass TerminalFocused mode**: Unlike regular keys, Shift+F1-F5 in TerminalFocused mode exit focus and switch views. F5/F6 cycle prev/next terminals while staying focused. F7 jumps to attention terminals. Other key combinations are forwarded to the PTY. `F12` is the sole single-key exit from focused mode.
 - **F9/F12 Focus is contextual**: F9 and F12 both enter TerminalFocused mode, but only when in Terminals view with at least one terminal. F9 shows a label ("Focus") in the base F-key bar only in Terminals view Normal mode; otherwise it renders as a dimmed empty placeholder.
-- **Tab is unified with F9 in Terminals view**: In Normal mode with terminals present, `Tab` enters `TerminalFocused` (same as `F9`). Outside the Terminals view, `Tab` calls `toggle_focus()` to switch between left and right panes (existing behavior). In `TerminalFocused` mode, `Tab` exits back to Normal (same as `F12`). This makes Tab a single consistent "toggle focus" key across all contexts.
+- **Tab always switches pane focus**: `Tab` calls `toggle_focus()` in all views, including Terminals. It is never intercepted for terminal focus — use `F9`/`F12` to enter/exit `TerminalFocused` mode. In `TerminalFocused` mode, `Tab` is forwarded to the PTY (needed for shell completion and slash command selection).
 - **Mouse capture scope**: Mouse capture is always enabled (`EnableMouseCapture`). Click/drag/release are handled only when `active_view == Terminals`. Scroll events also only apply in Terminals view. Clicking outside any terminal panel clears the selection.
 - **`terminal_panel_rects` is RefCell**: Because panel rects are written during `draw()` (immutable `&App`) and read during mouse handling (mutable `&mut App`), the rects use `RefCell<Vec<(usize, Rect)>>`. This is the only `RefCell` in `App`.
 - **OSC 52 clipboard**: Text is copied via OSC 52 (`\x1b]52;c;{base64}\x07`). This requires terminal support (WezTerm, iTerm2, modern Windows Terminal). The `base64` crate is a dependency for this feature.
 - **Bracketed paste mode**: `EnableBracketedPaste` is enabled at startup, `DisableBracketedPaste` at teardown. In TerminalFocused mode, `Event::Paste(text)` is wrapped in `\x1b[200~`...`\x1b[201~` before sending to PTY. In popup text inputs (search, permission quick-send, create worktree description), paste text is fed char-by-char to `tui_input` with newlines stripped. Without this, pasted newlines would be interpreted as Enter keypresses, splitting input across multiple prompts.
 - **`key_to_bytes()` CSI u encoding**: Modified Enter and Backspace use CSI u encoding (`\x1b[13;{mod}u`, `\x1b[127;{mod}u`) so that programs like Claude Code can distinguish e.g. Ctrl+Enter from plain Enter.
 - **PrefixPending is legacy**: The `PrefixPending` variant of `TerminalInputMode` is kept for enum compatibility but no code path enters this state. The `Ctrl+B` prefix system was replaced by `F12` toggle + `Shift+F-key` view switching.
-- **Permission profile auto-approval**: In `Autonomous` profile, `auto_approve_permissions()` sends `y\n` to every terminal with `PermissionPrompt` attention on each poll tick. In `Trusted` profile, only prompts matching `auto_approve_patterns` are approved. In `Interactive` (default), no auto-approval occurs.
+- **Permission profile auto-approval**: In `Autonomous` profile, `auto_approve_permissions()` sends `y\n` to every terminal with `PermissionPrompt` attention on each poll tick. In `Trusted` profile, only prompts matching `auto_approve_patterns` are approved. In `Interactive` (default), no auto-approval occurs. Per-terminal `auto_accept` overrides the global profile — when `term.auto_accept` is true, PTY-based prompts are auto-approved regardless of the global permission profile.
+- **Per-terminal auto-accept toggle**: Press `Ctrl+F7` in Terminals view to toggle `auto_accept` on the focused terminal. Shows ⚡ icon in the crew list and summary line. For hook-based terminals, the toggle calls `HookServer::update_token_profile()` to switch the registration between `"interactive"` and `"autonomous"`. Activity feed logs each toggle as `AutoAcceptToggle`. Default for new terminals is controlled by `auto_accept_default` setting (default: false). Does not apply to exited terminals.
 - **Terminal output logging**: When `log_directory` is set, `spawn_pty_with_log()` opens an append-mode log file. The reader thread tees all raw PTY output bytes to the file. Log files include ANSI escape codes (use `less -R` or `cat` to view).
 - **Desktop notifications**: `send_desktop_notification()` spawns a detached thread to run `notify-send` (Linux) or `osascript` (macOS). Failures are silently ignored.
 - **Terminal search in scroll-back**: `/` enters search mode, query is matched case-insensitively against visible screen rows. Matches are stored as scroll offsets; `n`/`N` navigate between them. Search state (`terminal_search_query`, `terminal_search_matches`) persists until scroll-back is exited.
-- **Crew summary line**: In Focused layout with 2+ terminals, a one-line summary appears above the terminal panel showing all terminals' status icons and short IDs. Uses `●` (running), `◆` (attention), `✓`/`✗` (exited ok/failed).
+- **Crew summary line**: In Focused layout with 2+ terminals, a one-line summary appears above the terminal panel showing all terminals' status icons and short IDs. Uses `●` (running), `⚡` (auto-accept running), `▶` (waiting for input, green), `◆` (attention), `✓`/`✗` (exited ok/failed).
 - **Phase+progress in terminal title**: `lookup_task_phase()` scans `app.repos` for a task matching the terminal's ID and appends `[phase]` or `[phase N%]` to the border title of running terminals.
 - **Terminal dismiss via Fn keys**: F6 dismisses the focused exited terminal. Ctrl+F4 dismisses ALL exited terminals at once via `dismiss_all_exited()`.
 - **Auto cost capture from Stop events**: When Claude Code sends a `Stop` hook event, `hook_server.rs` attempts to parse a cost object from the payload (tries keys `session_cost`, `cost`, `sessionCost`; within the object tries `costUsd`, `cost_usd`, `total_cost`). If a non-zero value is found, a `SessionCost` is attached to `HookEvent::Stop`. `process_hook_event()` accumulates these into `HookState.total_cost_usd`, `total_input_tokens`, `total_output_tokens`. The Cost view (Shift+F4) reads these fields to show live per-terminal and aggregate totals.
@@ -771,6 +777,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **`HookState` is initialized lazily**: The `hook_state: Option<HookState>` field on `EmbeddedTerminal` starts as `None` and is created on first `process_hook_event()` call. Do not assume it is `Some` until at least one event has arrived.
 - **`AskUserQuestion` triggers attention**: When Claude Code calls `AskUserQuestion` (e.g., `/crew` checkpoints), the `PreToolUse` hook event is detected by `process_hook_event()` and triggers `PermissionPrompt` attention — showing `[PROMPT]` badge, visual bell, and desktop notification. This ensures users are alerted when agent questions are waiting for input.
 - **`HookNotification` vs PTY-scanned attention**: `AttentionReason::HookNotification` is set directly by `process_hook_event()` on the `EmbeddedTerminal.status` field, bypassing `poll_status()` and the reader-thread attention signal. This means it is not cleared by sending input to the terminal — only a subsequent event or explicit status reset clears it.
+- **`WaitingForInput` has two sources**: (1) PTY screen scan detects `❯` prompt via the reader thread's `scan_for_attention()`, and (2) hook `Stop` event sets it directly via `process_hook_event()`. The hook path is more reliable since it doesn't depend on screen layout. Cleared by `PreToolUse` or `UserPromptSubmit` hook events. Unlike `HookNotification`, `WaitingForInput` set by PTY scan CAN be cleared by user input (since it flows through `attention_signal`).
 - **Token registry is `Arc<RwLock<>>`**: `HookServer.tokens` is shared between the server background thread (reads per-request) and the main thread (writes on register/deregister). Take the write lock only briefly. Do not call `register_token` or `deregister_token` while already holding any other lock that the server thread might need.
 - **Hook permission blocking**: For `PreToolUse` and `PermissionRequest` hooks, the server thread blocks on `recv_timeout(25s)` waiting for user decision from the F8 popup. If the main thread is unresponsive, the 25s timeout returns a safe fallback (`"ask"` for PreToolUse, `"allow"` for PermissionRequest). Never hold locks across the blocking receive.
 - **PendingPermission lifetime**: `PendingPermission` entries in `App.pending_permissions` hold a `response_tx` channel sender. When the popup sends a decision, the entry must be removed (via `Vec::remove()`) — the server thread will unblock. If the app exits without responding, channels drop and the server thread's `recv_timeout` returns `Err`, triggering the fallback.
