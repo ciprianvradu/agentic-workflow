@@ -171,6 +171,107 @@ def _output(data: dict) -> None:
     sys.stdout.write("\n")
 
 
+def _generate_resume_md(task_id: str) -> None:
+    """Auto-generate RESUME.md with current workflow state.
+
+    Written after each phase completion so the file is always current.
+    If the machine crashes (bluescreen, power loss), the last phase's
+    snapshot survives on disk for easy resume.
+    """
+    task_dir = find_task_dir(task_id)
+    if not task_dir:
+        return
+
+    try:
+        state = _load_state(task_dir)
+        description = state.get("description", "No description")
+        phase = state.get("phase", "unknown")
+        phases_completed = state.get("phases_completed", [])
+        mode = state.get("workflow_mode", {}).get("effective", "standard")
+        progress = state.get("implementation_progress", {})
+        concerns = state.get("concerns", [])
+        unresolved = [c for c in concerns if c.get("status") != "addressed"]
+        files_changed = state.get("files_changed", [])
+
+        lines = [
+            f"# Resume: {task_id}",
+            "",
+            f"**Description:** {description}",
+            f"**Mode:** {mode}",
+            f"**Current phase:** {phase}",
+            f"**Completed:** {', '.join(phases_completed) if phases_completed else 'none'}",
+            "",
+        ]
+
+        # Implementation progress
+        if progress.get("total_steps"):
+            completed_steps = progress.get("steps_completed", [])
+            lines.append(f"## Implementation Progress")
+            lines.append(f"Step {progress.get('current_step', 0)}/{progress['total_steps']} "
+                         f"({len(completed_steps)} completed)")
+            lines.append("")
+
+        # Files changed
+        if files_changed:
+            lines.append("## Files Changed")
+            for f in files_changed[:20]:
+                lines.append(f"- {f}")
+            lines.append("")
+
+        # Unresolved concerns
+        if unresolved:
+            lines.append("## Unresolved Concerns")
+            for c in unresolved:
+                sev = c.get("severity", "?")
+                desc = c.get("description", "")
+                lines.append(f"- [{sev}] {desc}")
+            lines.append("")
+
+        # Human guidance trail from interactions.jsonl
+        interactions_file = task_dir / "interactions.jsonl"
+        if interactions_file.exists():
+            human_entries = []
+            for raw_line in interactions_file.read_text().splitlines():
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    entry = json.loads(raw_line)
+                    if entry.get("type") in ("guidance", "correction", "new_requirement", "question"):
+                        human_entries.append(entry)
+                except json.JSONDecodeError:
+                    continue
+
+            if human_entries:
+                lines.append("## Human Guidance Trail")
+                for entry in human_entries[-15:]:  # Last 15 entries
+                    etype = entry.get("type", "guidance")
+                    content = entry.get("content", "")
+                    if len(content) > 200:
+                        content = content[:200] + "..."
+                    phase_tag = entry.get("phase", "")
+                    prefix = f"[{etype}, {phase_tag}]" if phase_tag else f"[{etype}]"
+                    lines.append(f"- {prefix} {content}")
+                lines.append("")
+
+        # Key decisions from human_decisions in state
+        decisions = state.get("human_decisions", [])
+        if decisions:
+            lines.append("## Key Decisions")
+            for d in decisions[-10:]:
+                decision = d.get("decision", "")
+                notes = d.get("notes", "")
+                lines.append(f"- **{decision}**: {notes}" if notes else f"- {decision}")
+            lines.append("")
+
+        lines.append(f"*Auto-generated at {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+
+        resume_path = task_dir / "RESUME.md"
+        resume_path.write_text("\n".join(lines) + "\n")
+    except Exception:
+        pass  # Never fail the workflow due to resume generation
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     """Parse args, route action, init task, return first action.
 
@@ -352,6 +453,9 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
             _save_state(task_dir, state)
     complete_result = workflow_complete_phase(task_id=task_id)
 
+    # 2b. Auto-generate RESUME.md snapshot
+    _generate_resume_md(task_id)
+
     # 3. Record cost if provided
     cost_recorded = False
     if args.input_tokens and args.output_tokens:
@@ -460,6 +564,9 @@ def cmd_custom_phase_done(args: argparse.Namespace) -> None:
         if current_state.get("phase") != phase_name:
             workflow_transition(to_phase=phase_name, task_id=task_id)
     complete_result = workflow_complete_phase(task_id=task_id)
+
+    # Auto-generate RESUME.md snapshot
+    _generate_resume_md(task_id)
 
     # Get next action
     next_action = crew_get_next_phase(task_id=task_id)

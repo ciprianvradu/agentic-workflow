@@ -168,11 +168,11 @@ pub struct WorkflowMode {
 
 /// All phases in workflow order.
 pub const PHASE_ORDER: &[&str] = &[
-    "architect",
-    "developer",
+    "planner",
     "reviewer",
-    "skeptic",
     "implementer",
+    "quality_guard",
+    "security_auditor",
     "technical_writer",
 ];
 
@@ -231,12 +231,20 @@ pub struct Discovery {
 
 /// Known artifact files and their display labels.
 const KNOWN_ARTIFACTS: &[(&str, &str)] = &[
+    ("ba_designer", "BA Designer"),
+    ("product_manager", "Product Manager"),
     ("architect", "Architect Analysis"),
     ("developer", "Developer Plan"),
+    ("planner", "Planner Output"),
     ("reviewer", "Reviewer Feedback"),
     ("skeptic", "Skeptic Concerns"),
     ("plan", "Implementation Plan"),
     ("implementer", "Implementer Log"),
+    ("quality_guard", "Quality Guard"),
+    ("security_auditor", "Security Audit"),
+    ("performance_analyst", "Performance Analysis"),
+    ("api_guardian", "API Guardian Review"),
+    ("accessibility_reviewer", "Accessibility Review"),
     ("technical_writer", "Technical Writer"),
 ];
 
@@ -708,9 +716,7 @@ impl TaskState {
     /// Returns true if all required phases are complete.
     pub fn is_complete(&self) -> bool {
         const REQUIRED: &[&str] = &[
-            "architect",
-            "developer",
-            "reviewer",
+            "planner",
             "implementer",
             "technical_writer",
         ];
@@ -799,7 +805,7 @@ mod tests {
     fn test_is_complete() {
         let json = r#"{
             "task_id": "TASK_DONE",
-            "phases_completed": ["architect", "developer", "reviewer", "skeptic", "implementer", "technical_writer"]
+            "phases_completed": ["planner", "reviewer", "implementer", "quality_guard", "security_auditor", "technical_writer"]
         }"#;
         let state: TaskState = serde_json::from_str(json).unwrap();
         assert!(state.is_complete());
@@ -809,7 +815,7 @@ mod tests {
     fn test_phase_progress() {
         let json = r#"{
             "task_id": "TASK_HALF",
-            "phases_completed": ["architect", "developer", "reviewer"]
+            "phases_completed": ["planner", "reviewer", "implementer"]
         }"#;
         let state: TaskState = serde_json::from_str(json).unwrap();
         assert!((state.phase_progress() - 0.5).abs() < 0.01);

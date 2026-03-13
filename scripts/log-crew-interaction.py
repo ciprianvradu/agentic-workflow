@@ -305,6 +305,32 @@ def _extract_response_summary(transcript_path: str) -> str:
         return ""
 
 
+def _update_resume_md(task_dir: str) -> None:
+    """Regenerate RESUME.md if stale (>10s since last write).
+
+    Imports _generate_resume_md from crew_orchestrator — pure Python,
+    no LLM involvement. Reads state.json + interactions.jsonl, writes
+    a crash-recoverable snapshot to RESUME.md.
+    """
+    import time
+
+    resume_path = Path(task_dir) / "RESUME.md"
+    if resume_path.exists():
+        try:
+            age = time.time() - resume_path.stat().st_mtime
+            if age < 10:
+                return  # Written recently — skip
+        except OSError:
+            pass
+
+    try:
+        from crew_orchestrator import _generate_resume_md
+        task_id = Path(task_dir).name
+        _generate_resume_md(task_id)
+    except Exception:
+        pass  # Never block user
+
+
 def main():
     try:
         input_data = json.load(sys.stdin)
@@ -330,6 +356,9 @@ def main():
     except Exception:
         # Never fail — hook errors must not block the user
         pass
+
+    # Update RESUME.md after logging interaction (crash recovery snapshot)
+    _update_resume_md(task_dir)
 
     sys.exit(0)
 

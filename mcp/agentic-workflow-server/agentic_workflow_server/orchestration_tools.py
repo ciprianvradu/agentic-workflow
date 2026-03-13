@@ -2267,6 +2267,40 @@ def crew_get_resume_state(
     if unresolved:
         display_summary += f"Unresolved concerns: {len(unresolved)}\n"
 
+    # Interaction summary from interactions.jsonl
+    interactions_file = task_dir / "interactions.jsonl"
+    if interactions_file.exists():
+        try:
+            type_counts: dict[str, int] = {}
+            with open(interactions_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        itype = entry.get("type", "unknown")
+                        type_counts[itype] = type_counts.get(itype, 0) + 1
+                    except json.JSONDecodeError:
+                        continue
+
+            human_types = ["guidance", "correction", "new_requirement", "question"]
+            human_count = sum(type_counts.get(t, 0) for t in human_types)
+            if human_count > 0:
+                parts = []
+                for t in human_types:
+                    c = type_counts.get(t, 0)
+                    if c > 0:
+                        parts.append(f"{c} {t}")
+                display_summary += f"Human guidance: {human_count} entries ({', '.join(parts)})\n"
+        except Exception:
+            pass  # Never block resume on interaction read failure
+
+    # Include RESUME.md in context files if it exists
+    resume_file = task_dir / "RESUME.md"
+    if resume_file.exists():
+        context_files.insert(0, str(resume_file))
+
     return {
         "task_id": task_id,
         "resume_point": resume_point,

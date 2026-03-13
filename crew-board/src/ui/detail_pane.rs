@@ -1220,22 +1220,34 @@ fn render_interactions_section(lines: &mut Vec<Line>, interactions: &[Interactio
         return;
     }
 
-    // Count human vs agent vs system entries
-    let human_count = interactions.iter().filter(|i| i.role == "human").count();
-    let agent_count = interactions.iter().filter(|i| i.role == "agent").count();
+    // Filter out state_change noise — count and show summary instead
+    let state_change_count = interactions.iter().filter(|i| i.type_ == "state_change").count();
+    let filtered: Vec<&Interaction> = interactions.iter().filter(|i| i.type_ != "state_change").collect();
+
+    // Count human vs agent vs system entries (from filtered set)
+    let human_count = filtered.iter().filter(|i| i.role == "human").count();
+    let agent_count = filtered.iter().filter(|i| i.role == "agent").count();
     lines.push(Line::from(Span::styled(
         format!(
             "── Interactions ({} entries | {} human, {} agent) ──",
-            interactions.len(),
+            filtered.len(),
             human_count,
             agent_count,
         ),
         styles::header_style(),
     )));
 
+    // Show collapsed state_change summary if any were filtered
+    if state_change_count > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("    {} state transitions (hidden)", state_change_count),
+            styles::dim_style(),
+        )));
+    }
+
     // Group by phase
     let mut current_phase = String::new();
-    for entry in interactions {
+    for entry in &filtered {
         // Phase header when phase changes
         if !entry.phase.is_empty() && entry.phase != current_phase {
             current_phase = entry.phase.clone();
