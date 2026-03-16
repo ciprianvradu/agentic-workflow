@@ -761,6 +761,56 @@ impl TaskState {
     }
 }
 
+/// Health status of a loaded task — used for crash/stale detection in the UI.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TaskHealth {
+    /// Task is in a consistent state.
+    Healthy,
+    /// One or more completed phases are missing their output files.
+    MissingOutputs(Vec<String>),
+    /// Current phase was set but has no output and has been running a long time.
+    StalePhase(String),
+}
+
+impl LoadedTask {
+    /// Check whether this task's phase outputs are consistent.
+    /// Only performs checks for non-archived, non-complete tasks.
+    pub fn health_check(&self) -> TaskHealth {
+        if self.archived || self.state.is_complete() {
+            return TaskHealth::Healthy;
+        }
+
+        // Check for missing outputs of completed phases
+        let mut missing = Vec::new();
+        for phase in &self.state.phases_completed {
+            let expected = self.dir.join(format!("{}.md", phase));
+            if !expected.exists() {
+                missing.push(phase.clone());
+            }
+        }
+        if !missing.is_empty() {
+            return TaskHealth::MissingOutputs(missing);
+        }
+
+        // Check for stale current phase: set but no output file and updated > 30 min ago
+        if let Some(ref phase) = self.state.phase {
+            if !self.state.phases_completed.contains(phase) {
+                let phase_file = self.dir.join(format!("{}.md", phase));
+                if !phase_file.exists() && !self.state.updated_at.is_empty() {
+                    if let Ok(updated) = chrono::DateTime::parse_from_rfc3339(&self.state.updated_at) {
+                        let elapsed = chrono::Utc::now().signed_duration_since(updated.to_utc());
+                        if elapsed.num_minutes() > 30 {
+                            return TaskHealth::StalePhase(phase.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        TaskHealth::Healthy
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

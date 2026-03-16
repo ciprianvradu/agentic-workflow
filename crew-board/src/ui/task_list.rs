@@ -1,4 +1,4 @@
-use crate::app::{App, FocusPane, TreeRow};
+use crate::app::{App, FocusPane, TaskFilter, TreeRow};
 use crate::ui::styles;
 use ratatui::{
     layout::Rect,
@@ -29,7 +29,12 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let items_len = items.len();
     let total_tasks: usize = app.repos.iter().map(|r| r.tasks.len()).sum();
     let focus_marker = if is_focused { " ◄" } else { "" };
-    let title = format!(" {} repos, {} tasks{} ", app.repos.len(), total_tasks, focus_marker);
+    let filter_label = match app.task_filter {
+        TaskFilter::All => String::new(),
+        TaskFilter::Active => " [Active]".to_string(),
+        TaskFilter::ActiveAndRecentDone => " [Active+Recent]".to_string(),
+    };
+    let title = format!(" {} repos, {} tasks{}{} ", app.repos.len(), total_tasks, filter_label, focus_marker);
     let list = List::new(items)
         .block(
             Block::default()
@@ -79,18 +84,38 @@ fn render_repo_row<'a>(app: &App, ri: usize) -> ListItem<'a> {
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("  ({}/{} active", active, total - archived),
-            Style::default().fg(Color::DarkGray),
-        ),
     ];
-    if archived > 0 {
-        spans.push(Span::styled(
-            format!(", {} deleted", archived),
-            Style::default().fg(Color::DarkGray),
-        ));
+
+    // Show different counts based on active filter
+    match app.task_filter {
+        TaskFilter::All => {
+            spans.push(Span::styled(
+                format!("  ({}/{} active", active, total - archived),
+                Style::default().fg(Color::DarkGray),
+            ));
+            if archived > 0 {
+                spans.push(Span::styled(
+                    format!(", {} deleted", archived),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
+        }
+        TaskFilter::Active => {
+            let shown = repo.tasks.iter().filter(|t| app.task_passes_filter(t)).count();
+            spans.push(Span::styled(
+                format!("  ({} active) [Active]", shown),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        TaskFilter::ActiveAndRecentDone => {
+            let shown = repo.tasks.iter().filter(|t| app.task_passes_filter(t)).count();
+            spans.push(Span::styled(
+                format!("  ({} shown) [Active+Recent]", shown),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
     }
-    spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
 
     let line = Line::from(spans);
     ListItem::new(line)

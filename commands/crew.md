@@ -17,6 +17,22 @@ The script returns JSON with `action` and routing details. Handle by action:
 - **ask** → Go to Single Agent Consultation with `result.agent` and `result.question`
 - **error** → Show `result.errors` to user
 
+**Resume detection:** When called with no args (or from a worktree), `init` auto-detects the active task and routes to **resume**. To skip resume detection and always start a fresh task, pass `--no-resume` to the orchestrator:
+
+```
+python3 {__scripts_dir__}/crew_orchestrator.py init --host {__platform__} --args "$ARGS" --no-resume
+```
+
+Or include `--no-resume` in the `/crew` arguments string:
+
+```
+/crew "Fix the authentication bug" --no-resume
+```
+
+**Resume health warnings:** When resuming, check `result.resume_state.recovery_needed` and `result.resume_state.stale_phase_warning`. If set, display the warning to the user before entering the action loop:
+- `recovery_needed`: Missing output files for completed phases — suggest re-running affected phases
+- `stale_phase_warning`: Current phase has been running >30 min with no output — may indicate a crash
+
 ### Context Preparation (if configured)
 
 If `config.gemini_research.enabled` is true:

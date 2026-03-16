@@ -186,8 +186,7 @@ pub fn preview_cleanup(
         .collect()
 }
 
-/// Execute cleanup for multiple worktrees. Runs synchronously.
-/// Shells out to scripts/cleanup-worktree.py for each task.
+/// Execute cleanup for multiple worktrees. Runs synchronously in native Rust.
 /// IMPORTANT: This only removes the git worktree and branch. It NEVER deletes .tasks/ data.
 pub fn execute_cleanup(
     repo_path: &Path,
@@ -195,64 +194,175 @@ pub fn execute_cleanup(
     remove_branch: bool,
     keep_on_disk: bool,
 ) -> Vec<CleanupResult> {
-    let script = repo_path
-        .join("scripts")
-        .join("cleanup-worktree.py");
-    let home_script = dirs::home_dir()
-        .map(|h| h.join(".claude/scripts/cleanup-worktree.py"))
-        .filter(|p| p.exists());
-    let script_path = if script.exists() {
-        script.to_string_lossy().to_string()
-    } else if let Some(ref hs) = home_script {
-        hs.to_string_lossy().to_string()
-    } else {
-        "scripts/cleanup-worktree.py".to_string()
-    };
-
     task_ids
         .iter()
-        .map(|task_id| {
-            let mut args = vec![
-                "python3".to_string(),
-                script_path.clone(),
-                task_id.clone(),
-            ];
-            if keep_on_disk {
-                args.push("--keep-on-disk".to_string());
-            }
-            if remove_branch {
-                args.push("--remove-branch".to_string());
-            }
-
-            let result = Command::new(&args[0])
-                .args(&args[1..])
-                .current_dir(repo_path)
-                .output();
-
-            match result {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    if output.status.success() {
-                        CleanupResult {
-                            task_id: task_id.clone(),
-                            success: true,
-                            message: stdout.trim().to_string(),
-                        }
-                    } else {
-                        CleanupResult {
-                            task_id: task_id.clone(),
-                            success: false,
-                            message: format!("Failed: {}", stderr.trim()),
-                        }
-                    }
-                }
-                Err(e) => CleanupResult {
-                    task_id: task_id.clone(),
-                    success: false,
-                    message: format!("Failed to run cleanup script: {}", e),
-                },
-            }
-        })
+        .map(|task_id| execute_single_cleanup(repo_path, task_id, remove_branch, keep_on_disk))
         .collect()
+}
+
+fn execute_single_cleanup(
+    repo_path: &Path,
+    task_id: &str,
+    remove_branch: bool,
+    keep_on_disk: bool,
+) -> CleanupResult {
+    let state_file = repo_path.join(".tasks").join(task_id).join("state.json");
+    let state_data = match std::fs::read_to_string(&state_file) {
+        Ok(s) => s,
+        Err(e) => return CleanupResult {
+            task_id: task_id.to_string(), success: false,
+            message: format!("Cannot read state.json: {}", e),
+        },
+    };
+    let mut state: serde_json::Value = match serde_json::from_str(&state_data) {
+        Ok(v) => v,
+        Err(e) => return CleanupResult {
+            task_id: task_id.to_string(), success: false,
+            message: format!("Cannot parse state.json: {}", e),
+        },
+    };
+
+    let worktree = match state.get("worktree") {
+        Some(wt) if wt.is_object() => wt.clone(),
+        _ => return CleanupResult {
+            task_id: task_id.to_string(), success: false,
+            message: "No worktree configured".to_string(),
+        },
+    };
+
+    let wt_path = worktree.get("path").and_then(|v| v.as_str()).unwrap_or("");
+    let branch = worktree.get("branch").and_then(|v| v.as_str()).unwrap_or("");
+    let new_status = if keep_on_disk { "recyclable" } else { "cleaned" };
+    let mut messages = Vec::new();
+
+    if !keep_on_disk && !wt_path.is_empty() {
+        let wt_abs = {
+            let p = PathBuf::from(wt_path);
+            if p.is_absolute() { p } else { repo_path.join(wt_path) }
+        };
+        let wt_abs_str = wt_abs.to_string_lossy().to_string();
+
+        // Try git worktree remove first
+        let result = Command::new("git")
+            .args(["worktree", "remove", &wt_abs_str])
+            .current_dir(repo_path)
+            .output();
+
+        let removed = match result {
+            Ok(o) if o.status.success() => {
+                messages.push("Worktree removed via git".to_string());
+                true
+            }
+            Ok(o) => {
+                let stderr = String::from_utf8_lossy(&o.stderr);
+                // Fallback: if git says "not a working tree" or "prunable",
+                // remove the directory manually and prune.
+                if stderr.contains("not a working tree") || stderr.contains("not a valid") {
+                    messages.push(format!("git worktree remove failed ({}), using fallback", stderr.trim()));
+                    // Remove directory if it exists
+                    if wt_abs.exists() {
+                        if let Err(e) = std::fs::remove_dir_all(&wt_abs) {
+                            return CleanupResult {
+                                task_id: task_id.to_string(), success: false,
+                                message: format!("Failed to remove directory: {}", e),
+                            };
+                        }
+                        messages.push("Directory removed".to_string());
+                    }
+                    // Prune stale worktree entries
+                    let _ = Command::new("git")
+                        .args(["worktree", "prune"])
+                        .current_dir(repo_path)
+                        .output();
+                    messages.push("Stale worktree entries pruned".to_string());
+                    true
+                } else {
+                    return CleanupResult {
+                        task_id: task_id.to_string(), success: false,
+                        message: format!("git worktree remove failed: {}", stderr.trim()),
+                    };
+                }
+            }
+            Err(e) => return CleanupResult {
+                task_id: task_id.to_string(), success: false,
+                message: format!("Failed to run git: {}", e),
+            },
+        };
+
+        if !removed {
+            return CleanupResult {
+                task_id: task_id.to_string(), success: false,
+                message: "Worktree removal failed".to_string(),
+            };
+        }
+    }
+
+    // Delete branch if requested
+    if remove_branch && !branch.is_empty() {
+        let result = Command::new("git")
+            .args(["branch", "-d", branch])
+            .current_dir(repo_path)
+            .output();
+        match result {
+            Ok(o) if o.status.success() => messages.push(format!("Branch '{}' deleted", branch)),
+            Ok(o) => messages.push(format!("Branch delete warning: {}", String::from_utf8_lossy(&o.stderr).trim())),
+            Err(_) => messages.push("Could not delete branch".to_string()),
+        }
+    }
+
+    // Update state.json
+    if let Some(wt) = state.get_mut("worktree").and_then(|v| v.as_object_mut()) {
+        wt.insert("status".to_string(), serde_json::Value::String(new_status.to_string()));
+        wt.insert("cleaned_at".to_string(), serde_json::Value::String(chrono_now()));
+    }
+    state.as_object_mut().map(|o| {
+        o.insert("updated_at".to_string(), serde_json::Value::String(chrono_now()));
+    });
+
+    if let Err(e) = std::fs::write(&state_file, serde_json::to_string_pretty(&state).unwrap_or_default()) {
+        return CleanupResult {
+            task_id: task_id.to_string(), success: false,
+            message: format!("State update failed: {}", e),
+        };
+    }
+    messages.push(format!("Status → {}", new_status));
+
+    CleanupResult {
+        task_id: task_id.to_string(),
+        success: true,
+        message: messages.join(". "),
+    }
+}
+
+fn chrono_now() -> String {
+    // Simple ISO 8601 timestamp without external crate
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // Convert unix timestamp to ISO string (approximate, no TZ)
+    let secs_per_day = 86400u64;
+    let days = now / secs_per_day;
+    let rem = now % secs_per_day;
+    let hours = rem / 3600;
+    let minutes = (rem % 3600) / 60;
+    let seconds = rem % 60;
+
+    // Days since epoch to Y-M-D (simplified)
+    let mut y = 1970i64;
+    let mut d = days as i64;
+    loop {
+        let days_in_year = if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 366 } else { 365 };
+        if d < days_in_year { break; }
+        d -= days_in_year;
+        y += 1;
+    }
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let month_days: [i64; 12] = [31, if leap {29} else {28}, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut m = 0usize;
+    for (i, &md) in month_days.iter().enumerate() {
+        if d < md { m = i; break; }
+        d -= md;
+    }
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", y, m + 1, d + 1, hours, minutes, seconds)
 }

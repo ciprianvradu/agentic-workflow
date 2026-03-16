@@ -14,6 +14,8 @@ Usage:
     python3 scripts/crew_orchestrator.py impl-action --task-id TASK_001
     python3 scripts/crew_orchestrator.py complete --task-id TASK_001
     python3 scripts/crew_orchestrator.py resume --task-id TASK_001
+    python3 scripts/crew_orchestrator.py health-check --task-id TASK_001
+    python3 scripts/crew_orchestrator.py quick --description "Add retry logic" --host claude
 """
 
 import argparse
@@ -39,6 +41,7 @@ try:
         crew_get_implementation_action,
         crew_format_completion,
         crew_get_resume_state,
+        _check_task_health,
     )
     from agentic_workflow_server.state_tools import (
         workflow_complete_phase,
@@ -46,6 +49,8 @@ try:
         workflow_record_cost,
         workflow_transition,
         workflow_log_interaction,
+        workflow_create_worktree,
+        workflow_get_launch_command,
         find_task_dir,
         get_tasks_dir,
         _load_state,
@@ -178,7 +183,11 @@ def cmd_init(args: argparse.Namespace) -> None:
     """
     parsed = crew_parse_args(args.args)
 
-    if parsed.get("errors"):
+    # WS6: --no-resume flag suppresses auto-detection of existing tasks
+    # Can come from argparse (--no-resume on CLI) or from parsed args string (--no-resume in /crew args)
+    no_resume = getattr(args, "no_resume", False) or parsed.get("options", {}).get("no_resume", False)
+
+    if parsed.get("errors") and not no_resume:
         # No args provided — try to auto-resume from context
         # 1. Worktree detection: match cwd against task worktree metadata
         task_id = _detect_worktree_task_id()
@@ -202,6 +211,10 @@ def cmd_init(args: argparse.Namespace) -> None:
         else:
             _output({"error": True, "errors": parsed["errors"], "action": parsed["action"]})
             return
+    elif parsed.get("errors") and no_resume:
+        # --no-resume: skip auto-detection, treat as fresh start error
+        _output({"error": True, "errors": parsed["errors"], "action": parsed["action"]})
+        return
 
     action = parsed["action"]
 
@@ -682,6 +695,107 @@ def cmd_resume(args: argparse.Namespace) -> None:
     })
 
 
+def cmd_health_check(args: argparse.Namespace) -> None:
+    """Check task health: missing outputs and stale phase detection (WS4.3).
+
+    Batches: _load_state → _check_task_health
+    """
+    task_id = args.task_id
+    task_dir = find_task_dir(task_id)
+    if not task_dir:
+        _output({"error": True, "errors": [f"Task {task_id} not found"]})
+        return
+
+    state = _load_state(task_dir)
+    health = _check_task_health(task_dir, state)
+
+    # Build recovery action for stale/missing situations
+    recovery_action = None
+    if health["status"] == "stale_phase" and health["stale_phase"]:
+        recovery_action = {
+            "action": "resume",
+            "phase": health["stale_phase"]["phase"],
+            "command": f"python3 scripts/crew_orchestrator.py resume --task-id {task_id}",
+        }
+    elif health["status"] == "missing_outputs":
+        first_missing = health["missing_outputs"][0]["phase"] if health["missing_outputs"] else None
+        if first_missing:
+            recovery_action = {
+                "action": "re-run",
+                "phase": first_missing,
+                "command": f"python3 scripts/crew_orchestrator.py resume --task-id {task_id}",
+            }
+
+    _output({
+        "task_id": task_id,
+        "status": health["status"],
+        "stale_phase": health["stale_phase"],
+        "missing_outputs": health["missing_outputs"],
+        "recovery_suggestions": health["recovery_suggestions"],
+        "recovery_action": recovery_action,
+    })
+
+
+def cmd_quick(args: argparse.Namespace) -> None:
+    """Quick worktree creation: init + worktree + launch in one step (WS5.2).
+
+    Batches: crew_parse_args → crew_init_task → workflow_create_worktree →
+             workflow_get_launch_command
+    """
+    description = args.description
+    host = args.host
+
+    options: dict = {"ai_host": host, "mode": "standard"}
+
+    # Initialize the task
+    init_result = crew_init_task(
+        task_description=description,
+        options=options,
+    )
+    if not init_result.get("success"):
+        _output({"error": True, "errors": [init_result.get("error", "Init failed")]})
+        return
+
+    task_id = init_result["task_id"]
+    _write_active_task(task_id)
+
+    # Create worktree
+    worktree_result = workflow_create_worktree(
+        task_id=task_id,
+        ai_host=host,
+    )
+    if not worktree_result.get("success"):
+        _output({
+            "error": True,
+            "errors": [worktree_result.get("error", "Worktree creation failed")],
+            "task_id": task_id,
+        })
+        return
+
+    worktree_path = worktree_result.get("worktree_path", "")
+
+    # Get launch command (unless --no-launch)
+    launch_command = None
+    if not getattr(args, "no_launch", False):
+        launch_result = workflow_get_launch_command(
+            task_id=task_id,
+            ai_host=host,
+            worktree_path=worktree_path,
+        )
+        launch_command = launch_result.get("command") or launch_result.get("launch_command")
+
+    resume_command = f"python3 scripts/crew_orchestrator.py resume --task-id {task_id} --host {host}"
+
+    _output({
+        "action": "quick",
+        "task_id": task_id,
+        "worktree_path": worktree_path,
+        "launch_command": launch_command,
+        "resume_command": resume_command,
+        "mode": init_result.get("mode", "standard"),
+    })
+
+
 def _classify_error(e: Exception) -> dict:
     """Map exceptions to structured, actionable error messages."""
     msg = str(e)
@@ -724,6 +838,7 @@ def main():
     p_init = subparsers.add_parser("init", help="Parse args, init task, get first action")
     p_init.add_argument("--args", required=True, help="Raw /crew arguments string")
     p_init.add_argument("--host", default="unknown", help="AI host platform identifier")
+    p_init.add_argument("--no-resume", action="store_true", help="Skip resume detection; always treat as fresh start (WS6)")
 
     # next
     p_next = subparsers.add_parser("next", help="Get next phase/action")
@@ -784,6 +899,16 @@ def main():
     p_resume.add_argument("--task-id", required=True, help="Task identifier")
     p_resume.add_argument("--host", default="unknown", help="AI host platform identifier")
 
+    # health-check (WS4.3)
+    p_health = subparsers.add_parser("health-check", help="Check task health: missing outputs and stale phase")
+    p_health.add_argument("--task-id", required=True, help="Task identifier")
+
+    # quick (WS5.2): init + worktree + launch in one step
+    p_quick = subparsers.add_parser("quick", help="Quick create: init task + worktree + launch")
+    p_quick.add_argument("--description", required=True, help="Task description")
+    p_quick.add_argument("--host", default="claude", help="AI host platform (claude/copilot/gemini/opencode)")
+    p_quick.add_argument("--no-launch", action="store_true", help="Skip launch command generation")
+
     args = parser.parse_args()
 
     commands = {
@@ -796,6 +921,8 @@ def main():
         "complete": cmd_complete,
         "log-interaction": cmd_log_interaction,
         "resume": cmd_resume,
+        "health-check": cmd_health_check,
+        "quick": cmd_quick,
     }
 
     try:

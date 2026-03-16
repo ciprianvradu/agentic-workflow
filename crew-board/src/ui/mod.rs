@@ -10,6 +10,7 @@ pub mod keybindings;
 pub mod launch_popup;
 pub mod permission_popup;
 pub mod search_popup;
+pub mod splash_popup;
 pub mod stats_popup;
 pub mod status_bar;
 pub mod styles;
@@ -69,6 +70,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if app.show_help {
         help_popup::draw(frame, app);
+    }
+    if app.show_splash {
+        splash_popup::draw(frame, app);
     }
     if app.quit_confirm {
         draw_quit_confirm(frame, app);

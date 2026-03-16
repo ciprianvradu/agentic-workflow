@@ -441,7 +441,7 @@ fn draw_stacked_layout(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Pick which terminal indices to show in tiled/stacked layouts.
 /// Always includes the focused terminal. Fills remaining slots with neighbors.
-fn terminal_indices_for_layout(mgr: &terminal::TerminalManager, max: usize) -> Vec<usize> {
+pub(crate) fn terminal_indices_for_layout(mgr: &terminal::TerminalManager, max: usize) -> Vec<usize> {
     let total = mgr.terminals.len();
     if total == 0 {
         return vec![];

@@ -180,6 +180,39 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
     }
     lines.push(Line::from(""));
 
+    // Health check warning banner (step 4.6)
+    match loaded.health_check() {
+        crate::data::task::TaskHealth::Healthy => {}
+        crate::data::task::TaskHealth::MissingOutputs(missing) => {
+            lines.push(Line::from(vec![
+                Span::styled("WARNING: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("missing output for {} phase(s)", missing.join(", ")),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "  Run `/crew resume` to recover",
+                styles::dim_style(),
+            )));
+            lines.push(Line::from(""));
+        }
+        crate::data::task::TaskHealth::StalePhase(phase) => {
+            lines.push(Line::from(vec![
+                Span::styled("WARNING: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("stale phase: {} (30+ min ago, no output)", phase),
+                    Style::default().fg(Color::Yellow),
+                ),
+            ]));
+            lines.push(Line::from(Span::styled(
+                "  Run `/crew resume` to recover",
+                styles::dim_style(),
+            )));
+            lines.push(Line::from(""));
+        }
+    }
+
     // Workflow mode
     if let Some(ref mode) = task.workflow_mode {
         lines.push(Line::from(vec![
@@ -373,6 +406,51 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
     lines.push(Line::from(vec![
         Span::styled("Updated: ", styles::dim_style()),
         Span::raw(format_timestamp(&task.updated_at)),
+    ]));
+
+    // Quick Actions section
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("── Quick Actions ──", styles::header_style())));
+    let key_style = Style::default().fg(Color::Cyan);
+    let dim_style = styles::dim_style();
+    let disabled_style = Style::default().fg(Color::DarkGray).add_modifier(ratatui::style::Modifier::DIM);
+
+    let has_active_worktree = task.worktree.as_ref().is_some_and(|wt| wt.status == "active");
+
+    // F2: Launch host (active worktree only)
+    if has_active_worktree {
+        lines.push(Line::from(vec![
+            Span::styled("  F2 ", key_style),
+            Span::styled("Open host in worktree", dim_style),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  F2 ", disabled_style),
+            Span::styled("Open host (no active worktree)", disabled_style),
+        ]));
+    }
+
+    // F4: Create worktree (only useful when no active worktree)
+    if has_active_worktree {
+        lines.push(Line::from(vec![
+            Span::styled("  F4 ", disabled_style),
+            Span::styled("Create worktree (worktree exists)", disabled_style),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("  F4 ", key_style),
+            Span::styled("Create worktree for this task", dim_style),
+        ]));
+    }
+
+    // F6 and F7 always available
+    lines.push(Line::from(vec![
+        Span::styled("  F6 ", key_style),
+        Span::styled("Browse documents", dim_style),
+    ]));
+    lines.push(Line::from(vec![
+        Span::styled("  F7 ", key_style),
+        Span::styled("View history", dim_style),
     ]));
 
     let focus_marker = if is_focused { " ◄" } else { "" };

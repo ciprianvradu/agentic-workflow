@@ -166,26 +166,32 @@ Key config sections:
 
 High-level functions called by the `/crew` command and `scripts/crew_orchestrator.py`:
 
-- `crew_parse_args(raw_args)` — Parse command arguments (action, task description, options)
+- `crew_parse_args(raw_args)` — Parse command arguments (action, task description, options). Supports `--no-resume` flag to skip auto-detection of active tasks and always start fresh.
 - `crew_init_task(description, options)` — Full task initialization (config, state, mode, KB inventory)
 - `crew_get_next_phase(task_id)` — Returns next action: spawn_agent, checkpoint (with structured question/options), complete
 - `crew_parse_agent_output(agent, output_text)` — Extract issues and recommendations
 - `crew_get_implementation_action(task_id, verification_passed?, error_output?)` — Implementation loop logic
 - `crew_format_completion(task_id, files_changed)` — Final summary, commit message, cleanup
 - `crew_jira_transition(task_id, hook_name, issue_key)` — Resolve Jira lifecycle transition (skip/prompt/execute)
-- `crew_get_resume_state(task_id)` — Load resume context for a paused task
+- `crew_get_resume_state(task_id)` — Load resume context for a paused task. Now also returns `recovery_needed` (list of missing outputs) and `stale_phase_warning` fields populated by `_check_task_health()`.
+
+**Crash recovery helper:**
+
+- `_check_task_health(task_dir, state)` — Internal helper that mirrors the Rust `TaskHealth` logic. Checks for missing `{phase}.md` output files for completed phases, and detects stale current phases (no output file + `updated_at` > 30 minutes ago). Returns `{status, stale_phase, missing_outputs, recovery_suggestions}`. Called by `crew_get_resume_state()` and the `health-check` orchestrator subcommand.
 
 ### scripts/crew_orchestrator.py — CLI Routing (~430 lines)
 
 CLI script that batches multiple MCP tool calls into single instant JSON decisions, replacing LLM interpretation of procedural routing logic. The orchestrator owns all `state.json` phase transitions -- it calls `workflow_transition()` after determining the next phase, so the LLM never needs to call `workflow_transition` directly. Subcommands:
 
-- `init --args "..."` — Parse args → init task → get first phase → transition state to first phase (replaces 3 LLM turns)
+- `init --args "..." [--no-resume]` — Parse args → init task → get first phase → transition state to first phase (replaces 3 LLM turns). `--no-resume` skips auto-detection of existing active tasks.
 - `next --task-id X` — Get next phase/action
 - `agent-done --task-id X --agent A` — Parse output → complete phase → record cost → get next → transition to next phase (replaces 4 LLM turns)
 - `checkpoint-done --task-id X --decision D` — Record decision → complete phase (approve/skip) → get next → transition to next phase
 - `impl-action --task-id X` — Implementation loop step
 - `complete --task-id X` — Format completion + resolve Jira transitions + mark state as completed
 - `resume --task-id X` — Load resume context + get next phase
+- `health-check --task-id X` — Run `_check_task_health()` and return structured JSON report for crash recovery detection
+- `quick --description "..." --host X [--mode M] [--no-launch]` — One-shot command: init task + create worktree + generate launch command, returning all results in a single JSON response
 
 ### server.py — MCP Registration (~1500 lines)
 
@@ -204,6 +210,118 @@ Exposes project files as MCP resources that agents can read:
 - Agent prompt files from `agents/`
 - Configuration files from `config/`
 - Documentation from `docs/ai-context/`
+
+## Crew-Board TUI (Rust)
+
+crew-board is a Norton Commander-style terminal dashboard (`crew-board/src/`) written in Rust with ratatui + crossterm. Its full architecture is documented in `crew-board/CLAUDE.md` (agent instructions). This section covers modules and features relevant to MCP/Python developers.
+
+### crew-board UI Modules
+
+```
+crew-board/src/ui/
+├── mod.rs             # Root layout dispatcher + popup overlay stacking
+├── task_list.rs       # Left pane: repo/task tree with filter label
+├── detail_pane.rs     # Right pane: task overview, docs, history. Shows Quick Actions (F2/F4/F6/F7) and health warning banners
+├── status_bar.rs      # Two-line bottom bar: active work badge, filter indicator, tile navigation hints
+├── splash_popup.rs    # Welcome splash overlay (NEW in TASK_083): active tasks, health warnings, quick-start hints
+├── help_popup.rs      # F1 scrollable help overlay
+├── keybindings.rs     # F-key registry (single source of truth for all views)
+└── terminal_view.rs   # Embedded terminal multiplexer (View 5)
+```
+
+### Welcome Splash Screen (`ui/splash_popup.rs`)
+
+Shown on startup (configurable with `show_splash_on_start` setting, default `true`). Displays:
+- Health warnings for any tasks with crash recovery issues
+- Up to 5 active tasks (task_id, phase, description) across all repos
+- Quick-start keybinding hints (F4 new worktree, F2 launch host, etc.)
+- Stats summary line
+
+Scroll: Up/Down/PgUp/PgDn. Dismissed by any other key press. F-keys pass through (e.g., pressing F4 on the splash directly opens the create-worktree popup).
+
+App state: `app.show_splash: bool`, `app.splash_scroll: u16`.
+
+### Status Bar Active Work Badge
+
+`draw_info_line()` in `status_bar.rs` shows a prominent badge immediately after the view label:
+- `[N active]` — bold green background + black text when N > 0
+- `[no active work]` — dim gray when no active tasks
+- `filter:Active` or `filter:Active+Recent` — dim badge shown next to the active badge when a filter is active
+
+The detailed stats line no longer includes the active count (it moved to the badge).
+
+### Task List Filtering (`f` key)
+
+`TaskFilter` enum in `app.rs` controls which tasks appear in the tree view:
+
+| Filter | Shows |
+|--------|-------|
+| `All` (default) | All tasks regardless of status |
+| `Active` | Tasks not archived and not complete |
+| `ActiveAndRecentDone` | Active tasks + completed tasks updated within `recent_done_days` |
+
+Press `f` in Tasks view with left pane focused to cycle: All → Active → Active+Recent → All. Repos with zero matching tasks are still shown (rows remain visible). F3 search always searches all tasks regardless of the active filter.
+
+Settings:
+- `recent_done_days` (default 7): days to include completed tasks in the `ActiveAndRecentDone` filter
+- `default_task_filter` (default `"all"`): startup filter mode; accepts `"all"`, `"active"`, `"active-recent"`
+
+### Quick Actions in Detail Pane (`ui/detail_pane.rs`)
+
+`draw_overview()` shows a "Quick Actions" section at the bottom of the task detail:
+- **F2** (active, when worktree exists): Open AI host in the worktree
+- **F4** (active, when no worktree): Create a worktree for this task
+- **F2** (dim, when no worktree): Shown as disabled with DIM style
+- **F4** (dim, when worktree exists): Shown as disabled with DIM style
+- **F6/F7**: Always active (documents / history)
+
+When the task is in-progress, the current phase is shown prominently above the Quick Actions section.
+
+Health warning banners appear after the task description if `health_check()` returns a non-Healthy result (bold red "WARNING: " prefix + yellow message text).
+
+### Crash Recovery in crew-board (`data/task.rs`)
+
+`LoadedTask::health_check()` returns a `TaskHealth` enum:
+
+| Variant | Condition |
+|---------|-----------|
+| `Healthy` | All completed phases have output files; current phase is not stale |
+| `MissingOutputs(Vec<String>)` | One or more `{phase}.md` files are absent for phases listed in `phases_completed` |
+| `StalePhase(String)` | Current phase set but not in `phases_completed`, no output file, and `updated_at` is older than 30 minutes |
+
+The welcome splash calls `collect_health_warnings()` to aggregate warnings across all repos at startup.
+
+### F5/F6 Terminal Navigation (Normal Mode)
+
+In Terminals view Normal mode (previously F5=Refresh, F6=Dismiss):
+- **F5**: `terminal_focus_prev_running()` — focus previous running terminal, skipping exited
+- **F6**: `terminal_focus_next_running()` — focus next running terminal, skipping exited
+- F5=Refresh behavior is preserved in all other views (Tasks, Issues, Config, Cost, Activity)
+- Exited terminal dismiss: `Delete` key; dismiss all exited: `Ctrl+F4`
+
+### Split Pane Navigation (Alt+Arrow)
+
+Spatial navigation between visible terminal tiles in tiled/stacked layouts:
+
+| Keys | Action |
+|------|--------|
+| `Alt+Left` / `Alt+Right` | Move focus between horizontal tiles (Tiled2, Tiled4) |
+| `Alt+Up` / `Alt+Down` | Move focus between vertical tiles/rows (Tiled4, Stacked) |
+| Click on tile | Focus the clicked tile (no drag = focus, drag = text selection) |
+
+Works in both Normal mode and TerminalFocused mode. In TerminalFocused mode, `Alt+Arrow` is intercepted before PTY forwarding; other `Alt+key` combinations (e.g., `Alt+B` for word-back in bash) still reach the PTY. Status bar shows `Alt+←↑→↓:tiles` hint in tiled/stacked layouts.
+
+Implemented via four spatial methods on `App`: `terminal_tile_focus_right/left/down/up()`. These use `terminal_indices_for_layout()` (made `pub(crate)` in `terminal_view.rs`) to map the current focused terminal to its grid position.
+
+### crew-board Settings (`settings.rs` / `~/.config/crew-board.toml`)
+
+New settings added in TASK_083:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `show_splash_on_start` | `bool` | `true` | Show welcome splash overlay at startup |
+| `recent_done_days` | `u32` | `7` | Days to include completed tasks in `active-recent` filter |
+| `default_task_filter` | `string` | `"all"` | Startup filter mode: `"all"`, `"active"`, `"active-recent"` |
 
 ## State Management Pattern
 

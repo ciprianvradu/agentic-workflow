@@ -46,6 +46,32 @@ struct Cli {
     /// Poll interval in seconds
     #[arg(short, long)]
     poll_interval: Option<u64>,
+
+    /// Quick-start: create worktree with this description and launch AI host immediately.
+    #[arg(long = "quick", value_name = "DESCRIPTION")]
+    quick: Option<String>,
+
+    /// Resume the most recently updated active task immediately.
+    #[arg(long = "resume-latest")]
+    resume_latest: bool,
+
+    /// AI host for --quick/--resume-latest (claude/copilot/gemini/opencode/shell).
+    #[arg(long = "host", value_name = "HOST")]
+    host: Option<String>,
+}
+
+fn parse_host_arg(s: &Option<String>) -> launcher::AiHost {
+    match s.as_deref() {
+        Some("claude") => launcher::AiHost::Claude,
+        Some("copilot") => launcher::AiHost::Copilot,
+        Some("gemini") => launcher::AiHost::Gemini,
+        Some("opencode") => launcher::AiHost::OpenCode,
+        Some("shell") => launcher::AiHost::Shell,
+        _ => launcher::detect_ai_hosts()
+            .into_iter()
+            .next()
+            .unwrap_or(launcher::AiHost::Claude),
+    }
 }
 
 fn main() -> Result<()> {
@@ -125,6 +151,20 @@ fn main() -> Result<()> {
     app.auto_accept_default = cfg.auto_accept_default;
     app.hook_communication = cfg.hook_communication;
 
+    // Apply splash setting
+    app.show_splash = cfg.show_splash_on_start;
+
+    // Apply task filtering settings
+    app.recent_done_days = cfg.recent_done_days;
+    app.task_filter = match cfg.default_task_filter.as_str() {
+        "active" => app::TaskFilter::Active,
+        "active-recent" => app::TaskFilter::ActiveAndRecentDone,
+        _ => app::TaskFilter::All,
+    };
+    if app.task_filter != app::TaskFilter::All {
+        app.rebuild_tree();
+    }
+
     // Initialize security rules engine
     if cfg.security_enabled {
         app.rules_engine = crate::security::RulesEngine::from_config(
@@ -149,6 +189,69 @@ fn main() -> Result<()> {
 
     // Start hook server if enabled
     app.init_hook_server();
+
+    // Handle --resume-latest: find and launch most recent active task
+    if cli.resume_latest {
+        // Find the most recently updated active task
+        let mut best: Option<(usize, usize, String)> = None;
+        for (ri, repo) in app.repos.iter().enumerate() {
+            for (ti, task) in repo.tasks.iter().enumerate() {
+                if task.archived || task.state.is_complete() {
+                    continue;
+                }
+                let dominated = best.as_ref().is_some_and(|(_, _, best_ts)| {
+                    task.state.updated_at.as_str() <= best_ts.as_str()
+                });
+                if !dominated {
+                    best = Some((ri, ti, task.state.updated_at.clone()));
+                }
+            }
+        }
+        if let Some((ri, ti, _)) = best {
+            app.show_splash = false;
+            // Set splash cursor and launch
+            app.splash_task_cursor = 0;
+            app.splash_active_tasks = vec![(ri, ti)];
+            app.splash_launch_task();
+        }
+    }
+
+    // Handle --quick: create worktree and launch
+    if let Some(ref description) = cli.quick {
+        let host = parse_host_arg(&cli.host);
+        if !app.repos.is_empty() {
+            let repo_path = app.repos[0].path.clone();
+            match worktree::create_worktree(&repo_path, description, host, true) {
+                Ok(result) => {
+                    app.show_splash = false;
+                    let task_id = result.task_id.clone();
+                    let shell_cmd = match host {
+                        launcher::AiHost::Shell => String::new(),
+                        launcher::AiHost::Copilot | launcher::AiHost::OpenCode => {
+                            host.command().to_string()
+                        }
+                        _ => format!("{} \"/crew resume {}\"", host.command(), task_id),
+                    };
+                    let work_dir = result.worktree_abs.clone();
+                    let color_idx = Some(result.color_scheme_index);
+                    if shell_cmd.is_empty() {
+                        app.spawn_terminal(&task_id, host.label(), "bash", &[], &work_dir, color_idx);
+                    } else {
+                        app.spawn_terminal(
+                            &task_id, host.label(), "bash",
+                            &["-lc".to_string(), shell_cmd], &work_dir, color_idx,
+                        );
+                    }
+                    app.active_view = app::ActiveView::Terminals;
+                    app.refresh();
+                }
+                Err(e) => {
+                    // Print error but continue to TUI
+                    eprintln!("Quick-start failed: {}", e);
+                }
+            }
+        }
+    }
 
     // Main loop
     let result = run_app(&mut terminal, &mut app);
@@ -331,6 +434,75 @@ fn run_app(
                         }
                         _ => {
                             app.quit_confirm = false;
+                        }
+                    }
+                }
+                // Priority 0.1: Splash screen — actionable quick-start
+                else if app.show_splash {
+                    match key.code {
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            if !app.splash_active_tasks.is_empty() && app.splash_task_cursor > 0 {
+                                app.splash_task_cursor -= 1;
+                            }
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            if !app.splash_active_tasks.is_empty() {
+                                let max = app.splash_active_tasks.len().saturating_sub(1);
+                                if app.splash_task_cursor < max {
+                                    app.splash_task_cursor += 1;
+                                }
+                            }
+                        }
+                        KeyCode::Enter => {
+                            // Resume the highlighted task
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
+                            app.splash_launch_task();
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') => {
+                            // New task — open create popup for first repo
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
+                            if !app.repos.is_empty() {
+                                app.open_create_popup_for_repo(0);
+                            }
+                        }
+                        KeyCode::F(2) => {
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
+                            app.open_launch_popup();
+                        }
+                        KeyCode::F(4) => {
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
+                            // Open create popup for first repo
+                            if !app.repos.is_empty() {
+                                app.open_create_popup_for_repo(0);
+                            }
+                        }
+                        KeyCode::F(3) => {
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
+                            app.open_search();
+                        }
+                        KeyCode::F(10) => {
+                            app.should_quit = true;
+                        }
+                        KeyCode::Esc => {
+                            // Dismiss to full dashboard
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
+                        }
+                        KeyCode::PageUp => {
+                            app.splash_scroll = app.splash_scroll.saturating_sub(10);
+                        }
+                        KeyCode::PageDown => {
+                            app.splash_scroll = app.splash_scroll.saturating_add(10);
+                        }
+                        _ => {
+                            // Any other key dismisses the splash
+                            app.show_splash = false;
+                            app.splash_scroll = 0;
                         }
                     }
                 }
@@ -563,6 +735,21 @@ fn run_app(
                                 // Other Shift keys: forward to PTY
                                 let bytes =
                                     terminal::widget::key_to_bytes(key.code, key.modifiers);
+                                if !bytes.is_empty() {
+                                    app.terminal_send_input(&bytes);
+                                }
+                            }
+                        }
+                    } else if key.modifiers.contains(KeyModifiers::ALT) {
+                        // Alt+Arrow keys: tile navigation (intercept before PTY forwarding)
+                        match key.code {
+                            KeyCode::Left  => app.terminal_tile_focus_left(),
+                            KeyCode::Right => app.terminal_tile_focus_right(),
+                            KeyCode::Up    => app.terminal_tile_focus_up(),
+                            KeyCode::Down  => app.terminal_tile_focus_down(),
+                            _ => {
+                                // Forward other Alt+key combinations to PTY
+                                let bytes = terminal::widget::key_to_bytes(key.code, key.modifiers);
                                 if !bytes.is_empty() {
                                     app.terminal_send_input(&bytes);
                                 }
@@ -847,10 +1034,16 @@ fn run_app(
                             }
                         }
 
-                        // Refresh
-                        (_, KeyCode::F(5)) => app.refresh(),
+                        // F5: context-sensitive — Terminals=Prev terminal, others=Refresh
+                        (_, KeyCode::F(5)) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_focus_prev_running();
+                            } else {
+                                app.refresh();
+                            }
+                        }
 
-                        // F6: context-sensitive — Tasks=Docs (or Open if in DocList), Terminals=Dismiss, others=Cleanup worktrees
+                        // F6: context-sensitive — Tasks=Docs, Terminals=Next terminal, others=Cleanup
                         (_, KeyCode::F(6)) => {
                             match app.active_view {
                                 ActiveView::Tasks => {
@@ -860,14 +1053,7 @@ fn run_app(
                                     }
                                 }
                                 ActiveView::Terminals => {
-                                    let is_exited = app
-                                        .terminal_manager
-                                        .as_ref()
-                                        .and_then(|m| m.focused_terminal())
-                                        .is_some_and(|t| matches!(t.status, terminal::TerminalStatus::Exited(_)));
-                                    if is_exited {
-                                        app.terminal_dismiss_focused();
-                                    }
+                                    app.terminal_focus_next_running();
                                 }
                                 _ => app.open_cleanup_popup(),
                             }
@@ -910,6 +1096,28 @@ fn run_app(
                                 app.tree_toggle();
                             }
                         }
+                        // Alt+Arrow: tile navigation in Terminals view (must come before plain arrows)
+                        (KeyModifiers::ALT, KeyCode::Left) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_tile_focus_left();
+                            }
+                        }
+                        (KeyModifiers::ALT, KeyCode::Right) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_tile_focus_right();
+                            }
+                        }
+                        (KeyModifiers::ALT, KeyCode::Up) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_tile_focus_up();
+                            }
+                        }
+                        (KeyModifiers::ALT, KeyCode::Down) => {
+                            if app.active_view == ActiveView::Terminals {
+                                app.terminal_tile_focus_down();
+                            }
+                        }
+
                         (_, KeyCode::Right) => {
                             if app.active_view == ActiveView::Terminals {
                                 app.terminal_layout = app.terminal_layout.next();
@@ -1000,6 +1208,15 @@ fn run_app(
                         (_, KeyCode::Char('d')) => {
                             if app.active_view == ActiveView::Tasks {
                                 app.open_single_task_cleanup();
+                            }
+                        }
+
+                        // f: cycle task filter (Tasks view, left pane focused)
+                        (_, KeyCode::Char('f')) => {
+                            if app.active_view == ActiveView::Tasks
+                                && app.focus_pane == FocusPane::Left
+                            {
+                                app.cycle_task_filter();
                             }
                         }
 

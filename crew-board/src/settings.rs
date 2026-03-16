@@ -138,6 +138,22 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub capture_permissions: bool,
 
+    // ── Welcome Splash ──────────────────────────────────────────────────
+
+    /// Show welcome splash screen on startup (default: true).
+    #[serde(default = "default_true")]
+    pub show_splash_on_start: bool,
+
+    // ── Task Filtering ──────────────────────────────────────────────────
+
+    /// Days to include completed tasks in "Active+Recent" filter (default: 7).
+    #[serde(default = "default_recent_done_days")]
+    pub recent_done_days: u32,
+
+    /// Default filter on startup: "all", "active", "active-recent" (default: "all").
+    #[serde(default = "default_task_filter_str")]
+    pub default_task_filter: String,
+
     // ── Orchestration ─────────────────────────────────────────────────
 
     /// Orchestration mode: "manual" (default), "semi-auto", or "full-auto".
@@ -189,6 +205,9 @@ impl Default for Settings {
             capture_prompts: false,
             capture_permissions: true,
             orchestration_mode: String::new(),
+            show_splash_on_start: true,
+            recent_done_days: 7,
+            default_task_filter: "all".to_string(),
             max_concurrent: 5,
             cost_limit: 50.0,
             max_retries: 5,
@@ -242,6 +261,14 @@ fn default_cost_limit() -> f64 {
 
 fn default_max_retries() -> u32 {
     5
+}
+
+fn default_recent_done_days() -> u32 {
+    7
+}
+
+fn default_task_filter_str() -> String {
+    "all".to_string()
 }
 
 impl Settings {

@@ -42,7 +42,8 @@ agentic-workflow/
 │   ├── api-guardian.md         # Optional: API contract protection
 │   └── accessibility-reviewer.md # Optional: a11y review
 ├── commands/                   # Slash-command definitions
-│   ├── crew.md                 # Main /crew command (orchestrator)
+│   ├── crew.md                 # Main /crew command (orchestrator). Supports --no-resume flag.
+│   ├── crew-quick.md           # /crew-quick command (one-shot: init + worktree + launch)
 │   ├── crew-config.md          # /crew-config command
 │   ├── crew-learn.md           # /crew-learn command (standalone TW from git changes)
 │   ├── crew-resume.md          # /crew-resume command
@@ -163,10 +164,13 @@ Reference config with all settings and inline docs: `config/workflow-config.yaml
 Parallel workflows run in isolated git worktrees:
 
 - `/crew-worktree "task description"` creates a worktree, branches from current branch
+- `/crew-quick "task description"` creates a worktree AND launches the host in one step (faster alternative to `/crew-worktree` + wait + `/crew resume`)
 - Each worktree gets a unique color scheme for visual distinction
 - `.tasks/` is symlinked back to the main repo
 - Terminal auto-launch supports tmux (new window), Windows Terminal (new tab/window), macOS (new window)
 - `terminal_launch_mode` config controls window vs tab behavior
+
+**`--no-resume` flag for `/crew`:** When called from the project root, `/crew` auto-detects any active task and routes to resume mode. Pass `--no-resume` to skip this detection and always start a fresh task: `/crew "Fix bug" --no-resume`.
 
 ## MCP Server
 
@@ -213,7 +217,7 @@ Agent prompts are platform-agnostic markdown. Platform differences are handled b
 - **build-agents.py** — Generates platform-specific agent and command files with correct frontmatter, tool restrictions, output paths, and template placeholder substitution (`{__platform__}`, `{__platform_dir__}`, `{__scripts_dir__}`). Routes global installs to platform-specific directories (`~/.copilot/agents/`, `~/.config/opencode/`, etc.)
 
 Commands differ by platform:
-- Claude: `/crew "task"`, `/crew-worktree "task"`
+- Claude: `/crew "task"`, `/crew-worktree "task"`, `/crew-quick "task"`
 - OpenCode: `/crew "task"`, `/crew-worktree "task"` (uses `$ARGUMENTS` instead of `$ARGS`)
 - Copilot: `@crew "task"`, `@crew-worktree "task"`
 - Gemini: `@crew-orchestrator "task"`, `@crew-worktree "task"`

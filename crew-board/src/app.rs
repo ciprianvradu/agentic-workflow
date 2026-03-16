@@ -347,6 +347,14 @@ pub struct App {
     pub quit_confirm: bool,
     pub show_help: bool,
     pub help_scroll: u16,
+    /// Whether the welcome splash screen is visible.
+    pub show_splash: bool,
+    /// Scroll offset for the splash popup content.
+    pub splash_scroll: u16,
+    /// Index of the highlighted task in the splash screen task list.
+    pub splash_task_cursor: usize,
+    /// Snapshot of active tasks for splash: (repo_index, task_index) sorted by updated_at desc.
+    pub splash_active_tasks: Vec<(usize, usize)>,
     pub last_refresh: std::time::Instant,
     pub detail_scroll: u16,
     /// Max scroll offset computed during rendering (clamping target).
@@ -693,6 +701,8 @@ impl App {
             expanded_repos: expanded,
             tree_rows: Vec::new(),
             tree_cursor: 0,
+            task_filter: TaskFilter::All,
+            recent_done_days: 7,
             selected_issue: 0,
             active_view: ActiveView::Tasks,
             focus_pane: FocusPane::Left,
@@ -700,6 +710,10 @@ impl App {
             quit_confirm: false,
             show_help: false,
             help_scroll: 0,
+            show_splash: true,
+            splash_scroll: 0,
+            splash_task_cursor: 0,
+            splash_active_tasks: Vec::new(),
             last_refresh: std::time::Instant::now(),
             detail_scroll: 0,
             detail_scroll_max: Cell::new(0),
@@ -755,6 +769,7 @@ impl App {
             stats_popup: None,
         };
         app.rebuild_tree();
+        app.build_splash_task_list();
         app.ensure_artifacts();
         app
     }
@@ -1035,14 +1050,184 @@ impl App {
         }
     }
 
+    /// Returns true if the given task should be shown under the current filter.
+    pub fn task_passes_filter(&self, task: &crate::data::task::LoadedTask) -> bool {
+        match self.task_filter {
+            TaskFilter::All => true,
+            TaskFilter::Active => !task.archived && !task.state.is_complete(),
+            TaskFilter::ActiveAndRecentDone => {
+                if !task.archived && !task.state.is_complete() {
+                    return true;
+                }
+                // Include completed (non-archived) tasks updated within recent_done_days
+                if task.state.is_complete() && !task.archived && !task.state.updated_at.is_empty() {
+                    if let Ok(updated) = chrono::DateTime::parse_from_rfc3339(&task.state.updated_at) {
+                        let cutoff = chrono::Utc::now()
+                            - chrono::Duration::days(self.recent_done_days as i64);
+                        return updated >= cutoff;
+                    }
+                }
+                false
+            }
+        }
+    }
+
+    /// Cycle to the next task filter mode and rebuild the tree.
+    pub fn cycle_task_filter(&mut self) {
+        self.task_filter = match self.task_filter {
+            TaskFilter::All => TaskFilter::Active,
+            TaskFilter::Active => TaskFilter::ActiveAndRecentDone,
+            TaskFilter::ActiveAndRecentDone => TaskFilter::All,
+        };
+        self.rebuild_tree();
+    }
+
+    // ── Split Pane Spatial Navigation ────────────────────────────────────
+
+    /// Move focus to the tile to the right of the current one (Tiled2/Tiled4 only).
+    pub fn terminal_tile_focus_right(&mut self) {
+        let mgr = match &mut self.terminal_manager {
+            Some(m) => m,
+            None => return,
+        };
+        let max = match self.terminal_layout {
+            TerminalLayout::Focused => return,
+            TerminalLayout::Tiled2 => 2,
+            TerminalLayout::Tiled4 => 4,
+            TerminalLayout::Stacked => return,
+        };
+        let indices = crate::ui::terminal_view::terminal_indices_for_layout(mgr, max);
+        if indices.is_empty() { return; }
+        let pos = match indices.iter().position(|&i| i == mgr.focused) {
+            Some(p) => p,
+            None => return,
+        };
+        match self.terminal_layout {
+            TerminalLayout::Tiled2 => {
+                if pos + 1 < indices.len() {
+                    mgr.focused = indices[pos + 1];
+                }
+            }
+            TerminalLayout::Tiled4 => {
+                // 2x2: within row, right = pos + 1 (only if in left column)
+                if pos % 2 == 0 && pos + 1 < indices.len() {
+                    mgr.focused = indices[pos + 1];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Move focus to the tile to the left of the current one (Tiled2/Tiled4 only).
+    pub fn terminal_tile_focus_left(&mut self) {
+        let mgr = match &mut self.terminal_manager {
+            Some(m) => m,
+            None => return,
+        };
+        let max = match self.terminal_layout {
+            TerminalLayout::Focused => return,
+            TerminalLayout::Tiled2 => 2,
+            TerminalLayout::Tiled4 => 4,
+            TerminalLayout::Stacked => return,
+        };
+        let indices = crate::ui::terminal_view::terminal_indices_for_layout(mgr, max);
+        if indices.is_empty() { return; }
+        let pos = match indices.iter().position(|&i| i == mgr.focused) {
+            Some(p) => p,
+            None => return,
+        };
+        match self.terminal_layout {
+            TerminalLayout::Tiled2 => {
+                if pos > 0 {
+                    mgr.focused = indices[pos - 1];
+                }
+            }
+            TerminalLayout::Tiled4 => {
+                if pos % 2 == 1 {
+                    mgr.focused = indices[pos - 1];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Move focus to the tile below the current one (Tiled4/Stacked only).
+    pub fn terminal_tile_focus_down(&mut self) {
+        let mgr = match &mut self.terminal_manager {
+            Some(m) => m,
+            None => return,
+        };
+        let max = match self.terminal_layout {
+            TerminalLayout::Focused => return,
+            TerminalLayout::Tiled2 => return,
+            TerminalLayout::Tiled4 => 4,
+            TerminalLayout::Stacked => 5,
+        };
+        let indices = crate::ui::terminal_view::terminal_indices_for_layout(mgr, max);
+        if indices.is_empty() { return; }
+        let pos = match indices.iter().position(|&i| i == mgr.focused) {
+            Some(p) => p,
+            None => return,
+        };
+        match self.terminal_layout {
+            TerminalLayout::Tiled4 => {
+                // 2x2: down = same column, next row (pos + 2)
+                if pos + 2 < indices.len() {
+                    mgr.focused = indices[pos + 2];
+                }
+            }
+            TerminalLayout::Stacked => {
+                if pos + 1 < indices.len() {
+                    mgr.focused = indices[pos + 1];
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Move focus to the tile above the current one (Tiled4/Stacked only).
+    pub fn terminal_tile_focus_up(&mut self) {
+        let mgr = match &mut self.terminal_manager {
+            Some(m) => m,
+            None => return,
+        };
+        let max = match self.terminal_layout {
+            TerminalLayout::Focused => return,
+            TerminalLayout::Tiled2 => return,
+            TerminalLayout::Tiled4 => 4,
+            TerminalLayout::Stacked => 5,
+        };
+        let indices = crate::ui::terminal_view::terminal_indices_for_layout(mgr, max);
+        if indices.is_empty() { return; }
+        let pos = match indices.iter().position(|&i| i == mgr.focused) {
+            Some(p) => p,
+            None => return,
+        };
+        match self.terminal_layout {
+            TerminalLayout::Tiled4 => {
+                if pos >= 2 {
+                    mgr.focused = indices[pos - 2];
+                }
+            }
+            TerminalLayout::Stacked => {
+                if pos > 0 {
+                    mgr.focused = indices[pos - 1];
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Rebuild the flattened tree from repos + expanded state.
     pub fn rebuild_tree(&mut self) {
         self.tree_rows.clear();
         for (ri, repo) in self.repos.iter().enumerate() {
             self.tree_rows.push(TreeRow::Repo(ri));
             if self.expanded_repos.contains(&ri) {
-                for ti in 0..repo.tasks.len() {
-                    self.tree_rows.push(TreeRow::Task(ri, ti));
+                for (ti, task) in repo.tasks.iter().enumerate() {
+                    if self.task_passes_filter(task) {
+                        self.tree_rows.push(TreeRow::Task(ri, ti));
+                    }
                 }
             }
         }
@@ -1757,6 +1942,127 @@ impl App {
         }
     }
 
+    /// Build the list of active tasks for the splash screen.
+    /// Populates `splash_active_tasks` with (repo_index, task_index) pairs
+    /// sorted by updated_at descending (most recent first).
+    pub fn build_splash_task_list(&mut self) {
+        let mut tasks: Vec<(usize, usize, &str)> = Vec::new();
+        for (ri, repo) in self.repos.iter().enumerate() {
+            for (ti, task) in repo.tasks.iter().enumerate() {
+                if !task.archived && !task.state.is_complete() {
+                    tasks.push((ri, ti, &task.state.updated_at));
+                }
+            }
+        }
+        tasks.sort_by(|a, b| b.2.cmp(a.2));
+        self.splash_active_tasks = tasks.into_iter().map(|(ri, ti, _)| (ri, ti)).collect();
+        // Clamp cursor
+        if !self.splash_active_tasks.is_empty() {
+            self.splash_task_cursor = self.splash_task_cursor.min(self.splash_active_tasks.len() - 1);
+        } else {
+            self.splash_task_cursor = 0;
+        }
+    }
+
+    /// Launch the task highlighted by the splash cursor in an embedded terminal.
+    /// Returns true if a terminal was spawned.
+    pub fn splash_launch_task(&mut self) -> bool {
+        if self.splash_active_tasks.is_empty() {
+            return false;
+        }
+        let (ri, ti) = self.splash_active_tasks[self.splash_task_cursor];
+        let repo = match self.repos.get(ri) {
+            Some(r) => r,
+            None => return false,
+        };
+        let loaded = match repo.tasks.get(ti) {
+            Some(t) => t,
+            None => return false,
+        };
+        if loaded.archived {
+            return false;
+        }
+        let task = &loaded.state;
+        let task_id = task.task_id.clone();
+
+        // Resolve work directory (same logic as open_launch_popup)
+        let work_dir = task
+            .worktree
+            .as_ref()
+            .and_then(|wt| {
+                if let Some(ref launch) = wt.launch {
+                    if !launch.worktree_abs_path.is_empty() {
+                        return Some(PathBuf::from(&launch.worktree_abs_path));
+                    }
+                }
+                if !wt.path.is_empty() {
+                    let p = PathBuf::from(&wt.path);
+                    if p.is_absolute() {
+                        Some(p)
+                    } else {
+                        Some(repo.path.join(&p))
+                    }
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| repo.path.clone());
+
+        let color_idx = task.worktree.as_ref().map(|wt| wt.color_scheme_index);
+
+        // Detect first AI host
+        let hosts = launcher::detect_ai_hosts();
+        let host = hosts.into_iter().next().unwrap_or(AiHost::Claude);
+
+        let shell_cmd = match host {
+            AiHost::Shell => String::new(),
+            AiHost::Copilot | AiHost::OpenCode => host.command().to_string(),
+            _ => format!("{} \"/crew resume {}\"", host.command(), task_id),
+        };
+
+        if shell_cmd.is_empty() {
+            self.spawn_terminal(&task_id, host.label(), "bash", &[], &work_dir, color_idx);
+        } else {
+            self.spawn_terminal(
+                &task_id,
+                host.label(),
+                "bash",
+                &["-lc".to_string(), shell_cmd],
+                &work_dir,
+                color_idx,
+            );
+        }
+        self.active_view = ActiveView::Terminals;
+        true
+    }
+
+    /// Open the create popup for a specific repo by index (used by splash `N` key).
+    pub fn open_create_popup_for_repo(&mut self, repo_index: usize) {
+        let repo = match self.repos.get(repo_index) {
+            Some(r) => r,
+            None => return,
+        };
+        let repo_path = repo.path.clone();
+        let repo_name = repo.name.clone();
+        let hosts = launcher::detect_ai_hosts();
+
+        self.create_popup = Some(CreateWorktreePopup {
+            step: CreateStep::InputDescription,
+            description_input: Input::default(),
+            hosts,
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            settings_cursor: 0,
+            repo_path,
+            repo_name,
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        });
+    }
+
     /// Close the launch popup.
     pub fn close_launch_popup(&mut self) {
         self.launch_popup = None;
@@ -2251,26 +2557,44 @@ impl App {
         }
 
         // Guard: task must have an active worktree
-        let _wt = match &loaded.state.worktree {
+        let wt = match &loaded.state.worktree {
             Some(wt) if wt.status == "active" => wt,
             _ => return,
         };
 
-        let task_id = &loaded.state.task_id;
+        let task = &loaded.state;
         let (repo_path, repo_name) = (repo.path.clone(), repo.name.clone());
 
-        // Get cleanup candidates for the repo and find the one matching this task
-        let candidates = cleanup::list_cleanup_candidates(&repo_path);
-        let matching: Vec<cleanup::WorktreeCandidate> = candidates
-            .into_iter()
-            .filter(|c| c.task_id == *task_id)
-            .collect();
+        // Build candidate directly from already-loaded data (instant, no disk I/O).
+        // Expensive checks (disk_size, has_unmerged) are deferred — shown as "checking..."
+        // in the popup and resolved in the background.
+        let wt_abs = wt.launch.as_ref()
+            .and_then(|l| if !l.worktree_abs_path.is_empty() { Some(l.worktree_abs_path.clone()) } else { None })
+            .or_else(|| {
+                if !wt.path.is_empty() {
+                    let p = PathBuf::from(&wt.path);
+                    let abs = if p.is_absolute() { p } else { repo_path.join(&p) };
+                    abs.canonicalize().ok().map(|p| p.to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            });
 
-        if matching.is_empty() {
-            return; // candidate not found (race condition or already cleaned)
-        }
+        let candidate = cleanup::WorktreeCandidate {
+            task_id: task.task_id.clone(),
+            description: task.description.clone(),
+            branch: wt.branch.clone(),
+            base_branch: wt.base_branch.clone(),
+            worktree_path: wt.path.clone(),
+            worktree_abs: wt_abs,
+            status: wt.status.clone(),
+            color_scheme_index: wt.color_scheme_index,
+            is_complete: task.is_complete(),
+            has_unmerged: false, // resolved later if needed
+            disk_size: None,    // resolved later if needed
+            phase: task.phase.clone(),
+        };
 
-        // Pre-select the single candidate and skip to Settings step
         let mut selected = HashSet::new();
         selected.insert(0);
 
@@ -2278,7 +2602,7 @@ impl App {
             step: CleanupStep::Settings,
             repo_path,
             repo_name,
-            candidates: matching,
+            candidates: vec![candidate],
             selected,
             cursor: 0,
             remove_branch: false,
@@ -3489,6 +3813,7 @@ impl App {
     }
 
     /// Finish the selection and copy text to clipboard via OSC 52.
+    /// Single click (no drag) focuses the clicked terminal tile.
     pub fn mouse_end_selection(&mut self) {
         if let Some(sel) = &mut self.text_selection {
             if !sel.active {
@@ -3499,8 +3824,14 @@ impl App {
             if sel.start_col != sel.end_col || sel.start_row != sel.end_row {
                 self.copy_selection_to_clipboard();
             } else {
-                // Single click — clear selection
+                // Single click — focus the terminal that was clicked
+                let term_idx = sel.terminal_idx;
                 self.text_selection = None;
+                if let Some(mgr) = &mut self.terminal_manager {
+                    if term_idx < mgr.terminals.len() {
+                        mgr.focused = term_idx;
+                    }
+                }
             }
         }
     }

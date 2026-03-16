@@ -550,7 +550,17 @@ fn context_hints(app: &App) -> String {
         ActiveView::ActivityFeed => "t:crew e:event f:tool a:auto-scroll \u{2191}\u{2193} scroll".to_string(),
         ActiveView::Terminals => match app.terminal_input_mode {
             TerminalInputMode::Normal => {
-                "\u{2191}\u{2193} nav  Enter/F12 focus  d dismiss  D all  [ scroll  F7 attn".to_string()
+                // Show Alt+Arrow hint when a tiled layout is active
+                let tile_hint = match app.terminal_layout {
+                    crate::app::TerminalLayout::Tiled2
+                    | crate::app::TerminalLayout::Tiled4
+                    | crate::app::TerminalLayout::Stacked => "  Alt+\u{2190}\u{2191}\u{2192}\u{2193}:tiles",
+                    crate::app::TerminalLayout::Focused => "",
+                };
+                format!(
+                    "\u{2191}\u{2193} nav  Enter/F12 focus  d dismiss  D all  [ scroll  F7 attn{}",
+                    tile_hint
+                )
             }
             TerminalInputMode::TerminalFocused | TerminalInputMode::PrefixPending => {
                 format!(

@@ -628,6 +628,9 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
                 valid_profiles = ", ".join(PERMISSION_PROFILES.keys())
                 errors.append(f"Invalid --profile '{profile_val}'. Must be: {valid_profiles}")
             i += 2
+        elif token == "--no-resume":
+            options["no_resume"] = True
+            i += 1
         elif token == "--no-checkpoints":
             options["no_checkpoints"] = True
             i += 1
@@ -2208,6 +2211,93 @@ def crew_format_completion(
 
 
 # ============================================================================
+# Task Health Check (WS4)
+# ============================================================================
+
+def _check_task_health(task_dir: Path, state: dict) -> dict[str, Any]:
+    """Check task health: missing outputs and stale phase detection.
+
+    Mirrors the Rust TaskHealth logic in data/task.rs so Python callers
+    (crew_get_resume_state, crew_orchestrator health-check) can surface the
+    same warnings.
+
+    Args:
+        task_dir: Path to the task directory
+        state: Loaded state dict
+
+    Returns:
+        {
+          "status": "healthy" | "stale_phase" | "missing_outputs",
+          "stale_phase": {...} or None,
+          "missing_outputs": [...] or [],
+          "recovery_suggestions": [...]
+        }
+    """
+    from datetime import datetime, timezone
+
+    phases_completed = [p.lower().replace("-", "_") for p in state.get("phases_completed", [])]
+    current_phase = state.get("phase")
+    updated_at = state.get("updated_at")
+
+    missing_outputs: list[dict] = []
+    recovery_suggestions: list[str] = []
+
+    # Check each completed phase has its output file
+    for phase in phases_completed:
+        expected_file = task_dir / f"{phase}.md"
+        if not expected_file.exists():
+            missing_outputs.append({
+                "phase": phase,
+                "expected": f"{phase}.md",
+                "exists": False,
+            })
+            recovery_suggestions.append(f"Re-run {phase} phase (output file missing)")
+
+    # Check if current phase is stale
+    stale_phase_info = None
+    if current_phase and current_phase not in phases_completed:
+        output_file = task_dir / f"{current_phase}.md"
+        has_output = output_file.exists()
+        minutes_stale = 0
+        if updated_at:
+            try:
+                # Parse ISO timestamp, handle both Z and +00:00 suffixes
+                ts_str = updated_at.replace("Z", "+00:00")
+                updated_dt = datetime.fromisoformat(ts_str)
+                now = datetime.now(timezone.utc)
+                if updated_dt.tzinfo is None:
+                    updated_dt = updated_dt.replace(tzinfo=timezone.utc)
+                minutes_stale = int((now - updated_dt).total_seconds() / 60)
+            except (ValueError, AttributeError):
+                pass
+
+        if not has_output and minutes_stale > 30:
+            stale_phase_info = {
+                "phase": current_phase,
+                "started_at": updated_at,
+                "minutes_stale": minutes_stale,
+                "has_output": has_output,
+            }
+            recovery_suggestions.append(
+                f"Resume from {current_phase} phase (stale {minutes_stale} min, no output)"
+            )
+
+    if stale_phase_info:
+        status = "stale_phase"
+    elif missing_outputs:
+        status = "missing_outputs"
+    else:
+        status = "healthy"
+
+    return {
+        "status": status,
+        "stale_phase": stale_phase_info,
+        "missing_outputs": missing_outputs,
+        "recovery_suggestions": recovery_suggestions,
+    }
+
+
+# ============================================================================
 # Tool 9: crew_get_resume_state
 # ============================================================================
 
@@ -2301,6 +2391,24 @@ def crew_get_resume_state(
     if resume_file.exists():
         context_files.insert(0, str(resume_file))
 
+    # WS4.4: Health check — detect missing outputs and stale phase
+    health = _check_task_health(task_dir, state)
+    recovery_needed = None
+    stale_phase_warning = None
+
+    if health["status"] == "missing_outputs":
+        recovery_needed = {
+            "issues": health["missing_outputs"],
+            "suggestions": health["recovery_suggestions"],
+        }
+        display_summary += "WARNING: Missing output files for completed phases — recovery may be needed.\n"
+    if health["status"] == "stale_phase" and health["stale_phase"]:
+        stale_phase_warning = health["stale_phase"]
+        sp = health["stale_phase"]
+        display_summary += (
+            f"WARNING: Phase '{sp['phase']}' has been active for {sp['minutes_stale']} min with no output.\n"
+        )
+
     return {
         "task_id": task_id,
         "resume_point": resume_point,
@@ -2314,7 +2422,9 @@ def crew_get_resume_state(
         },
         "context_files": context_files,
         "display_summary": display_summary,
-        "has_worktree": state.get("worktree", {}).get("status") == "active" if state.get("worktree") else False
+        "has_worktree": state.get("worktree", {}).get("status") == "active" if state.get("worktree") else False,
+        "recovery_needed": recovery_needed,
+        "stale_phase_warning": stale_phase_warning,
     }
 
 
