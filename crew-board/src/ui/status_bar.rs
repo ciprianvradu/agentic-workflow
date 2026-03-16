@@ -88,6 +88,28 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
         (elapsed_ms / 250).is_multiple_of(2)
     });
 
+    // Active work badge: prominently colored, always visible
+    let active_badge = if active_tasks > 0 {
+        format!(" [{} active] ", active_tasks)
+    } else {
+        " [no active work] ".to_string()
+    };
+    let active_badge_style = if active_tasks > 0 {
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    // Filter indicator (only shown when not All)
+    let filter_badge = match app.task_filter {
+        crate::app::TaskFilter::All => String::new(),
+        crate::app::TaskFilter::Active => " filter:Active ".to_string(),
+        crate::app::TaskFilter::ActiveAndRecentDone => " filter:Active+Recent ".to_string(),
+    };
+
     let line = Line::from(vec![
         Span::styled(
             format!(" {} [{}/6] ", view_label, view_num),
@@ -107,6 +129,11 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             },
         ),
+        Span::styled(active_badge, active_badge_style),
+        Span::styled(
+            filter_badge,
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::styled(
             security_badge,
             Style::default().fg(Color::Red),
@@ -115,10 +142,9 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled(hints, styles::hint_style()),
         Span::styled(
             format!(
-                "  {} repos {} tasks({} active) {} issues({} open) ({}s)",
+                "  {} repos {} tasks {} issues({} open) ({}s)",
                 app.repos.len(),
                 total_tasks,
-                active_tasks,
                 total_issues,
                 open_issues,
                 elapsed,
@@ -510,12 +536,12 @@ fn context_hints(app: &App) -> String {
 
     match app.active_view {
         ActiveView::Tasks => match app.focus_pane {
-            FocusPane::Left => "\u{2191}\u{2193} nav  Enter expand  Tab\u{2192}pane  d docs  h hist".to_string(),
+            FocusPane::Left => "\u{2191}\u{2193} nav  Enter expand  Tab\u{2192}pane  F6 docs  F7 hist  d clean".to_string(),
             FocusPane::Right => match &app.detail_mode {
-                DetailMode::Overview => "PgUp/Dn scroll  d docs  h hist  Tab\u{2190}pane".to_string(),
-                DetailMode::DocList { .. } => "\u{2191}\u{2193} select  Enter read  Esc back".to_string(),
-                DetailMode::DocReader { .. } => "PgUp/Dn scroll  Esc back".to_string(),
-                DetailMode::History => "PgUp/Dn scroll  Esc back".to_string(),
+                DetailMode::Overview => "PgUp/Dn scroll  F6 docs  F7 hist  d clean  Tab\u{2190}pane".to_string(),
+                DetailMode::DocList { .. } => "\u{2191}\u{2193} select  Enter read  d clean  Esc back".to_string(),
+                DetailMode::DocReader { .. } => "PgUp/Dn scroll  d clean  Esc back".to_string(),
+                DetailMode::History => "PgUp/Dn scroll  d clean  Esc back".to_string(),
             },
         },
         ActiveView::BeadsIssues => "\u{2191}\u{2193} nav  Tab pane".to_string(),

@@ -667,6 +667,12 @@ fn run_app(
                             }
                             KeyCode::Tab => app.toggle_focus(),
                             KeyCode::Char('q') | KeyCode::F(10) => app.quit_confirm = true,
+                            // Delete/d: clean up worktree for current task (Tasks view only)
+                            KeyCode::Delete | KeyCode::Char('d') => {
+                                if app.active_view == ActiveView::Tasks {
+                                    app.open_single_task_cleanup();
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -990,9 +996,18 @@ fn run_app(
                             }
                         }
 
-                        // Delete: dismiss exited terminal in Terminals view
+                        // d: clean up worktree for current task (Tasks view only)
+                        (_, KeyCode::Char('d')) => {
+                            if app.active_view == ActiveView::Tasks {
+                                app.open_single_task_cleanup();
+                            }
+                        }
+
+                        // Delete: Tasks view=cleanup worktree, Terminals view=dismiss exited
                         (_, KeyCode::Delete) => {
-                            if app.active_view == ActiveView::Terminals {
+                            if app.active_view == ActiveView::Tasks {
+                                app.open_single_task_cleanup();
+                            } else if app.active_view == ActiveView::Terminals {
                                 let is_exited = app
                                     .terminal_manager
                                     .as_ref()

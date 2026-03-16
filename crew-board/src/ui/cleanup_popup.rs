@@ -19,7 +19,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     let area = centered_rect(65, 70, frame.area());
     frame.render_widget(Clear, area);
 
-    let title = format!(" Cleanup Worktrees: {} ", popup.repo_name);
+    let title = if popup.candidates.len() == 1 {
+        format!(" Cleanup {} Worktree ", popup.candidates[0].task_id)
+    } else {
+        format!(" Cleanup Worktrees: {} ", popup.repo_name)
+    };
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)

@@ -243,6 +243,12 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
                 Span::raw(launch.terminal_env.as_str()),
             ]));
         }
+        if wt.status == "active" {
+            lines.push(Line::from(Span::styled(
+                "                          d/Del: clean up",
+                styles::hint_style(),
+            )));
+        }
         lines.push(Line::from(""));
     }
 

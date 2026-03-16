@@ -76,6 +76,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Line::from(""),
         key_line("F6", "Browse task documents (Tasks view)", key_style),
         key_line("F7", "View task history (Tasks view)", key_style),
+        key_line("d / Delete", "Clean up worktree (Tasks view, active worktree)", key_style),
         key_line("Esc", "Back (close popup / exit detail view)", key_style),
         Line::from(""),
         Line::from(Span::styled("Terminal Modes (View 5)", bold)),

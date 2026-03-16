@@ -44,6 +44,18 @@ fn send_desktop_notification(title: &str, body: &str) {
     });
 }
 
+/// Task list filter mode.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TaskFilter {
+    /// Show all tasks (default behavior).
+    #[default]
+    All,
+    /// Show only active tasks (not archived and not complete).
+    Active,
+    /// Show active tasks plus tasks completed within recent_done_days.
+    ActiveAndRecentDone,
+}
+
 /// Which view/tab is active.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ActiveView {
@@ -319,6 +331,10 @@ pub struct App {
     pub expanded_repos: HashSet<usize>,
     pub tree_rows: Vec<TreeRow>,
     pub tree_cursor: usize,
+    /// Current task filter mode (cycles with 'f' key).
+    pub task_filter: TaskFilter,
+    /// Number of days to include completed tasks in ActiveAndRecentDone filter.
+    pub recent_done_days: u32,
 
     // Issue navigation (for beads view)
     pub selected_issue: usize,
@@ -2201,6 +2217,68 @@ impl App {
             repo_path,
             repo_name,
             candidates,
+            selected,
+            cursor: 0,
+            remove_branch: false,
+            keep_on_disk: false,
+            settings_cursor: 0,
+            preview: Vec::new(),
+            handle: None,
+            started_at: None,
+            results: None,
+            scroll: 0,
+        });
+    }
+
+    /// Open the cleanup popup for a single task's worktree (Delete/d key from Tasks view).
+    /// Skips the multi-select step and goes directly to Settings.
+    pub fn open_single_task_cleanup(&mut self) {
+        // Must be on a task row (not a repo row)
+        let (ri, ti) = match self.current_tree_row() {
+            Some(TreeRow::Task(ri, ti)) => (*ri, *ti),
+            _ => return,
+        };
+
+        let repo = &self.repos[ri];
+        let loaded = match repo.tasks.get(ti) {
+            Some(lt) => lt,
+            None => return,
+        };
+
+        // Guard: task must not be archived
+        if loaded.archived {
+            return;
+        }
+
+        // Guard: task must have an active worktree
+        let _wt = match &loaded.state.worktree {
+            Some(wt) if wt.status == "active" => wt,
+            _ => return,
+        };
+
+        let task_id = &loaded.state.task_id;
+        let (repo_path, repo_name) = (repo.path.clone(), repo.name.clone());
+
+        // Get cleanup candidates for the repo and find the one matching this task
+        let candidates = cleanup::list_cleanup_candidates(&repo_path);
+        let matching: Vec<cleanup::WorktreeCandidate> = candidates
+            .into_iter()
+            .filter(|c| c.task_id == *task_id)
+            .collect();
+
+        if matching.is_empty() {
+            return; // candidate not found (race condition or already cleaned)
+        }
+
+        // Pre-select the single candidate and skip to Settings step
+        let mut selected = HashSet::new();
+        selected.insert(0);
+
+        self.cleanup_popup = Some(CleanupPopup {
+            step: CleanupStep::Settings,
+            repo_path,
+            repo_name,
+            candidates: matching,
             selected,
             cursor: 0,
             remove_branch: false,
