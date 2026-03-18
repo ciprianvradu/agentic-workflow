@@ -137,11 +137,12 @@ fn scan_for_attention(parser: &Arc<Mutex<vt100::Parser>>) -> Option<AttentionKin
     // Waiting-for-input detection: Claude Code shows ❯ (U+276F) as input prompt.
     // The last non-empty line being just the prompt char (with optional leading
     // whitespace or box-drawing decoration) means the agent is done and waiting.
+    // NOTE: Only match standalone prompt characters — do NOT match lines that
+    // merely end with ">" as that's extremely common in terminal output (HTML,
+    // redirections, etc.) and causes rapid state flipping + excessive redraws.
     if let Some(last_line) = recent_lines.last().filter(|l| !l.is_empty()) {
         let trimmed = last_line.trim();
-        // Match standalone ❯ prompt, or lines ending with ❯ (Claude Code formats
-        // the prompt line with optional ANSI decoration that vt100 strips)
-        if trimmed == "\u{276f}" || trimmed == ">" || trimmed.ends_with("\u{276f}") {
+        if trimmed == "\u{276f}" || trimmed.ends_with("\u{276f}") {
             return Some(AttentionKind::WaitingForInput);
         }
     }

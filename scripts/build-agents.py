@@ -202,6 +202,7 @@ BUNDLED_SCRIPTS = [
     "check-bash-safety.py",
     "validate-transition.py",
     "log-crew-interaction.py",
+    "log-crew-interaction-lite.py",
 ]
 
 

@@ -37,8 +37,20 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Fast-path: bail immediately if no .tasks/ directory exists (no crew workflow possible)
+if not os.path.isdir(os.path.join(os.getcwd(), ".tasks")):
+    sys.exit(0)
+
 sys.path.insert(0, str(Path(__file__).parent))
 from workflow_state import _resolve_tasks_dir, _detect_worktree_task_id
+
+# Add MCP server to sys.path so we can import state_tools directly
+try:
+    _mcp_server_path = Path(__file__).parent.parent / "mcp" / "agentic-workflow-server"
+    if _mcp_server_path.exists():
+        sys.path.insert(0, str(_mcp_server_path))
+except Exception:
+    pass
 
 
 # Prompts that are already logged by the orchestrator — skip to avoid duplication
@@ -225,8 +237,85 @@ def _handle_user_prompt_submit(input_data: dict, task_dir: str) -> None:
     _append_interaction(task_dir, entry)
 
 
+def _extract_session_cost(input_data: dict) -> dict | None:
+    """Parse cost information from a Stop hook payload.
+
+    Tries multiple key names since Claude may use different formats.
+    Returns None if no usable cost data is found.
+    """
+    cost_obj = (
+        input_data.get("session_cost")
+        or input_data.get("cost")
+        or input_data.get("sessionCost")
+    )
+    if not cost_obj or not isinstance(cost_obj, dict):
+        return None
+
+    cost_usd = (
+        cost_obj.get("costUsd")
+        or cost_obj.get("cost_usd")
+        or cost_obj.get("total_cost")
+        or 0.0
+    )
+    input_tokens = cost_obj.get("input_tokens", 0) or cost_obj.get("inputTokens", 0) or 0
+    output_tokens = cost_obj.get("output_tokens", 0) or cost_obj.get("outputTokens", 0) or 0
+    model = cost_obj.get("model", "") or ""
+
+    if not cost_usd and not input_tokens and not output_tokens:
+        return None
+
+    return {
+        "cost_usd": float(cost_usd),
+        "input_tokens": int(input_tokens),
+        "output_tokens": int(output_tokens),
+        "model": model,
+    }
+
+
+def _record_cost(task_dir: str, cost_data: dict, agent: str) -> None:
+    """Record cost data to state.json (via workflow_record_cost) and costs.jsonl."""
+    try:
+        task_id = Path(task_dir).name
+        model = cost_data.get("model", "opus")
+        model_lower = model.lower()
+        if "opus" in model_lower:
+            model = "opus"
+        elif "sonnet" in model_lower:
+            model = "sonnet"
+        elif "haiku" in model_lower:
+            model = "haiku"
+
+        input_tokens = cost_data["input_tokens"]
+        output_tokens = cost_data["output_tokens"]
+
+        # Record via state_tools (updates state.json cost_tracking)
+        try:
+            from agentic_workflow_server.state_tools import workflow_record_cost
+            workflow_record_cost(
+                agent=agent, model=model,
+                input_tokens=input_tokens, output_tokens=output_tokens,
+                task_id=task_id,
+            )
+        except ImportError:
+            pass
+
+        # Also append to costs.jsonl for crew-cost-report.py
+        cost_entry = {
+            "agent": agent, "model": model,
+            "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "total_cost": cost_data.get("cost_usd", 0.0),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "hook",
+        }
+        costs_path = Path(task_dir) / "costs.jsonl"
+        with open(costs_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(cost_entry) + "\n")
+    except Exception:
+        pass
+
+
 def _handle_stop(input_data: dict, task_dir: str) -> None:
-    """Log an agent message entry for Stop events."""
+    """Log an agent message entry for Stop events and record cost if available."""
     # Extract a useful summary from the stop event
     # The stop hook includes stop_hook_active and transcript_path fields
     transcript_path = input_data.get("transcript_path", "")
@@ -235,6 +324,11 @@ def _handle_stop(input_data: dict, task_dir: str) -> None:
     # Don't log if this stop was triggered by another stop hook (avoid infinite loops)
     if stop_hook_active:
         return
+
+    # Record cost if the Stop payload carries session cost data
+    cost_data = _extract_session_cost(input_data)
+    if cost_data:
+        _record_cost(task_dir, cost_data, agent="orchestrator")
 
     # Try to get a summary from the transcript
     summary = _extract_response_summary(transcript_path)
@@ -255,7 +349,11 @@ def _handle_stop(input_data: dict, task_dir: str) -> None:
 
 
 def _extract_response_summary(transcript_path: str) -> str:
-    """Extract the last assistant response from the transcript file."""
+    """Extract the last assistant response from the transcript file.
+
+    Reads only the tail of the file (last 64 KB) to avoid scanning
+    multi-MB transcripts on every Stop event.
+    """
     if not transcript_path:
         return ""
 
@@ -264,38 +362,48 @@ def _extract_response_summary(transcript_path: str) -> str:
         if not transcript_file.exists():
             return ""
 
-        # Read transcript (JSONL format) and find the last assistant message
+        TAIL_BYTES = 65536  # 64 KB — enough for several assistant messages
+
+        with open(transcript_file, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            start = max(0, size - TAIL_BYTES)
+            f.seek(start)
+            raw = f.read()
+
+        # Decode and split into lines; first line may be partial, skip it
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        if start > 0:
+            lines = lines[1:]  # drop partial first line
+
+        # Walk lines to find the last assistant message in this chunk
         last_assistant_content = ""
-        with open(transcript_file, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                if msg.get("role") != "assistant":
                     continue
-                try:
-                    msg = json.loads(line)
-                    role = msg.get("role", "")
-                    if role == "assistant":
-                        # Extract text content from assistant message
-                        content = msg.get("content", "")
-                        if isinstance(content, str) and content.strip():
-                            last_assistant_content = content.strip()
-                        elif isinstance(content, list):
-                            # Content blocks — concatenate text blocks
-                            text_parts = []
-                            for block in content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text = block.get("text", "").strip()
-                                    if text:
-                                        text_parts.append(text)
-                            if text_parts:
-                                last_assistant_content = " ".join(text_parts)
-                except (json.JSONDecodeError, TypeError):
-                    continue
+                content = msg.get("content", "")
+                if isinstance(content, str) and content.strip():
+                    last_assistant_content = content.strip()
+                elif isinstance(content, list):
+                    text_parts = [
+                        block.get("text", "").strip()
+                        for block in content
+                        if isinstance(block, dict) and block.get("type") == "text"
+                    ]
+                    joined = " ".join(t for t in text_parts if t)
+                    if joined:
+                        last_assistant_content = joined
+            except (json.JSONDecodeError, TypeError):
+                continue
 
         if not last_assistant_content:
             return ""
 
-        # Truncate to a reasonable summary length
         max_len = 500
         if len(last_assistant_content) > max_len:
             return last_assistant_content[:max_len] + "..."

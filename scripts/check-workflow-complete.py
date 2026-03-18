@@ -30,6 +30,11 @@ import os
 import sys
 from pathlib import Path
 
+# Fast-path: bail immediately if no .tasks/ directory exists (no crew workflow possible).
+# This avoids importing workflow_state and all its dependencies (~100-200ms Python cold start).
+if not os.path.isdir(os.path.join(os.getcwd(), ".tasks")):
+    sys.exit(0)
+
 sys.path.insert(0, str(Path(__file__).parent))
 from workflow_state import WorkflowState, _resolve_tasks_dir, _detect_worktree_task_id
 

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ~/.claude/scripts/log-crew-interaction.py"
+            "command": "python3 ~/.claude/scripts/log-crew-interaction-lite.py"
           }
         ]
       }
@@ -36,14 +36,6 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/scripts/check-workflow-complete.py"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/scripts/log-crew-interaction.py"
           }
         ]
       }

@@ -60,7 +60,7 @@ pub fn list_cleanup_candidates(repo_path: &Path) -> Vec<WorktreeCandidate> {
         }
         let task = &loaded.state;
         let wt = match &task.worktree {
-            Some(wt) if wt.status == "active" => wt,
+            Some(wt) if wt.status == "active" || wt.status == "done" => wt,
             _ => continue,
         };
 
@@ -315,9 +315,9 @@ fn execute_single_cleanup(
         wt.insert("status".to_string(), serde_json::Value::String(new_status.to_string()));
         wt.insert("cleaned_at".to_string(), serde_json::Value::String(chrono_now()));
     }
-    state.as_object_mut().map(|o| {
+    if let Some(o) = state.as_object_mut() {
         o.insert("updated_at".to_string(), serde_json::Value::String(chrono_now()));
-    });
+    }
 
     if let Err(e) = std::fs::write(&state_file, serde_json::to_string_pretty(&state).unwrap_or_default()) {
         return CleanupResult {

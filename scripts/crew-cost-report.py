@@ -17,9 +17,9 @@ import sys
 from pathlib import Path
 
 
-# Model costs per million tokens
+# Model costs per million tokens (matches state_tools.py pricing)
 MODEL_COSTS = {
-    "opus": {"input": 15.00, "output": 75.00},
+    "opus": {"input": 5.00, "output": 25.00},
     "sonnet": {"input": 3.00, "output": 15.00},
     "haiku": {"input": 0.80, "output": 4.00},
 }
@@ -78,17 +78,36 @@ def _find_task_dir(task_id: str = "") -> Path | None:
 
 
 def _load_cost_entries(task_dir: Path) -> list[dict]:
+    """Load cost entries from costs.jsonl; fall back to state.json cost_tracking."""
     cost_file = task_dir / "costs.jsonl"
-    if not cost_file.exists():
-        return []
     entries = []
-    for line in cost_file.read_text().splitlines():
-        line = line.strip()
-        if line:
+    if cost_file.exists():
+        for line in cost_file.read_text().splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    entries.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+    # If no entries in costs.jsonl, try state.json cost_tracking as fallback
+    if not entries:
+        state_file = task_dir / "state.json"
+        if state_file.exists():
             try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+                state = json.loads(state_file.read_text())
+                cost_tracking = state.get("cost_tracking", {})
+                for entry in cost_tracking.get("entries", []):
+                    entries.append({
+                        "agent": entry.get("agent", "unknown"),
+                        "model": entry.get("model", "unknown"),
+                        "input_tokens": entry.get("input_tokens", 0),
+                        "output_tokens": entry.get("output_tokens", 0),
+                        "total_cost": entry.get("total_cost", 0.0),
+                    })
+            except Exception:
+                pass
+
     return entries
 
 

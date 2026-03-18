@@ -180,8 +180,8 @@ fn draw_overview(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
     }
     lines.push(Line::from(""));
 
-    // Health check warning banner (step 4.6)
-    match loaded.health_check() {
+    // Health check warning banner — uses cached result (no file I/O during render)
+    match &loaded.cached_health {
         crate::data::task::TaskHealth::Healthy => {}
         crate::data::task::TaskHealth::MissingOutputs(missing) => {
             lines.push(Line::from(vec![

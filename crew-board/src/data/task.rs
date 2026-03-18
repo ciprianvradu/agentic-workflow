@@ -16,6 +16,9 @@ pub struct LoadedTask {
     pub jira_key: Option<String>,
     /// mtime of state.json at last read (None for archived/fallback tasks).
     pub state_mtime: Option<SystemTime>,
+    /// Cached health check result — computed at load/refresh time to avoid
+    /// file I/O during rendering (especially costly on WSL /mnt/c paths).
+    pub cached_health: TaskHealth,
 }
 
 /// Lightweight metadata written by external setup scripts.
@@ -457,6 +460,7 @@ pub fn load_tasks(tasks_dir: &Path) -> Vec<LoadedTask> {
                             archived: true,
                             jira_key,
                             state_mtime: None,
+                            cached_health: TaskHealth::Healthy,
                         });
                     }
                 }
@@ -477,6 +481,7 @@ pub fn load_tasks(tasks_dir: &Path) -> Vec<LoadedTask> {
                 archived: false,
                 jira_key: None,
                 state_mtime,
+                cached_health: TaskHealth::Healthy,
             }),
             Err(_) => continue,
         }
@@ -530,11 +535,16 @@ pub fn load_tasks(tasks_dir: &Path) -> Vec<LoadedTask> {
             archived: true,
             jira_key: None,
             state_mtime: None,
+            cached_health: TaskHealth::Healthy,
         });
     }
 
     // 5. Sort all by task_id
     tasks.sort_by(|a, b| a.state.task_id.cmp(&b.state.task_id));
+
+    // 6. Compute health cache (file I/O happens here at load time, not during rendering)
+    refresh_health_cache(&mut tasks);
+
     tasks
 }
 
@@ -593,6 +603,7 @@ pub fn load_tasks_incremental(
                             archived: true,
                             jira_key,
                             state_mtime: None,
+                            cached_health: TaskHealth::Healthy,
                         });
                     }
                 }
@@ -614,7 +625,7 @@ pub fn load_tasks_incremental(
         // If we have a previous version and mtime hasn't changed, reuse it
         if let Some(prev_lt) = prev_map.get(&task_id_guess) {
             if prev_lt.state_mtime == current_mtime && current_mtime.is_some() {
-                // Reuse previous -- no disk read
+                // Reuse previous -- no disk read (cached_health also reused)
                 let mut reused = (*prev_lt).clone();
                 reused.dir = path;
                 tasks.push(reused);
@@ -636,6 +647,7 @@ pub fn load_tasks_incremental(
                     archived: false,
                     jira_key: None,
                     state_mtime: current_mtime,
+                    cached_health: TaskHealth::Healthy,
                 });
             }
             Err(_) => continue,
@@ -683,10 +695,15 @@ pub fn load_tasks_incremental(
             archived: true,
             jira_key: None,
             state_mtime: None,
+            cached_health: TaskHealth::Healthy,
         });
     }
 
     tasks.sort_by(|a, b| a.state.task_id.cmp(&b.state.task_id));
+
+    // Compute health cache for changed tasks (file I/O at load time, not render time)
+    refresh_health_cache(&mut tasks);
+
     (tasks, changed_ids)
 }
 
@@ -762,9 +779,10 @@ impl TaskState {
 }
 
 /// Health status of a loaded task — used for crash/stale detection in the UI.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TaskHealth {
     /// Task is in a consistent state.
+    #[default]
     Healthy,
     /// One or more completed phases are missing their output files.
     MissingOutputs(Vec<String>),
@@ -772,10 +790,19 @@ pub enum TaskHealth {
     StalePhase(String),
 }
 
+/// Compute and cache health status for all tasks in a vec.
+/// Called at load/refresh time so rendering never does file I/O.
+pub fn refresh_health_cache(tasks: &mut [LoadedTask]) {
+    for task in tasks.iter_mut() {
+        task.cached_health = task.compute_health();
+    }
+}
+
 impl LoadedTask {
-    /// Check whether this task's phase outputs are consistent.
-    /// Only performs checks for non-archived, non-complete tasks.
-    pub fn health_check(&self) -> TaskHealth {
+    /// Compute health by checking phase output files on disk.
+    /// This does file I/O — call at load/refresh time, not during rendering.
+    /// Use `cached_health` field for render-time access.
+    pub fn compute_health(&self) -> TaskHealth {
         if self.archived || self.state.is_complete() {
             return TaskHealth::Healthy;
         }

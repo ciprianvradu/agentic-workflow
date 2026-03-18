@@ -976,17 +976,17 @@ impl App {
         }
 
         // Stop event means Claude finished — flag as waiting for input
-        if matches!(&event, HookEvent::Stop { .. }) {
-            if !matches!(&term.status, TerminalStatus::Exited(_)) {
-                term.status = TerminalStatus::NeedsAttention(AttentionReason::WaitingForInput);
-            }
+        if matches!(&event, HookEvent::Stop { .. })
+            && !matches!(&term.status, TerminalStatus::Exited(_))
+        {
+            term.status = TerminalStatus::NeedsAttention(AttentionReason::WaitingForInput);
         }
 
         // Clear WaitingForInput when Claude starts working again
-        if matches!(&event, HookEvent::PreToolUse { .. } | HookEvent::UserPromptSubmit { .. }) {
-            if matches!(&term.status, TerminalStatus::NeedsAttention(AttentionReason::WaitingForInput)) {
-                term.status = TerminalStatus::Running;
-            }
+        if matches!(&event, HookEvent::PreToolUse { .. } | HookEvent::UserPromptSubmit { .. })
+            && matches!(&term.status, TerminalStatus::NeedsAttention(AttentionReason::WaitingForInput))
+        {
+            term.status = TerminalStatus::Running;
         }
 
         // Push to activity log
@@ -1293,6 +1293,10 @@ impl App {
                     self.repos = result.repos;
                     self.search_index = result.search_index;
                     self.rebuild_tree();
+                    // Rebuild splash task list so indices stay valid after repo swap
+                    if self.show_splash {
+                        self.build_splash_task_list();
+                    }
                     self.clamp_issue_selection();
                     self.cached_task_dir = None;
                     self.cached_history_task_dir = None;
@@ -2556,9 +2560,9 @@ impl App {
             return;
         }
 
-        // Guard: task must have an active worktree
+        // Guard: task must have a cleanable worktree (active or done, not already cleaned)
         let wt = match &loaded.state.worktree {
-            Some(wt) if wt.status == "active" => wt,
+            Some(wt) if wt.status == "active" || wt.status == "done" => wt,
             _ => return,
         };
 

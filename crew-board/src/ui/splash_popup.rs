@@ -136,7 +136,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
             lines.push(Line::from(vec![
                 Span::styled(prefix, prefix_style),
-                Span::styled(format!("{}", task_id), task_id_style),
+                Span::styled(task_id.to_string(), task_id_style),
                 Span::styled(format!("  [{}{}]", phase, progress_str), phase_style),
                 Span::styled(format!("  {}", desc), desc_style),
             ]));
@@ -235,25 +235,25 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
 }
 
-/// Collect health warnings for tasks that have stale/missing phases.
+/// Collect health warnings from cached health status (no file I/O during rendering).
 fn collect_health_warnings(app: &App) -> Vec<String> {
     let mut warnings = Vec::new();
     for repo in &app.repos {
         for task in &repo.tasks {
-            if task.archived || task.state.is_complete() {
-                continue;
-            }
-            // Check if current phase output exists
-            if let Some(ref phase) = task.state.phase {
-                if !task.state.phases_completed.contains(phase) {
-                    let phase_file = task.dir.join(format!("{}.md", phase));
-                    if !phase_file.exists() {
-                        // Phase is set but no output file — may be stale
-                        warnings.push(format!(
-                            "{}: phase {} started but no output found",
-                            task.state.task_id, phase
-                        ));
-                    }
+            match &task.cached_health {
+                crate::data::task::TaskHealth::Healthy => {}
+                crate::data::task::TaskHealth::MissingOutputs(missing) => {
+                    warnings.push(format!(
+                        "{}: missing output for phase(s) {}",
+                        task.state.task_id,
+                        missing.join(", "),
+                    ));
+                }
+                crate::data::task::TaskHealth::StalePhase(phase) => {
+                    warnings.push(format!(
+                        "{}: phase {} started but no output found (30+ min)",
+                        task.state.task_id, phase
+                    ));
                 }
             }
         }

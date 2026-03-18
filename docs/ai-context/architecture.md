@@ -83,8 +83,18 @@ This is the largest and most important module. It manages all persistent workflo
 - `_is_safe_task_id(task_id)` — Validates task IDs (rejects `../`, `/`, `\`, null bytes, hidden files)
 
 #### Cost Tracking
-- `workflow_record_cost(agent, model, input_tokens, output_tokens)` — Per-agent cost
+- `workflow_record_cost(agent, model, input_tokens, output_tokens)` — Per-agent cost, writes to `state.json` under `cost_tracking.entries[]`
 - `workflow_get_cost_summary()` — Breakdown by agent and model
+
+**Primary path — automatic via Stop hook**: `log-crew-interaction.py` fires on every Claude Code Stop event. It calls `_extract_session_cost()` to parse the `session_cost` object from the hook payload (also tries `cost` and `sessionCost` key names for forward compatibility), then calls `_record_cost()` which writes to both:
+1. `state.json` via `workflow_record_cost()` — structured `cost_tracking.entries[]`
+2. `.tasks/TASK_XXX/costs.jsonl` — append-only JSONL record with `source: "hook"`
+
+Because the hook fires on every session stop (including ad-hoc user interactions during an active task), all cost is attributed to the active task — not just orchestrated agent turns.
+
+**Secondary path — explicit agent reporting**: The `agent-done` subcommand in `crew_orchestrator.py` accepts `--input-tokens`/`--output-tokens` flags and calls `workflow_record_cost()` directly. This path is a backup for cases where the Stop hook payload does not carry cost data.
+
+**Reporting**: `scripts/crew-cost-report.py` reads `costs.jsonl` first; falls back to `state.json cost_tracking.entries[]` if the file is absent. Pricing is unified with `state_tools.py`: opus $5/$25, sonnet $3/$15, haiku $0.80/$4 per million tokens (input/output).
 
 #### Mode & Effort
 - `workflow_detect_mode(description)` — Auto-detect workflow mode from task text
@@ -544,7 +554,7 @@ Claude Code supports lifecycle hooks that run scripts at specific trigger points
 `log-crew-interaction.py` provides deterministic, automatic capture of the full conversation trail during active crew sessions. It fires on two events:
 
 - **UserPromptSubmit**: Logs every user prompt as `{role: "human", type: "guidance"}`. Skips `/crew` and `/crew-resume` prefixes (already logged by the orchestrator) and internal orchestrator calls (`python3`, `crew_orchestrator`, etc.).
-- **Stop**: Reads the transcript file and extracts the last assistant response (truncated to 500 chars), logged as `{role: "agent", type: "message"}`.
+- **Stop**: (1) Extracts cost from the payload (`session_cost` object) and records it to `state.json` + `costs.jsonl` via `_record_cost()`. (2) Reads the transcript file and extracts the last assistant response (truncated to 500 chars), logged as `{role: "agent", type: "message"}`. Cost recording happens even when no transcript summary is produced.
 
 **Interaction entry format:**
 ```json
