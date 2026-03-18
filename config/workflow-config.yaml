@@ -74,6 +74,7 @@ models:
   # Standard mode: routine to non-trivial — Opus for planning, Sonnet for execution
   standard:
     planner: opus
+    skeptic: sonnet
     implementer: sonnet
     technical_writer: sonnet
 
@@ -81,6 +82,7 @@ models:
   thorough:
     planner: opus
     reviewer: sonnet
+    skeptic: sonnet
     implementer: sonnet
     quality_guard: sonnet
     security_auditor: sonnet
@@ -101,23 +103,25 @@ workflow_modes:
       estimated_cost: "$0.03"
 
     standard:
-      description: "Planner + Implementer + Technical Writer — routine to non-trivial features"
+      description: "Planner + Skeptic + Implementer + Technical Writer — routine to non-trivial features"
       phases:
         - planner
+        - skeptic
         - implementer
         - technical_writer
-      estimated_cost: "$0.10"
+      estimated_cost: "$0.15"
 
     thorough:
-      description: "Full pipeline with review and security — security, migrations, breaking changes"
+      description: "Full pipeline with review, skeptic, and security — security, migrations, breaking changes"
       phases:
         - planner
         - reviewer
+        - skeptic
         - implementer
         - quality_guard
         - security_auditor
         - technical_writer
-      estimated_cost: "$0.30+"
+      estimated_cost: "$0.35+"
 
   # Auto-detection rules for determining mode
   auto_detection:
@@ -507,8 +511,7 @@ parallelization:
     enabled: true
     timeout_seconds: 300
 
-  # When both Reviewer and Skeptic are in the phase sequence, run them in parallel
-  # (Skeptic is NOT added to phases by this setting — only parallelized when already present)
+  # Run Reviewer and Skeptic in parallel (thorough mode — both are in the phase sequence)
   reviewer_skeptic:
     enabled: true
     timeout_seconds: 300

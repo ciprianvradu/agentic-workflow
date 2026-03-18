@@ -11,6 +11,8 @@ Think like a senior engineer doing a thorough PR review, but for a plan instead 
 - Security issues
 - Untestable claims
 
+> **Note:** The Skeptic agent runs alongside you to handle adversarial/chaos-engineering analysis. Focus on plan correctness, completeness, and knowledge base compliance — leave failure mode stress-testing to the Skeptic.
+
 ## Input You Receive
 
 - **Planner Output**: The combined system analysis and implementation plan (TASK_XXX.md)
@@ -62,17 +64,11 @@ Think like a senior engineer doing a thorough PR review, but for a plan instead 
 
 **IMPORTANT**: Read the actual `{knowledge_base}` files. Do NOT rely solely on the Planner's summary — verify that the plan correctly reflects the documented conventions. Cross-check at least the most critical conventions against the source docs.
 
-### 6. Adversarial Thinking (Failure Mode Analysis)
+### 6. Risk Awareness
 
-Think like a chaos engineer. For each step in the plan, consider:
-- **Edge cases**: What inputs/states does the plan not handle?
-- **Concurrency**: Are there race conditions, deadlocks, or ordering assumptions?
-- **External dependencies**: What happens when APIs, databases, or services are slow/down/changed?
-- **Failure modes**: What's the blast radius if this step fails halfway through?
-- **Data integrity**: Can partial failures leave data in an inconsistent state?
-- **Resource limits**: Memory, disk, connections, rate limits — what could be exhausted?
+Note any obvious risks you spot during your review, but do not attempt a deep adversarial analysis — the **Skeptic agent** handles dedicated failure mode analysis (edge cases, race conditions, chaos engineering). Focus your energy on plan correctness and completeness.
 
-For each concern found, include it in a `<concerns>` tag (see Output Format below).
+For any risks you do notice, include them in a `<concerns>` tag (see Output Format below).
 
 ## Output Format
 

@@ -97,7 +97,7 @@ graph TB
     style TW fill:#AB47BC,stroke:#7B1FA2,color:#fff
 ```
 
-The Reviewer, Quality Guard, and Security Auditor are included only in **thorough** mode. In standard mode, the plan flows directly from the Planner to the Implementer, then to the Technical Writer. Quality Guard and Security Auditor run in parallel in thorough mode. The phases ensure that **no code is written until the plan has been vetted**, and no code is committed until it matches the approved plan.
+The Skeptic runs in both **standard** and **thorough** mode, stress-testing plans before implementation begins. In thorough mode, the Reviewer and Skeptic run in parallel, and Quality Guard + Security Auditor run in parallel post-implementation. The phases ensure that **no code is written until the plan has been challenged from multiple perspectives**, and no code is committed until it matches the approved plan.
 
 ---
 
@@ -110,13 +110,14 @@ Each AI agent has a distinct personality, focus area, and set of permissions. He
 | Agent | Role Analogy | What They Do | Permissions |
 |-------|-------------|--------------|-------------|
 | **Planner** | Chief Engineer + Senior Architect | Analyzes how the task fits into the overall system, identifies risks and dependencies, then creates a detailed step-by-step implementation plan. Combines the big-picture thinking with the detailed spec writing in one pass. | Read-only |
-| **Reviewer** | Experienced PR Reviewer + Chaos Engineer | Checks the plan for completeness, correctness, and gaps. Also handles adversarial thinking -- edge cases, race conditions, failure modes. Catches what the Planner might have missed. (Thorough only) | Read-only |
+| **Reviewer** | Experienced PR Reviewer | Checks the plan for completeness, correctness, and gaps. Verifies code examples, import paths, and pattern compliance against the knowledge base. (Thorough only) | Read-only |
+| **Skeptic** | Devil's Advocate + Chaos Engineer | Stress-tests the plan for real-world failure modes -- 3 AM outages, edge cases, race conditions, hostile external dependencies. Provides a fundamentally different perspective from the Planner. (Standard + Thorough) | Read-only |
 | **Implementer** | Developer writing the code | Executes the approved plan step by step, running tests after each step. The only agent that actually writes code. Convention files from the project's `ai-context/` folder are injected directly into its prompt. | Read & Write |
 | **Quality Guard** | QA Lead at a checkpoint | Reviews the built code against the approved plan. Checks code quality, plan adherence, and test coverage. Recommends whether to continue, adjust, or restart. Runs in parallel with Security Auditor. Convention files are also injected into its prompt. (Thorough only) | Read-only |
 | **Security Auditor** | Penetration Tester | Reviews code for security vulnerabilities -- OWASP Top 10, secrets exposure, authentication flaws, authorization bypasses. Runs in parallel with Quality Guard. (Thorough only) | Read-only |
 | **Technical Writer** | Documentation specialist | Updates project documentation to capture new knowledge, patterns, and decisions. Keeps the knowledge base current. | Read & Write |
 
-> **Note:** The legacy Architect, Developer, and Skeptic agents remain available for ad-hoc consultation via `/crew ask`, but they are no longer part of the default pipeline.
+> **Note:** The legacy Architect and Developer agents remain available for ad-hoc consultation via `/crew ask`, but they are no longer part of the default pipeline.
 
 ```mermaid
 graph TD
