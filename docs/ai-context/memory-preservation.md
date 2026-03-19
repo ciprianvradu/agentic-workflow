@@ -253,9 +253,11 @@ The category determines how discoverable the learning is later:
 The memory preservation tools integrate with the broader agentic workflow:
 
 1. **Planner agent** - Save architectural decisions, patterns, and implementation decisions
-2. **Implementer agent** - Save gotchas discovered during coding
-3. **Quality Guard** - Save quality findings and their resolutions
-4. **Technical Writer** - Reference decisions and patterns in documentation
+2. **Design Challenger agent** - Save alternative approaches considered, design trade-offs, simplification opportunities
+3. **Skeptic agent** - Save edge cases, failure modes, race conditions, design approach challenges
+4. **Implementer agent** - Save gotchas discovered during coding
+5. **Quality Guard** - Save quality findings and their resolutions
+6. **Technical Writer** - Reference decisions and patterns in documentation
 
 ## Troubleshooting
 

@@ -648,7 +648,7 @@ fn run_app(
                                 app.terminal_scroll_reset();
                                 app.terminal_search_query.clear();
                                 app.terminal_search_matches.clear();
-                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.terminal_input_mode = TerminalInputMode::TerminalFocused;
                             }
                             KeyCode::Up | KeyCode::Char('k') => {
                                 app.terminal_scroll_up(1);
@@ -669,7 +669,7 @@ fn run_app(
                                 app.terminal_scroll_reset();
                                 app.terminal_search_query.clear();
                                 app.terminal_search_matches.clear();
-                                app.terminal_input_mode = TerminalInputMode::Normal;
+                                app.terminal_input_mode = TerminalInputMode::TerminalFocused;
                             }
                             KeyCode::Char('/') => {
                                 app.terminal_search_start();

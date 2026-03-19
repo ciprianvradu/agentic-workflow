@@ -73,6 +73,7 @@ models:
 
   # Standard mode: routine to non-trivial — Opus for planning, Sonnet for execution
   standard:
+    axiom_miner: sonnet
     planner: opus
     skeptic: sonnet
     implementer: sonnet
@@ -80,7 +81,9 @@ models:
 
   # Thorough mode: critical changes — Opus for planning, Sonnet for execution
   thorough:
+    axiom_miner: sonnet
     planner: opus
+    design_challenger: sonnet
     reviewer: sonnet
     skeptic: sonnet
     implementer: sonnet
@@ -103,25 +106,28 @@ workflow_modes:
       estimated_cost: "$0.03"
 
     standard:
-      description: "Planner + Skeptic + Implementer + Technical Writer — routine to non-trivial features"
+      description: "Axiom Miner + Planner + Skeptic + Implementer + Technical Writer — routine to non-trivial features"
       phases:
+        - axiom_miner
         - planner
         - skeptic
         - implementer
         - technical_writer
-      estimated_cost: "$0.15"
+      estimated_cost: "$0.20"
 
     thorough:
-      description: "Full pipeline with review, skeptic, and security — security, migrations, breaking changes"
+      description: "Full pipeline with axiom mining, design challenge, review, skeptic, and security — security, migrations, breaking changes"
       phases:
+        - axiom_miner
         - planner
+        - design_challenger
         - reviewer
         - skeptic
         - implementer
         - quality_guard
         - security_auditor
         - technical_writer
-      estimated_cost: "$0.35+"
+      estimated_cost: "$0.50+"
 
   # Auto-detection rules for determining mode
   auto_detection:
@@ -215,11 +221,14 @@ effort_levels:
   quick:
     implementer: low
   standard:
+    axiom_miner: medium
     planner: high
     implementer: high
     quality_guard: medium
   thorough:
+    axiom_miner: high
     planner: max
+    design_challenger: high
     reviewer: high
     implementer: high
     quality_guard: high
@@ -464,6 +473,7 @@ context_management:
     - "developer.md"
     - "reviewer.md"
     - "skeptic.md"
+    - "design-challenger.md"
     - "interactions.jsonl"
 
 # Server-Side Compaction (Anthropic API beta)
@@ -511,8 +521,8 @@ parallelization:
     enabled: true
     timeout_seconds: 300
 
-  # Run Reviewer and Skeptic in parallel (thorough mode — both are in the phase sequence)
-  reviewer_skeptic:
+  # Run Design Challenger, Reviewer, and Skeptic in parallel (thorough mode — all review the Planner's output independently)
+  design_challenger_reviewer_skeptic:
     enabled: true
     timeout_seconds: 300
 

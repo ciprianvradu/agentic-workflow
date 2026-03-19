@@ -19,7 +19,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 
 ## What This Project Is
 
-The **Agentic Development Workflow** is a multi-agent orchestration system for software development. It coordinates specialized AI agents — planner, reviewer, implementer, quality-guard, and technical-writer — through a structured pipeline that plans, reviews, builds, verifies, and documents code changes.
+The **Agentic Development Workflow** is a multi-agent orchestration system for software development. It coordinates specialized AI agents — planner, design-challenger, reviewer, skeptic, implementer, quality-guard, and technical-writer — through a structured pipeline that plans, challenges design choices, reviews, stress-tests, builds, verifies, and documents code changes.
 
 It runs on **four platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, and OpenCode — using the same agent definitions and workflow configuration across all of them.
 
@@ -30,8 +30,10 @@ The core infrastructure is an **MCP server** (Model Context Protocol) written in
 ```
 agentic-workflow/
 ├── agents/                     # Agent prompt definitions (markdown)
-│   ├── planner.md              # System analysis + implementation planning (read-only)
-│   ├── reviewer.md             # Plan review & adversarial analysis (read-only)
+│   ├── planner.md              # System analysis + alternatives analysis + implementation planning (read-only)
+│   ├── design-challenger.md    # Design approach validation — challenges fundamental choices (read-only, thorough only)
+│   ├── reviewer.md             # Plan review & adversarial analysis (read-only, thorough only)
+│   ├── skeptic.md              # Devil's advocate — failure modes, edge cases, design approach challenges (read-only)
 │   ├── implementer.md          # Code execution (the only code-writing agent)
 │   ├── quality-guard.md        # Code quality review
 │   ├── technical-writer.md     # Documentation updates
@@ -115,8 +117,8 @@ agentic-workflow/
 
 Every task flows through phases in order:
 
-1. **Planner** — System analysis + implementation plan (read-only)
-2. **Reviewer** — Plan review + adversarial analysis (read-only, thorough only)
+1. **Planner** — System analysis + alternatives analysis + implementation plan (read-only)
+2. **Design Challenger** + **Reviewer** + **Skeptic** — Run in parallel (thorough mode); Skeptic alone in standard mode. Design Challenger validates fundamental approach choices, Reviewer checks plan correctness, Skeptic stress-tests for failure modes and edge cases (all read-only)
 3. **Implementer** — Executes the plan (read-write)
 4. **Quality Guard** + **Security Auditor** — Code quality + security review, run in parallel (thorough only)
 5. **Technical Writer** — Documentation updates (docs-only write)
@@ -130,8 +132,8 @@ Not all tasks need all agents:
 | Mode | Agents | Use For |
 |------|--------|---------|
 | **quick** | Implementer | Typos, one-line fixes, trivial changes |
-| **standard** | Planner → Implementer → Technical Writer | Routine features, fixes, refactors |
-| **thorough** | Planner → Reviewer → Implementer → Quality Guard + Security Auditor (parallel) → Technical Writer | Security, DB migrations, breaking changes |
+| **standard** | Planner → Skeptic → Implementer → Technical Writer | Routine features, fixes, refactors |
+| **thorough** | Planner → Design Challenger + Reviewer + Skeptic (parallel) → Implementer → Quality Guard + Security Auditor (parallel) → Technical Writer | Security, DB migrations, breaking changes |
 
 Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
 

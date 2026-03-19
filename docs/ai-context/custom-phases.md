@@ -99,7 +99,9 @@ Every custom phase must specify exactly one of `after` or `before`:
 |----------|---------|---------|
 | `after: init` | Before the first agent phase (post-initialization) | Pre-planning triage |
 | `after: planner` | Immediately after planner completes | Post-planning validation |
-| `after: reviewer` | Immediately after reviewer completes | Extra review step |
+| `after: design_challenger` | Immediately after design challenger completes | Post-challenge step (thorough only) |
+| `after: reviewer` | Immediately after reviewer completes | Extra review step (thorough only) |
+| `after: skeptic` | Immediately after skeptic completes | Post-skeptic step |
 | `before: implementer` | Immediately before implementer starts | Pre-implementation setup |
 | `before: complete` | After all agents, before workflow completion | Final checks |
 

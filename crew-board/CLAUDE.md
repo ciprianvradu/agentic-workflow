@@ -348,11 +348,11 @@ Cycle with `F4` in Normal mode. Layout cannot be cycled while in TerminalFocused
 | Key | Action |
 |-----|--------|
 | `↑` / `k` | Scroll up 1 line |
-| `↓` / `j` | Scroll down 1 line |
+| `↓` / `j` | Scroll down 1 line (auto-exits to TerminalFocused at offset 0) |
 | `PgUp` | Scroll up one page |
-| `PgDn` | Scroll down one page |
+| `PgDn` | Scroll down one page (auto-exits to TerminalFocused at offset 0) |
 | `Home` | Scroll to top of scrollback buffer |
-| `End` / `Esc` / `q` | Exit scroll-back, return to live view + Normal mode |
+| `End` / `Esc` / `q` | Exit scroll-back, return to live view + TerminalFocused mode |
 | `/` | Enter search mode (type query, Enter to search) |
 | `n` | Jump to next search match |
 | `N` | Jump to previous search match |
@@ -744,7 +744,7 @@ Follow the pattern established by `launch_popup.rs` and `create_popup.rs`:
 - **Attention cleared on input**: `TerminalManager::send_input()` always sets `attention_signal` to `None`. This means typing in a terminal immediately clears any attention badge, even if the screen still shows the prompt.
 - **Idle threshold in `poll_status()`**: Idle detection (120s) is handled in `poll_status()`, not in the reader thread. The reader thread only sets `attention_signal` for screen-content patterns (prompts/errors). Idle is a time-based check against `last_output` done each tick.
 - **Reader thread lifetime**: The reader thread for each PTY runs until the child process exits (EOF on the master reader). It is not killed explicitly — it exits naturally. After EOF it waits for the child exit code via `child.wait()` before writing the exit signal.
-- **Scroll-back exit is unified**: `End`, `Esc`, and `q` all do the same thing in scroll-back mode: reset scroll to live (offset 0), clear search state, and return to Normal mode. `Home` scrolls to top without exiting.
+- **Scroll-back exit is unified**: All scroll-back exits go to `TerminalFocused` mode (not Normal), so the user can immediately type. `End`, `Esc`, and `q` reset to live (offset 0) + clear search. Scrolling down (Down/j, PgDn, mouse wheel) that reaches offset 0 also auto-exits. `Home` scrolls to top without exiting. Only Shift+F-key exits go to Normal (since they switch views).
 - **Scroll-back via `set_scrollback()`**: The vt100 crate's `Parser::set_scrollback(n)` controls how many scrollback lines appear in the visible view. `draw_terminal()` temporarily sets it during rendering and restores it after. The parser lock is held for the entire render — the reader thread will block during this brief period.
 - **`PrefixPending` timeout (legacy)**: The prefix-pending state is no longer reachable in the current code. This gotcha is retained for reference only.
 - **Layout mode in tiled views**: `terminal_indices_for_layout()` selects which terminals to show. It always includes the focused terminal and fills remaining slots with neighbors. The focused terminal's border uses `focused_border_style()` to distinguish it from inactive tiles.

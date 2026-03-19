@@ -105,8 +105,8 @@ Because the hook fires on every session stop (including ad-hoc user interactions
 | Mode | Agents | Use case | Est. cost |
 |------|--------|----------|-----------|
 | **quick** | implementer | Typos, one-line fixes | ~$0.03 |
-| **standard** | planner → implementer → technical_writer | Routine features, refactors | ~$0.10 |
-| **thorough** | planner → reviewer → implementer → quality_guard + security_auditor (parallel) → technical_writer | Security, migrations, breaking changes | ~$0.30+ |
+| **standard** | planner → skeptic → implementer → technical_writer | Routine features, refactors | ~$0.15 |
+| **thorough** | planner → design_challenger + reviewer + skeptic (parallel) → implementer → quality_guard + security_auditor (parallel) → technical_writer | Security, migrations, breaking changes | ~$0.40+ |
 
 Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
 
@@ -431,8 +431,10 @@ Follow this checklist:
 
 | Agent | Mode(s) | Role |
 |-------|---------|------|
-| **planner** | standard, thorough | System analysis + implementation plan (read-only) |
-| **reviewer** | thorough | Plan review + adversarial analysis (read-only) |
+| **planner** | standard, thorough | System analysis + alternatives analysis + implementation plan (read-only) |
+| **design_challenger** | thorough | Validates fundamental design choices — challenges whether the approach is right, proposes alternatives, analyzes commitment risks (read-only). Runs in parallel with reviewer and skeptic. |
+| **reviewer** | thorough | Plan review + adversarial analysis (read-only). Runs in parallel with design_challenger and skeptic. |
+| **skeptic** | standard, thorough | Devil's advocate — stress-tests the plan for failure modes, edge cases, and design approach challenges (read-only). Runs alone in standard mode; in parallel with design_challenger and reviewer in thorough mode. |
 | **implementer** | all | Executes the plan (read-write) |
 | **quality_guard** | thorough | Code quality, conventions, plan adherence — runs in parallel with security_auditor (read-write) |
 | **security_auditor** | thorough | Security vulnerability review — runs in parallel with quality_guard (read-only) |

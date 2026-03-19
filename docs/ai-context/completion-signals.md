@@ -16,6 +16,7 @@ Some agents emit additional signals alongside their completion:
 
 | Agent | Extra Signal | Purpose |
 |-------|-------------|---------|
+| Design Challenger | `<design_verdict>CONFIRMED\|ALTERNATIVE_PROPOSED\|SIMPLIFICATION_POSSIBLE</design_verdict>` | Design approach verdict |
 | Technical Writer | `<promise>DOCS: NO_CHANGES\|MINOR_UPDATES\|NEW_DOCUMENTATION\|MAJOR_REVISION</promise>` | Documentation impact |
 | Quality Guard | `<promise>FIXES_APPLIED: N fixes, M flagged</promise>` | Fix summary |
 | Implementer | `<promise>STEP_COMPLETE</promise>` | Individual step verified (loop mode) |

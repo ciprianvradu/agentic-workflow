@@ -3632,10 +3632,18 @@ impl App {
     }
 
     /// Scroll the focused terminal down by N lines.
+    /// Auto-exits scroll-back into TerminalFocused when reaching live view (offset 0).
     pub fn terminal_scroll_down(&mut self, lines: usize) {
         if let Some(mgr) = &mut self.terminal_manager {
             if let Some(term) = mgr.focused_terminal_mut() {
                 term.scroll_offset = term.scroll_offset.saturating_sub(lines);
+                if term.scroll_offset == 0
+                    && self.terminal_input_mode == TerminalInputMode::ScrollBack
+                {
+                    self.terminal_search_query.clear();
+                    self.terminal_search_matches.clear();
+                    self.terminal_input_mode = TerminalInputMode::TerminalFocused;
+                }
             }
         }
     }

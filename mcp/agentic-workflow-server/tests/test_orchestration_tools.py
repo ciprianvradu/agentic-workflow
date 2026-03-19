@@ -244,7 +244,7 @@ class TestCrewApplyConfigOverrides:
 
     def test_parallel(self):
         result = crew_apply_config_overrides({"parallel": True})
-        assert result["overrides"]["parallelization"]["reviewer_skeptic"]["enabled"] is True
+        assert result["overrides"]["parallelization"]["design_challenger_reviewer_skeptic"]["enabled"] is True
 
     def test_beads(self):
         result = crew_apply_config_overrides({"beads": "PROJ-42"})

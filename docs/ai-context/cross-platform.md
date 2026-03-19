@@ -207,7 +207,7 @@ Platforms that support per-agent model selection use dicts in `build-agents.py` 
 
 | Agent | Model | Rationale |
 |---|---|---|
-| planner, reviewer, implementer, quality-guard | `gemini-2.5-pro` | Complex reasoning |
+| planner, design-challenger, reviewer, skeptic, implementer, quality-guard | `gemini-2.5-pro` | Complex reasoning |
 | security-auditor, performance-analyst, api-guardian, orchestrator | `gemini-2.5-pro` | Complex reasoning |
 | technical-writer, accessibility-reviewer | `gemini-2.0-flash` | Utility / simpler tasks |
 | crew-worktree, crew-status | `gemini-2.0-flash` | Utility |
@@ -226,7 +226,7 @@ Defined in `build-agents.py` via `OPENCODE_AGENT_PERMISSIONS` dict and helper co
 
 | Profile | Used By | Description |
 |---|---|---|
-| `_READ_ONLY_BASH` | planner, reviewer, security-auditor, api-guardian, accessibility-reviewer, crew-status | Deny all bash by default, allow git read commands (status, log, diff, show, branch) and file inspection (grep, find, ls, cat, head, tail, wc, tree) |
+| `_READ_ONLY_BASH` | planner, design-challenger, reviewer, skeptic, security-auditor, api-guardian, accessibility-reviewer, crew-status | Deny all bash by default, allow git read commands (status, log, diff, show, branch) and file inspection (grep, find, ls, cat, head, tail, wc, tree) |
 | `_FEEDBACK_BASH` | performance-analyst | Extends `_READ_ONLY_BASH` with test execution (pytest, npm test, make test) |
 | `_IMPLEMENTER_BASH` | implementer | Ask by default, allow git read + add + test commands, ask for git commit, deny git push and destructive commands (reset --hard, clean, rm -rf) |
 
@@ -242,7 +242,7 @@ permission:
     "git log*": allow
 ```
 
-Read-only agents (planner, reviewer) get `edit: deny`, `bash: _READ_ONLY_BASH`, and `webfetch: deny`. The implementer gets only `bash: _IMPLEMENTER_BASH` (all other tools allowed). The technical-writer gets `None` (tool-level restrictions only).
+Read-only agents (planner, design-challenger, reviewer, skeptic) get `edit: deny`, `bash: _READ_ONLY_BASH`, and `webfetch: deny`. The implementer gets only `bash: _IMPLEMENTER_BASH` (all other tools allowed). The technical-writer gets `None` (tool-level restrictions only).
 
 ### Gemini thinkingConfig
 
@@ -252,8 +252,8 @@ The Gemini installer (`install-gemini.sh`) configures per-agent thinking budgets
 
 | Budget | Agents |
 |---|---|
-| 24576 (high) | planner, security-auditor |
-| 16384 (standard) | reviewer, implementer, quality-guard, performance-analyst, api-guardian, orchestrator |
+| 24576 (high) | planner, skeptic, security-auditor |
+| 16384 (standard) | design-challenger, reviewer, implementer, quality-guard, performance-analyst, api-guardian, orchestrator |
 | 8192 (utility) | technical-writer, accessibility-reviewer |
 | 4096 (command) | crew-worktree, crew-status |
 

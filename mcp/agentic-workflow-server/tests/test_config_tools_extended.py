@@ -407,7 +407,7 @@ class TestModeSpecificModelRouting:
         """DEFAULT_CONFIG should include parallelization section."""
         from agentic_workflow_server.config_tools import DEFAULT_CONFIG
         para = DEFAULT_CONFIG.get("parallelization", {})
-        assert para.get("reviewer_skeptic", {}).get("enabled") is True
+        assert para.get("design_challenger_reviewer_skeptic", {}).get("enabled") is True
         assert para.get("quality_guard_security_auditor", {}).get("enabled") is True
         assert para.get("optional_agents", {}).get("enabled") is True
 

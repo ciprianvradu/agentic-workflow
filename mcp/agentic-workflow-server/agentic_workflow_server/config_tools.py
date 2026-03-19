@@ -279,7 +279,7 @@ DEFAULT_CONFIG = {
     },
     "custom_phases": {},
     "parallelization": {
-        "reviewer_skeptic": {
+        "design_challenger_reviewer_skeptic": {
             "enabled": True,
             "timeout_seconds": 300,
             "merge_strategy": "deduplicate",

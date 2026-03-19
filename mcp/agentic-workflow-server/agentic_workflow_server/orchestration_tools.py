@@ -1024,8 +1024,8 @@ def crew_apply_config_overrides(
         applied.append("all checkpoints disabled")
 
     if options.get("parallel"):
-        overrides.setdefault("parallelization", {}).setdefault("reviewer_skeptic", {})["enabled"] = True
-        applied.append("parallelization.reviewer_skeptic.enabled = true")
+        overrides.setdefault("parallelization", {}).setdefault("design_challenger_reviewer_skeptic", {})["enabled"] = True
+        applied.append("parallelization.design_challenger_reviewer_skeptic.enabled = true")
 
     if options.get("beads"):
         overrides.setdefault("beads", {})["enabled"] = True
@@ -1346,15 +1346,28 @@ def crew_get_next_phase(
 
     next_agent = full_sequence[next_idx]
 
-    # Check for parallel execution (reviewer + skeptic)
-    parallel_config = config.get("parallelization", {}).get("reviewer_skeptic", {})
-    parallel_enabled = parallel_config.get("enabled", False)
+    # Check for parallel execution (design_challenger + reviewer + skeptic)
+    # Supports both legacy "reviewer_skeptic" key and new "design_challenger_reviewer_skeptic" key
+    parallelization = config.get("parallelization", {})
+    dcrs_config = parallelization.get("design_challenger_reviewer_skeptic", {})
+    rs_config = parallelization.get("reviewer_skeptic", {})
+    review_parallel_enabled = dcrs_config.get("enabled", False) or rs_config.get("enabled", False)
     parallel_with = None
 
-    if parallel_enabled and next_agent == "reviewer" and "skeptic" in full_sequence:
-        skeptic_idx = full_sequence.index("skeptic")
-        if "skeptic" not in phases_completed and skeptic_idx > next_idx:
-            parallel_with = "skeptic"
+    review_group = ["design_challenger", "reviewer", "skeptic"]
+    if review_parallel_enabled and next_agent in review_group:
+        parallel_candidates = []
+        for agent_name in review_group:
+            if (agent_name != next_agent
+                    and agent_name in full_sequence
+                    and agent_name not in phases_completed):
+                agent_idx = full_sequence.index(agent_name)
+                if agent_idx > next_idx:
+                    parallel_candidates.append(agent_name)
+        if len(parallel_candidates) == 1:
+            parallel_with = parallel_candidates[0]
+        elif len(parallel_candidates) > 1:
+            parallel_with = parallel_candidates
 
     # Check for parallel execution (quality_guard + security_auditor)
     if parallel_with is None:
