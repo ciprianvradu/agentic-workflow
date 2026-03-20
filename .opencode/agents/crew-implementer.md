@@ -248,7 +248,18 @@ Your discipline ensures the carefully-designed plan gets executed correctly.
 
 ## Documentation Gap Flagging
 
-See `{knowledge_base}/doc-gap-flagging.md`. Call `workflow_mark_docs_needed()` when you notice undocumented or outdated code.
+See `{knowledge_base}/doc-gap-flagging.md`. When you modify or create files that lack documentation in `{knowledge_base}`, flag them:
+
+1. Call `workflow_mark_docs_needed(task_id: "{task_id}", files: ["path/to/file.py"])` for each undocumented file
+2. Include a `<docs_needed>` tag in your output listing all files that need documentation:
+
+```
+<docs_needed>
+["path/to/modified-file.py", "path/to/new-file.py"]
+</docs_needed>
+```
+
+This ensures the Technical Writer focuses on files you actually touched rather than scanning everything.
 
 ---
 

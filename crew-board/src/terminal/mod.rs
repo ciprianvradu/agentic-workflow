@@ -464,11 +464,27 @@ impl TerminalManager {
     }
 
     /// Cleanup all terminals on app exit.
-    /// Drops all writers (closes their stdin), which causes the child processes
-    /// to eventually receive EOF and exit. The reader threads will detect this
-    /// and clean up naturally.
+    ///
+    /// On Windows (ConPTY), drop order matters: the writer must be dropped
+    /// before the master PTY handle, otherwise `ClosePseudoConsole` can deadlock
+    /// if the output pipe buffer isn't fully drained. We explicitly clear each
+    /// terminal's writer and master in the correct order before clearing the list.
     pub fn cleanup_all(&mut self) {
-        // Drop writers to signal EOF to child processes
+        for term in &mut self.terminals {
+            // Drop writer first — signals EOF to child process stdin
+            if let Ok(mut w) = term.writer.lock() {
+                // Replace with a dummy writer that does nothing
+                *w = Box::new(std::io::sink());
+            }
+            // Drop master PTY handle — triggers ClosePseudoConsole on Windows.
+            // By this point the writer is already dropped, so the pipe should drain.
+            if let Ok(m) = term.master.lock() {
+                // Replace with a no-op to trigger Drop on the original
+                // We can't easily do this with the trait object, so we just
+                // let it drop naturally below when terminals.clear() runs.
+                drop(m);
+            }
+        }
         self.terminals.clear();
     }
 }

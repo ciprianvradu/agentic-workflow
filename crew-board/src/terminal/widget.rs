@@ -248,7 +248,11 @@ pub fn key_to_bytes(code: KeyCode, modifiers: KeyModifiers) -> Vec<u8> {
     let m = xterm_mod_param(modifiers);
 
     // Ctrl+key — character control codes (Ctrl+A=0x01 .. Ctrl+Z=0x1a)
-    if modifiers.contains(KeyModifiers::CONTROL) {
+    // On Windows, AltGr is reported as Ctrl+Alt. When both are set and we get
+    // a printable character (like @, #, €), treat it as a plain keystroke.
+    let is_altgr = modifiers.contains(KeyModifiers::CONTROL)
+        && modifiers.contains(KeyModifiers::ALT);
+    if modifiers.contains(KeyModifiers::CONTROL) && !is_altgr {
         if let KeyCode::Char(c) = code {
             // Kitty protocol may report Ctrl+Enter as Char('\r') or Char('\n').
             // Send literal newline — Claude Code expects \n for "insert newline".

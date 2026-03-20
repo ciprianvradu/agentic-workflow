@@ -4,6 +4,39 @@ use std::process::Command;
 
 use crate::launcher::{AiHost, COLOR_SCHEME_HEX};
 
+/// Compute a relative path from `from` directory to `to` path.
+/// Falls back to returning `to` as-is if no common prefix is found.
+fn relative_path(from: &Path, to: &Path) -> PathBuf {
+    let from_parts: Vec<_> = from.components().collect();
+    let to_parts: Vec<_> = to.components().collect();
+    let common = from_parts.iter().zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if common == 0 {
+        return to.to_path_buf();
+    }
+    let mut rel = PathBuf::new();
+    for _ in common..from_parts.len() {
+        rel.push("..");
+    }
+    for part in &to_parts[common..] {
+        rel.push(part);
+    }
+    rel
+}
+
+/// Strip the `\\?\` extended-length path prefix that `canonicalize()` adds on Windows.
+/// This prefix breaks many tools (Python, npm, etc.) that don't handle it.
+fn strip_win_prefix(path: PathBuf) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        let s = path.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+    path
+}
+
 /// Return the appropriate git command for the given path.
 /// Uses `git.exe` (Windows-native) for paths on `/mnt/c/` etc., which is
 /// dramatically faster than WSL git accessing Windows filesystems via the
@@ -206,7 +239,7 @@ pub fn preview(repo_path: &Path, description: &str) -> Result<WorktreePreview, S
 
     let tasks_dir = repo_path.join(".tasks");
     let tasks_canonical = if tasks_dir.exists() {
-        tasks_dir.canonicalize().unwrap_or_else(|_| tasks_dir.clone())
+        strip_win_prefix(tasks_dir.canonicalize().unwrap_or_else(|_| tasks_dir.clone()))
     } else {
         tasks_dir
     };
@@ -273,8 +306,11 @@ pub fn create_worktree(
             .map_err(|e| format!("Failed to create .tasks/: {}", e))?;
     }
 
-    // Resolve tasks_dir to canonical path (follows symlinks)
-    let tasks_canonical = tasks_dir.canonicalize().unwrap_or_else(|_| tasks_dir.clone());
+    // Resolve tasks_dir to canonical path (follows symlinks).
+    // On Windows, canonicalize() adds \\?\ prefix which breaks many tools.
+    let tasks_canonical = strip_win_prefix(
+        tasks_dir.canonicalize().unwrap_or_else(|_| tasks_dir.clone())
+    );
 
     // Generate task ID
     let task_id = get_next_task_id(&tasks_canonical);
@@ -352,23 +388,35 @@ pub fn create_worktree(
         ));
     }
 
-    // Symlink .tasks/ into the worktree
+    // Symlink .tasks/ into the worktree using a relative path.
+    // Relative symlinks work from both WSL and native Windows.
+    // Worktree layout: ../{repo}-worktrees/TASK_XXX/ -> main repo is ../../{repo}/
+    // So .tasks relative path is: ../../{repo}/.tasks
     let wt_tasks = worktree_path.join(".tasks");
+    let rel_tasks = relative_path(&worktree_path, &tasks_canonical);
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(&tasks_canonical, &wt_tasks)
+        std::os::unix::fs::symlink(&rel_tasks, &wt_tasks)
             .map_err(|e| format!("Failed to create .tasks symlink: {}", e))?;
     }
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(&tasks_canonical, &wt_tasks)
-            .map_err(|e| format!("Failed to create .tasks symlink: {}", e))?;
+        // Try symlink first (needs Developer Mode or admin), fall back to NTFS junction.
+        // Junctions require absolute paths but don't need elevated privileges.
+        if let Err(_) = std::os::windows::fs::symlink_dir(&rel_tasks, &wt_tasks) {
+            Command::new("cmd")
+                .args(["/c", "mklink", "/J",
+                    &wt_tasks.to_string_lossy(),
+                    &tasks_canonical.to_string_lossy()])
+                .output()
+                .map_err(|e| format!("Failed to create .tasks junction: {}", e))?;
+        }
     }
 
     // Write .crew-resume for AI hosts that don't accept prompt arguments (Copilot, etc.)
-    let repo_abs = repo_path
-        .canonicalize()
-        .unwrap_or_else(|_| repo_path.to_path_buf());
+    let repo_abs = strip_win_prefix(
+        repo_path.canonicalize().unwrap_or_else(|_| repo_path.to_path_buf())
+    );
     let tasks_abs = tasks_canonical.join(&task_id);
     let resume_cmd = match ai_host {
         AiHost::Copilot | AiHost::Gemini => format!("@crew-resume {}", task_id),
@@ -406,9 +454,9 @@ pub fn create_worktree(
     // Best-effort: don't fail worktree creation if this write fails
     let _ = std::fs::write(&resume_file, resume_content);
 
-    let worktree_abs = worktree_path
-        .canonicalize()
-        .unwrap_or_else(|_| worktree_path.clone());
+    let worktree_abs = strip_win_prefix(
+        worktree_path.canonicalize().unwrap_or_else(|_| worktree_path.clone())
+    );
 
     Ok(WorktreeResult {
         task_id,

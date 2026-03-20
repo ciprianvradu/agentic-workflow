@@ -24,6 +24,7 @@ _FIX_WORKTREE_PATHS_SCRIPT = _REPO_ROOT / "scripts" / "fix-worktree-paths.py"
 
 PHASE_ORDER = [
     "planner",
+    "architect",
     "reviewer",
     "implementer",
     "quality_guard",
@@ -2377,6 +2378,14 @@ AUTO_DETECT_RULES = {
             r"^change .+ from .+ to",
             r"^set .+ to",
         ],
+        # Additive patterns: checked in standard→quick downgrade path where
+        # exclude_keywords ARE applied (unlike top-level patterns above)
+        "additive_patterns": [
+            # "Add X field/property/column to Y"
+            r"^add (a |an )?(\w+ )?(field|property|column|attribute|parameter|header|flag)s?\b",
+            # "Add X and Y to Z" where Z references a single endpoint/file
+            r"^add .+ to (the |a )?(\/\w+|`.+`|\w+\.\w+)",
+        ],
         "exclude_keywords": ["security", "auth", "database", "migration", "api", "breaking",
                            "authentication", "authorization", "password", "token", "critical",
                            "add feature", "implement", "refactor", "create", "build"]
@@ -2640,6 +2649,45 @@ def workflow_detect_mode(
                             keyword_confidence = 0.85
                             keyword_reason = f"Trivial task ({', '.join(quick_matches)}) — quick mode"
                             matched_keywords = quick_matches
+                        else:
+                            # Check additive patterns (e.g. "add X field to Y")
+                            # These are separate from top-level patterns because
+                            # they need exclude_keywords to be checked first
+                            additive_pattern_matches = []
+                            for pattern in AUTO_DETECT_RULES["quick"].get("additive_patterns", []):
+                                if re.search(pattern, task_description, re.IGNORECASE | re.MULTILINE):
+                                    additive_pattern_matches.append(pattern)
+                            if additive_pattern_matches:
+                                keyword_mode = "quick"
+                                keyword_confidence = 0.85
+                                keyword_reason = f"Trivial additive task — quick mode"
+                                matched_keywords = additive_pattern_matches
+
+                    # Single-file heuristic: if task references exactly one file
+                    # via @path or files_affected, and only matched generic standard
+                    # keywords (e.g. "add"), downgrade to quick mode
+                    if keyword_mode == "standard":
+                        file_refs = re.findall(r'@\S+\.\w+', task_description)
+                        # Also count externally-provided file references
+                        external_file_count = len(files_affected) if files_affected else 0
+                        total_file_refs = len(file_refs) + external_file_count
+                        broad_feature_keywords = {"add feature", "implement", "refactor",
+                                                  "create", "build", "utility"}
+                        has_broad = any(kw in desc_lower for kw in broad_feature_keywords)
+                        # Check file refs AND files_affected against sensitive path patterns
+                        sensitive_patterns = ["auth", "security", "crypto", "password", "token",
+                                              "secret", "migration", "schema", "database", "db/"]
+                        all_refs = file_refs + (files_affected or [])
+                        has_sensitive_path = any(
+                            any(sp in ref.lower() for sp in sensitive_patterns)
+                            for ref in all_refs
+                        )
+                        if total_file_refs == 1 and not has_broad and not has_sensitive_path:
+                            ref_label = file_refs[0] if file_refs else files_affected[0]
+                            keyword_mode = "quick"
+                            keyword_confidence = 0.8
+                            keyword_reason = f"Single-file task ({ref_label}) — quick mode"
+                            matched_keywords = [ref_label]
 
     # --- Signal 2: file scope analysis (when files provided) ---
     scope_analysis = None
@@ -2676,7 +2724,8 @@ def workflow_detect_mode(
 
 def workflow_set_mode(
     mode: str,
-    task_id: Optional[str] = None
+    task_id: Optional[str] = None,
+    files_affected: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Set the workflow mode for a task.
 
@@ -2686,6 +2735,8 @@ def workflow_set_mode(
     Args:
         mode: Workflow mode name (built-in or custom) or "auto" for auto-detection
         task_id: Task identifier. If not provided, uses active task.
+        files_affected: Optional list of files referenced in the task (from @file refs).
+                       Passed to auto-detection for scope analysis.
 
     Returns:
         Updated task state with mode configuration
@@ -2703,7 +2754,7 @@ def workflow_set_mode(
     if mode == "auto":
         # Auto-detect based on task description
         description = state.get("description", "")
-        detection = workflow_detect_mode(description)
+        detection = workflow_detect_mode(description, files_affected=files_affected)
         effective_mode = detection["mode"]
         state["workflow_mode"] = {
             "requested": "auto",

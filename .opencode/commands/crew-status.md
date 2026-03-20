@@ -36,7 +36,7 @@ When working in a shared repository:
 
 ## Command: /crew-status
 
-Run `python3 /mnt/c/git/agentic-workflow/scripts/crew-status.py` and display the output to the user.
+Run `python3 C:\git\agentic-workflow\scripts/crew-status.py` and display the output to the user.
 
 For more detailed info on a specific task, read `.tasks/TASK_XXX/state.json` directly.
 

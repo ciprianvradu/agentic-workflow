@@ -271,6 +271,7 @@ class TestTransitionEdgeCases:
     def test_already_completed_phase_rejected(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_012")
         workflow_transition("planner", task_id="TASK_EXT_012")
+        workflow_transition("architect", task_id="TASK_EXT_012")
         workflow_transition("reviewer", task_id="TASK_EXT_012")
         workflow_transition("implementer", task_id="TASK_EXT_012")
         # Try going back to reviewer (completed, not planner)
@@ -293,6 +294,7 @@ class TestTransitionEdgeCases:
     def test_loopback_from_reviewer_to_planner(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_014")
         workflow_transition("planner", task_id="TASK_EXT_014")
+        workflow_transition("architect", task_id="TASK_EXT_014")
         workflow_transition("reviewer", task_id="TASK_EXT_014")
         workflow_add_review_issue("bug", "Found bug", task_id="TASK_EXT_014")
         result = workflow_transition("planner", task_id="TASK_EXT_014")
@@ -302,6 +304,7 @@ class TestTransitionEdgeCases:
     def test_transition_clears_review_issues_on_loopback(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_015")
         workflow_transition("planner", task_id="TASK_EXT_015")
+        workflow_transition("architect", task_id="TASK_EXT_015")
         workflow_transition("reviewer", task_id="TASK_EXT_015")
         workflow_add_review_issue("bug", "Found bug", task_id="TASK_EXT_015")
         workflow_transition("planner", task_id="TASK_EXT_015")
@@ -457,7 +460,7 @@ class TestCanTransitionEdgeCases:
     def test_valid_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_EXT_070")
         workflow_transition("planner", task_id="TASK_EXT_070")
-        result = workflow_can_transition("reviewer", task_id="TASK_EXT_070")
+        result = workflow_can_transition("architect", task_id="TASK_EXT_070")
         assert result["can_transition"] is True
 
     def test_invalid_transition(self, clean_tasks_dir):

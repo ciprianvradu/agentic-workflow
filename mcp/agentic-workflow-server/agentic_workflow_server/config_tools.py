@@ -277,6 +277,13 @@ DEFAULT_CONFIG = {
         "auto_commit_docs": False,
         "notify_on_complete": True,
     },
+    "llm_triage": {
+        "enabled": True,
+        "confidence_threshold": 0.8,
+        "model": "haiku",
+        "timeout_seconds": 10,
+        "fallback_to_local": True,
+    },
     "custom_phases": {},
     "parallelization": {
         "design_challenger_reviewer_skeptic": {
@@ -291,6 +298,10 @@ DEFAULT_CONFIG = {
         "optional_agents": {
             "enabled": True,
             "max_concurrent": 4,
+            "timeout_seconds": 300,
+        },
+        "optional_with_next": {
+            "enabled": True,
             "timeout_seconds": 300,
         },
     },
@@ -397,12 +408,17 @@ def _resolve_permission_profile(config: dict) -> dict:
 
 
 def _load_yaml(path: Path) -> Optional[dict]:
-    if not path.exists():
+    try:
+        if not path.exists():
+            return None
+    except OSError:
+        # On Windows, symlinks with \\?\ prefix paths can raise OSError
         return None
 
     if yaml is None:
-        with open(path) as f:
-            content = f.read()
+        try:
+            with open(path) as f:
+                content = f.read()
             import re
             config = {}
             for line in content.split('\n'):
@@ -420,6 +436,8 @@ def _load_yaml(path: Path) -> Optional[dict]:
                         else:
                             config[key] = value
             return config if config else None
+        except OSError:
+            return None
 
     try:
         with open(path) as f:

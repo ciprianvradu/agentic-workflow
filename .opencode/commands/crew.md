@@ -6,7 +6,7 @@ You orchestrate the /crew workflow by running the orchestrator script for routin
 
 ### Initialize
 
-Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py init --host opencode --args "$ARGUMENTS"`
+Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py init --host opencode --args "$ARGUMENTS"`
 
 The script returns JSON with `action` and routing details. Handle by action:
 
@@ -16,6 +16,22 @@ The script returns JSON with `action` and routing details. Handle by action:
 - **config** → Call `config_get_effective()` and display configuration
 - **ask** → Go to Single Agent Consultation with `result.agent` and `result.question`
 - **error** → Show `result.errors` to user
+
+**Resume detection:** When called with no args (or from a worktree), `init` auto-detects the active task and routes to **resume**. To skip resume detection and always start a fresh task, pass `--no-resume` to the orchestrator:
+
+```
+python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py init --host opencode --args "$ARGUMENTS" --no-resume
+```
+
+Or include `--no-resume` in the `/crew` arguments string:
+
+```
+/crew "Fix the authentication bug" --no-resume
+```
+
+**Resume health warnings:** When resuming, check `result.resume_state.recovery_needed` and `result.resume_state.stale_phase_warning`. If set, display the warning to the user before entering the action loop:
+- `recovery_needed`: Missing output files for completed phases — suggest re-running affected phases
+- `stale_phase_warning`: Current phase has been running >30 min with no output — may indicate a crash
 
 ### Context Preparation (if configured)
 
@@ -54,7 +70,7 @@ Loop on the returned JSON action from the orchestrator:
    Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: "<composed prompt>")
    ```
 6. Save agent output to `.tasks/<task_id>/<agent>.md`
-7. Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model <next.model>]`
+7. Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model <next.model>]`
 8. If `result.parse_result.unaddressed_concerns` is non-empty, display them to the user:
    ```
    **Unaddressed Concerns ({count}):**
@@ -67,10 +83,10 @@ Loop on the returned JSON action from the orchestrator:
 
 Custom phase that invokes a Claude Code skill:
 
-1. Log: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
+1. Log: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
 2. Run the skill: `Skill(skill: next.skill)`
 3. Save skill output to `next.output_file`
-4. Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> [--writes-to-state] [--exit-code 0]`
+4. Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> [--writes-to-state] [--exit-code 0]`
 5. If `result.action` is `"custom_phase_failed"` and `blocking` is true, inform the user and ask how to proceed (Retry / Skip / Abort)
 6. Continue loop with `result.next`
 
@@ -78,11 +94,11 @@ Custom phase that invokes a Claude Code skill:
 
 Custom phase that runs a shell command:
 
-1. Log: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
+1. Log: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role system --content "Running custom phase: <phase>" --type message --phase <phase>`
 2. Run the command via Bash: `next.command` (with timeout: `next.timeout` seconds)
 3. Capture stdout+stderr and exit code
 4. Save output to `next.output_file`
-5. Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> --exit-code <code> [--writes-to-state] [--blocking]`
+5. Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py custom-phase-done --task-id <id> --phase <phase> --output-file <output_file> --exit-code <code> [--writes-to-state] [--blocking]`
 6. If `result.action` is `"custom_phase_failed"` and `blocking` is true, inform the user: "Custom phase '<phase>' failed (exit code <code>)." Ask: Retry / Skip / Abort.
 7. Continue loop with `result.next`
 
@@ -98,13 +114,13 @@ Then present to user:
 AskUserQuestion: "Based on [Agent]'s analysis: [summary]. [N unaddressed concern(s) require attention.] How would you like to proceed?"
 Options: Approve, Revise, Restart, Skip
 ```
-After user responds, run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py checkpoint-done --task-id <id> --decision <decision> [--notes "..."] --question "<checkpoint summary that was presented>"`
+After user responds, run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py checkpoint-done --task-id <id> --decision <decision> [--notes "..."] --question "<checkpoint summary that was presented>"`
 The `--question` flag logs both the checkpoint question and response to `interactions.jsonl`.
 Continue loop with `result.next`.
 
 #### action: "implement_step" / "verify" / "retry" / "next_step" / "escalate"
 
-Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py impl-action --task-id <id> [--verified true/false] [--error "..."]`
+Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py impl-action --task-id <id> [--verified true/false] [--error "..."]`
 - **implement_step**: Spawn implementer for `step_id`. If `loop_mode`, run verification after.
 - **verify**: Run verification command, then call impl-action again with result.
 - **retry**: Re-attempt with `should_try_different_approach` guidance. Use `known_solution` if available.
@@ -112,11 +128,11 @@ Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py impl-acti
 - **checkpoint**: Present progress checkpoint to user.
 - **escalate**: Pause and ask user for help. Show `reason`. Log the escalation and response:
   ```
-  python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role agent --content "<reason>" --type escalation_question --agent implementer --phase implementer
+  python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role agent --content "<reason>" --type escalation_question --agent implementer --phase implementer
   ```
   After user responds:
   ```
-  python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user response>" --type escalation_response --phase implementer
+  python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user response>" --type escalation_response --phase implementer
   ```
 - **complete**: Implementation done, continue to next phase. In standard mode: technical_writer → complete. In thorough mode: quality_guard + security_auditor (parallel) → technical_writer → complete.
 
@@ -124,13 +140,29 @@ Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py impl-acti
 
 #### action: "complete"
 
-Run: `python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py complete --task-id <id> [--files <comma-separated>]`
+Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py complete --task-id <id> [--files <comma-separated>]`
 - Display cost summary as formatted table
 - Suggest commit message to user
 - Execute worktree commands based on `worktree_action` (prompt/auto/never)
 - Execute beads commands to close/sync issues
 - Handle Jira transitions from `result.jira_actions`: for each action with `"prompt"` → ask user, with `"execute"` → call `jira_issues_transition` (check `only_from` first via `jira_issues_get`)
 - Ask human to approve commit. Record concern outcomes if any were raised.
+
+#### action: "complete_with_async_docs"
+
+The main workflow is complete, but the Technical Writer should run asynchronously in the background.
+
+1. Run: `python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py complete --task-id <id> [--files <comma-separated>]`
+2. Display cost summary and suggest commit message (same as normal complete)
+3. Handle worktree/beads/Jira actions (same as normal complete)
+4. Ask human to approve commit. Record concern outcomes if any were raised.
+5. After commit is done, spawn Technical Writer in background:
+   - Read agent prompt from `result.async_docs.agent_prompt_path`
+   - Compose prompt using Agent Prompt Composition (same as spawn_agent)
+   - Include git diff context from `result.async_docs.git_diff_command`
+   - Spawn: `Task(subagent_type: "general-purpose", model: result.async_docs.model, max_turns: result.async_docs.max_turns, prompt: "<composed prompt>", run_in_background: true)`
+6. If `result.async_docs.notify_on_complete` is true, inform user: "Technical Writer is running in the background. Documentation updates will appear shortly."
+7. If `result.async_docs.auto_commit_docs` is true, after TW completes: stage and commit doc changes with message "docs: update documentation for <task_id>"
 
 ### Single Agent Consultation
 
@@ -149,6 +181,7 @@ When building prompts for agents, include:
 5. **Knowledge base inventory** (list files, substitute `{knowledge_base}` path)
 6. **Variable substitution**: Replace `{knowledge_base}` and `{task_directory}` with config values
 7. **Convention injection** (implementer + quality_guard): If `next.convention_files` exists, read each file and include under a `## Mandatory Conventions (from ai-context)` header in the prompt. These are actual convention files referenced by the Planner for the implementer to follow exactly.
+8. **Human guidance trail**: Read `.tasks/<task_id>/interactions.jsonl` and include any entries with `role: "human"` and `type` in `["guidance", "correction", "new_requirement", "question"]` under a `## Human Guidance` header. This ensures agents have full context of user corrections and requirements given during the workflow. Skip if the file is empty or missing.
 
 ## Error Handling
 
@@ -159,9 +192,43 @@ If an agent fails or produces invalid output:
 
 ## Interaction Logging
 
-When the user provides ad-hoc guidance mid-workflow (outside of checkpoints), log it:
+**All user input during active crew sessions is captured automatically** via Claude Code
+hooks (`log-crew-interaction.py` fires on `UserPromptSubmit` and `Stop`). This provides:
+
+- Complete conversation trail without relying on LLM logging
+- Automatic classification of input type (guidance, correction, new_requirement, question)
+- Context preserved across session recovery and compaction
+- Visibility in crew-board's History view and agent prompt composition
+
+The hook auto-classifies user input based on content signals:
+- **Question**: Ends with `?` or starts with interrogative words (how, what, why...)
+- **Correction**: Starts with negation/redirection (no, don't, actually, instead, fix...)
+- **New requirement**: Contains additive signals (also, add, additionally, include...)
+- **Guidance**: Default — general direction or instruction
+
+Classified interactions are included in agent prompts via the Human Guidance Trail
+(see Agent Prompt Composition), ensuring all agents see user corrections and requirements.
+
+As a safety net, also log explicitly when the hook may not have captured context:
+
+When the user provides ad-hoc guidance mid-workflow (outside of checkpoints):
 ```
-python3 /mnt/c/git/agentic-workflow/scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user input>" --type guidance --phase <current_phase>
+python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<user input>" --type guidance --phase <current_phase>
+```
+
+When the user provides a correction to agent output:
+```
+python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<correction>" --type correction --phase <current_phase>
+```
+
+When the user adds a new requirement mid-workflow:
+```
+python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<new requirement>" --type new_requirement --phase <current_phase>
+```
+
+When the user asks a clarifying question:
+```
+python3 C:\git\agentic-workflow\scripts/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<question>" --type question --phase <current_phase>
 ```
 
 ## Output to User

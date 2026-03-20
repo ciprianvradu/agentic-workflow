@@ -212,6 +212,32 @@ class TestCrewParseArgs:
         assert result["options"]["mode"] == "thorough"
         assert result["errors"] == []
 
+    def test_at_file_refs_task_and_context(self):
+        """@file.md becomes task_file, @file.ts becomes context_file."""
+        result = crew_parse_args('@tasks/add-health-timestamp.md @src/routes/health.ts')
+        assert result["options"]["task_file"] == "tasks/add-health-timestamp.md"
+        assert result["options"]["context_files"] == ["src/routes/health.ts"]
+
+    def test_at_file_refs_multiple_source_files(self):
+        """Multiple source @refs should all be captured as context_files."""
+        result = crew_parse_args('"Add caching" @src/cache.ts @src/redis.ts')
+        assert "task_file" not in result["options"]
+        assert result["options"]["context_files"] == ["src/cache.ts", "src/redis.ts"]
+        assert "Add caching" in result["task_description"]
+
+    def test_at_file_ref_task_only(self):
+        """Single @file.md should become task_file with no context_files."""
+        result = crew_parse_args('@tasks/my-task.md')
+        assert result["options"]["task_file"] == "tasks/my-task.md"
+        assert "context_files" not in result["options"]
+
+    def test_at_file_ref_does_not_override_explicit_task(self):
+        """--task flag takes priority over @file.md detection."""
+        result = crew_parse_args('--task explicit.md @other.md @src/foo.ts')
+        assert result["options"]["task_file"] == "explicit.md"
+        # @other.md becomes context since task_file slot is taken by --task
+        assert result["options"]["context_files"] == ["other.md", "src/foo.ts"]
+
 
 # ============================================================================
 # crew_apply_config_overrides tests
@@ -546,6 +572,23 @@ class TestCrewInitTask:
         if task_dir.exists():
             shutil.rmtree(task_dir)
 
+    def test_init_returns_mode_confidence(self, clean_tasks_dir):
+        """crew_init_task should return mode_confidence for LLM triage decisions."""
+        result = crew_init_task(
+            task_description="Fix typo in README",
+            options={"mode": "auto"}
+        )
+        assert result["success"] is True
+        assert "mode_confidence" in result
+        assert isinstance(result["mode_confidence"], (int, float))
+        assert result["mode_confidence"] > 0
+
+        # Clean up
+        workflow_guard_release(task_id=result["task_id"])
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
 
 # ============================================================================
 # crew_get_next_phase tests (requires filesystem)
@@ -704,6 +747,87 @@ class TestCrewGetNextPhase:
             result = crew_get_next_phase(task_id="TASK_ORCH_010")
 
         assert result.get("agent") == "quality_guard"
+        assert result.get("parallel_with") is None
+
+    def test_optional_with_next_api_guardian_parallel_implementer(self, clean_tasks_dir):
+        """Solo optional agent (api_guardian) should run in parallel with next core phase (implementer)."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_OWN_001", description="Test optional_with_next")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_OWN_001")
+
+        # Complete planner — next should be api_guardian (optional, after_planner)
+        workflow_transition(to_phase="planner", task_id="TASK_ORCH_OWN_001")
+        workflow_complete_phase(task_id="TASK_ORCH_OWN_001")
+
+        # Enable api_guardian as optional phase
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_OWN_001")
+        state = _load_state(task_dir)
+        state["optional_phases"] = ["api_guardian"]
+        _save_state(task_dir, state)
+
+        mock_config = {
+            "parallelization": {
+                "optional_with_next": {"enabled": True},
+                "optional_agents": {"enabled": True, "max_concurrent": 4},
+            },
+            "specialized_agents": {
+                "api_guardian": {"position": "after_planner"},
+            },
+            "models": {"default": "opus", "standard": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_OWN_001")
+
+        # implementer should be primary, api_guardian parallel
+        assert result.get("action") == "spawn_agent"
+        assert result.get("agent") == "implementer"
+        assert result.get("parallel_with") == "api_guardian"
+
+    def test_optional_with_next_disabled(self, clean_tasks_dir):
+        """When optional_with_next disabled, solo optional agent runs sequentially."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_OWN_002", description="Test optional_with_next disabled")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_OWN_002")
+
+        workflow_transition(to_phase="planner", task_id="TASK_ORCH_OWN_002")
+        workflow_complete_phase(task_id="TASK_ORCH_OWN_002")
+
+        from agentic_workflow_server.state_tools import _load_state, _save_state, find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_OWN_002")
+        state = _load_state(task_dir)
+        state["optional_phases"] = ["api_guardian"]
+        _save_state(task_dir, state)
+
+        mock_config = {
+            "parallelization": {
+                "optional_with_next": {"enabled": False},
+                "optional_agents": {"enabled": True, "max_concurrent": 4},
+            },
+            "specialized_agents": {
+                "api_guardian": {"position": "after_planner"},
+            },
+            "models": {"default": "opus", "standard": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_OWN_002")
+
+        # api_guardian should run on its own (not parallelized)
+        assert result.get("agent") == "api_guardian"
         assert result.get("parallel_with") is None
 
 

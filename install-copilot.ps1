@@ -144,7 +144,7 @@ if (-not $SkipMcp) {
         }
 
         # Save config
-        $mcpConfig | ConvertTo-Json -Depth 10 | Out-File $mcpConfigPath -Encoding utf8
+        [System.IO.File]::WriteAllText($mcpConfigPath, ($mcpConfig | ConvertTo-Json -Depth 10))
         Write-Host "  + MCP server registered in $mcpConfigPath" -ForegroundColor Green
     } else {
         Write-Host "  ! MCP server directory not found: $MCP_SERVER_DIR" -ForegroundColor Yellow

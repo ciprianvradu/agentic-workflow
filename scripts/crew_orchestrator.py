@@ -359,7 +359,9 @@ def cmd_init(args: argparse.Namespace) -> None:
             raw_path = raw_path[1:]
         task_file = Path(raw_path)
         if task_file.exists():
-            task_description = task_file.read_text().strip()
+            file_content = task_file.read_text().strip()
+            if file_content:
+                task_description = file_content
         else:
             _output({"error": True, "errors": [f"Task file not found: {options['task_file']}"]})
             return
@@ -368,9 +370,13 @@ def cmd_init(args: argparse.Namespace) -> None:
         _output({"error": True, "errors": ["No task description provided"]})
         return
 
+    # Pass context files (from @file refs) as files_affected for mode detection
+    files_affected = options.get("context_files")
+
     init_result = crew_init_task(
         task_description=task_description,
         options=options,
+        files_affected=files_affected,
     )
 
     if not init_result.get("success"):
@@ -398,6 +404,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         "task_id": task_id,
         "task_dir": init_result["task_dir"],
         "mode": init_result["mode"],
+        "mode_confidence": init_result.get("mode_confidence", 0.5),
         "optional_agents": init_result.get("optional_agents", []),
         "kb_inventory": init_result.get("kb_inventory", {}),
         "beads_issue": init_result.get("beads_issue"),
@@ -430,6 +437,24 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         output_path = Path(args.output_file)
         if output_path.exists():
             output_text = output_path.read_text()
+        else:
+            _output({
+                "action": "agent_done",
+                "error": f"Output file not found: {args.output_file}",
+                "agent": agent,
+                "task_id": task_id,
+                "hint": "The agent may have crashed before writing output. Re-run the phase.",
+            })
+            return
+    if args.output_file and not output_text.strip():
+        _output({
+            "action": "agent_done",
+            "error": f"Output file is empty: {args.output_file}",
+            "agent": agent,
+            "task_id": task_id,
+            "hint": "The agent produced no output. Re-run the phase.",
+        })
+        return
 
     # 1. Parse agent output
     parse_result = crew_parse_agent_output(
@@ -469,17 +494,26 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         )
         cost_recorded = True
 
-    # 4. Handle REVISE loopback — if reviewer recommends REVISE, route back
-    #    to planner (or developer for legacy tasks) instead of advancing
-    recommendation = parse_result.get("extracted", {}).get("recommendation", "")
+    # 4. Handle REVISE loopback — if architect or reviewer recommends REVISE,
+    #    route back to planner instead of advancing
+    extracted = parse_result.get("extracted", {})
+    recommendation = extracted.get("recommendation", "")
+    verdict = extracted.get("verdict", "")
+
+    revise_agent = None
     if agent == "reviewer" and recommendation == "REVISE":
-        # Remove reviewer from phases_completed so it runs again after planner
+        revise_agent = "reviewer"
+    elif agent == "architect" and verdict == "REVISE":
+        revise_agent = "architect"
+
+    if revise_agent:
+        # Remove the revising agent from phases_completed so it runs again after planner
         if task_dir:
             state = _load_state(task_dir)
             phases_completed = state.get("phases_completed", [])
             phases_completed = [
                 p for p in phases_completed
-                if p.lower().replace("-", "_") != "reviewer"
+                if p.lower().replace("-", "_") != revise_agent.lower().replace("-", "_")
             ]
             state["phases_completed"] = phases_completed
             _save_state(task_dir, state)
@@ -800,6 +834,15 @@ def cmd_resume(args: argparse.Namespace) -> None:
     })
 
 
+def cmd_config(_args: argparse.Namespace) -> None:
+    """Output the effective configuration as JSON.
+
+    Used by hosts without MCP support (e.g., /crew-worktree fallback).
+    """
+    result = config_get_effective()
+    _output(result)
+
+
 def cmd_learn(args: argparse.Namespace) -> None:
     """Run Technical Writer standalone against recent git changes.
 
@@ -909,6 +952,11 @@ def _classify_error(e: Exception) -> dict:
         return {"error": True, "errors": [f"Permission denied: {msg}"],
                 "hint": "Check file permissions in .tasks/"}
 
+    if isinstance(e, OSError) and "WinError" in msg:
+        return {"error": True, "errors": [f"Windows path error: {msg}"],
+                "hint": "The .tasks/ symlink may have a \\\\?\\ prefix path. "
+                        "Try recreating the worktree, or run from the main repo."}
+
     return {"error": True, "errors": [f"Unexpected error: {etype}: {msg}"],
             "hint": "Report at github.com/anthropics/agentic-workflow/issues"}
 
@@ -984,6 +1032,9 @@ def main():
     p_resume.add_argument("--task-id", required=True, help="Task identifier")
     p_resume.add_argument("--host", default="unknown", help="AI host platform identifier")
 
+    # config
+    subparsers.add_parser("config", help="Get effective config (for hosts without MCP)")
+
     # learn
     p_learn = subparsers.add_parser("learn", help="Run Technical Writer standalone")
     p_learn.add_argument("--args", required=True, help="Raw /crew learn arguments string")
@@ -1001,6 +1052,7 @@ def main():
         "complete": cmd_complete,
         "log-interaction": cmd_log_interaction,
         "resume": cmd_resume,
+        "config": cmd_config,
         "learn": cmd_learn,
     }
 

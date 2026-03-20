@@ -1847,7 +1847,8 @@ impl App {
             SpawnEmbedded {
                 task_id: String,
                 host_label: String,
-                shell_cmd: String,
+                command: String,
+                args: Vec<String>,
                 work_dir: PathBuf,
                 color_idx: Option<usize>,
             },
@@ -1872,21 +1873,12 @@ impl App {
                         let work_dir = popup.work_dir.clone();
                         let color_idx = popup.color_scheme_index;
                         let host_label = host.label().to_string();
-                        let shell_cmd = match host {
-                            launcher::AiHost::Shell => String::new(),
-                            launcher::AiHost::Copilot | launcher::AiHost::OpenCode => {
-                                host.command().to_string()
-                            }
-                            _ => format!(
-                                "{} \"/crew resume {}\"",
-                                host.command(),
-                                task_id
-                            ),
-                        };
+                        let (command, args) = launcher::embed_cmd_args(host, &task_id);
                         Outcome::SpawnEmbedded {
                             task_id,
                             host_label,
-                            shell_cmd,
+                            command,
+                            args,
                             work_dir,
                             color_idx,
                         }
@@ -1921,24 +1913,14 @@ impl App {
             Outcome::SpawnEmbedded {
                 task_id,
                 host_label,
-                shell_cmd,
+                command,
+                args,
                 work_dir,
                 color_idx,
             } => {
-                if shell_cmd.is_empty() {
-                    self.spawn_terminal(
-                        &task_id, &host_label, "bash", &[], &work_dir, color_idx,
-                    );
-                } else {
-                    self.spawn_terminal(
-                        &task_id,
-                        &host_label,
-                        "bash",
-                        &["-lc".to_string(), shell_cmd],
-                        &work_dir,
-                        color_idx,
-                    );
-                }
+                self.spawn_terminal(
+                    &task_id, &host_label, &command, &args, &work_dir, color_idx,
+                );
                 self.launch_popup = None;
                 self.active_view = ActiveView::Terminals;
             }
@@ -2018,24 +2000,8 @@ impl App {
         let hosts = launcher::detect_ai_hosts();
         let host = hosts.into_iter().next().unwrap_or(AiHost::Claude);
 
-        let shell_cmd = match host {
-            AiHost::Shell => String::new(),
-            AiHost::Copilot | AiHost::OpenCode => host.command().to_string(),
-            _ => format!("{} \"/crew resume {}\"", host.command(), task_id),
-        };
-
-        if shell_cmd.is_empty() {
-            self.spawn_terminal(&task_id, host.label(), "bash", &[], &work_dir, color_idx);
-        } else {
-            self.spawn_terminal(
-                &task_id,
-                host.label(),
-                "bash",
-                &["-lc".to_string(), shell_cmd],
-                &work_dir,
-                color_idx,
-            );
-        }
+        let (command, args) = launcher::embed_cmd_args(host, &task_id);
+        self.spawn_terminal(&task_id, host.label(), &command, &args, &work_dir, color_idx);
         self.active_view = ActiveView::Terminals;
         true
     }
@@ -3103,7 +3069,7 @@ impl App {
 
         if let Some(mgr) = &mut self.terminal_manager {
             // Use a default size; will be resized on next draw
-            let _ = mgr.spawn_with_log_and_env(
+            match mgr.spawn_with_log_and_env(
                 task_id.to_string(),
                 label.to_string(),
                 command,
@@ -3114,15 +3080,31 @@ impl App {
                 color_scheme_index,
                 log_path,
                 env_vars,
-            );
-
-            // Apply auto_accept_default and hook settings to newly spawned terminal
-            if let Some(term) = mgr.terminals.last_mut() {
-                if self.auto_accept_default {
-                    term.auto_accept = true;
+            ) {
+                Ok(()) => {
+                    // Apply auto_accept_default and hook settings to newly spawned terminal
+                    if let Some(term) = mgr.terminals.last_mut() {
+                        if self.auto_accept_default {
+                            term.auto_accept = true;
+                        }
+                        if let Some(ref settings_cwd) = hook_settings_cwd {
+                            term.hook_settings_cwd = Some(settings_cwd.clone());
+                        }
+                    }
                 }
-                if let Some(ref settings_cwd) = hook_settings_cwd {
-                    term.hook_settings_cwd = Some(settings_cwd.clone());
+                Err(e) => {
+                    // Log to file since TUI captures stderr
+                    let msg = format!(
+                        "[crew-board] spawn_terminal FAILED\n  command: {:?}\n  args: {:?}\n  cwd: {}\n  error: {}\n",
+                        command, args, cwd.display(), e
+                    );
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true)
+                        .open(std::env::temp_dir().join("crew-board-errors.log"))
+                    {
+                        use std::io::Write;
+                        let _ = f.write_all(msg.as_bytes());
+                    }
                 }
             }
         }

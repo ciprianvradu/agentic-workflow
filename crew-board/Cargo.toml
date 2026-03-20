@@ -24,7 +24,7 @@ toml = "0.8"
 anyhow = "1"
 tui-input = "0.11"
 regex = "1"
-portable-pty = "0.9"
+portable-pty = { path = "portable-pty-patched" }
 vt100 = "0.15"
 base64 = "0.22"
 tiny_http = "0.12"

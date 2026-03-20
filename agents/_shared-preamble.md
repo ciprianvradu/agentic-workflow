@@ -4,6 +4,10 @@
 
 Use `Grep`, `Glob`, and `Read` directly for searching and reading code. Do **not** spawn subagents (Agent/Explore/Task) for simple searches — it wastes tokens, triggers unnecessary permission prompts, and is slower than using the tools directly. Only use the Agent tool when you need truly parallel independent research across multiple unrelated areas.
 
+### Jira Context
+
+If the task has a `linked_issue` in its state.json (e.g., `"linked_issue": "SAD-75"`), **fetch the full Jira issue** at the start of your phase using `jira_issues_get(issue_key, expand: ["renderedFields", "comments"])`. The Jira issue contains the authoritative requirements, acceptance criteria, and discussion history. Read it before planning or reviewing — the task description in task.md is often just a summary.
+
 ### Memory Preservation
 
 Use `workflow_save_discovery()` to persist important findings across context windows. See `{knowledge_base}/memory-preservation.md` for the full protocol.

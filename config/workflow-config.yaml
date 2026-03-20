@@ -25,6 +25,7 @@ permission_profile: standard
 checkpoints:
   planning:
     after_planner: true        # Review plan before implementation
+    after_architect: true      # Review architect's verdict before proceeding
     after_reviewer: true       # Review gaps found before implementation
 
   implementation:
@@ -75,6 +76,7 @@ models:
   standard:
     axiom_miner: sonnet
     planner: opus
+    architect: sonnet
     skeptic: sonnet
     implementer: sonnet
     technical_writer: sonnet
@@ -83,6 +85,7 @@ models:
   thorough:
     axiom_miner: sonnet
     planner: opus
+    architect: sonnet
     design_challenger: sonnet
     reviewer: sonnet
     skeptic: sonnet
@@ -106,20 +109,22 @@ workflow_modes:
       estimated_cost: "$0.03"
 
     standard:
-      description: "Axiom Miner + Planner + Skeptic + Implementer + Technical Writer — routine to non-trivial features"
+      description: "Axiom Miner + Planner + Architect (plan review) + Skeptic + Implementer + Technical Writer — routine to non-trivial features"
       phases:
         - axiom_miner
         - planner
+        - architect
         - skeptic
         - implementer
         - technical_writer
-      estimated_cost: "$0.20"
+      estimated_cost: "$0.25"
 
     thorough:
-      description: "Full pipeline with axiom mining, design challenge, review, skeptic, and security — security, migrations, breaking changes"
+      description: "Full pipeline with axiom mining, plan review, design challenge, review, skeptic, and security — security, migrations, breaking changes"
       phases:
         - axiom_miner
         - planner
+        - architect
         - design_challenger
         - reviewer
         - skeptic
@@ -127,7 +132,7 @@ workflow_modes:
         - quality_guard
         - security_auditor
         - technical_writer
-      estimated_cost: "$0.50+"
+      estimated_cost: "$0.55+"
 
   # Auto-detection rules for determining mode
   auto_detection:
@@ -223,11 +228,13 @@ effort_levels:
   standard:
     axiom_miner: medium
     planner: high
+    architect: high
     implementer: high
     quality_guard: medium
   thorough:
     axiom_miner: high
     planner: max
+    architect: high
     design_challenger: high
     reviewer: high
     implementer: high
@@ -243,6 +250,16 @@ beads:
   sync_status: true                 # Update beads issue status as workflow progresses
   add_comments: true                # Add workflow progress as beads comments
 
+
+# LLM Triage Fallback
+# When rule-based mode detection has low confidence, optionally call Haiku
+# to classify the task. Fires ~20% of tasks, costs ~$0.002 per call.
+llm_triage:
+  enabled: true
+  confidence_threshold: 0.8     # Only call LLM below this confidence
+  model: haiku
+  timeout_seconds: 10
+  fallback_to_local: true        # If LLM call fails, keep local detection result
 
 # Host-aware Planner Optimization
 # When running on a host that already explored the codebase (e.g., Claude Code,
@@ -531,6 +548,13 @@ parallelization:
   optional_agents:
     enabled: true
     max_concurrent: 4              # Max agents to run simultaneously
+    timeout_seconds: 300
+
+  # Run optional agents in parallel with the next core phase
+  # e.g., api_guardian (after planner) runs alongside implementer instead of blocking it
+  # If the optional agent rejects, its output is still saved and concerns are raised
+  optional_with_next:
+    enabled: true
     timeout_seconds: 300
 
 # Agent Teams (experimental)

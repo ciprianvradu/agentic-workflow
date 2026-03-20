@@ -198,17 +198,45 @@ pub fn spawn_pty_with_log(
     for arg in args {
         cmd.arg(arg);
     }
-    cmd.cwd(cwd);
+    // On Windows, strip the \\?\ extended-length path prefix from cwd.
+    // This prefix (from canonicalize()) causes issues with Node.js/Bun/Git
+    // file operations in the child process.
+    let cwd = if cfg!(target_os = "windows") {
+        let s = cwd.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            std::borrow::Cow::Owned(Path::new(stripped).to_path_buf())
+        } else {
+            std::borrow::Cow::Borrowed(cwd)
+        }
+    } else {
+        std::borrow::Cow::Borrowed(cwd)
+    };
+    cmd.cwd(cwd.as_ref());
+    // Pre-set terminal identification env vars so crossterm recognizes "WezTerm"
+    // and skips feature probing (XTVERSION, DECRQM, DA2). Without these,
+    // each unanswered probe times out (~5s), adding 10-15s to startup.
     cmd.env("TERM", "xterm-256color");
+    cmd.env("TERM_PROGRAM", "WezTerm");
+    cmd.env("TERM_PROGRAM_VERSION", "20240203");
+    cmd.env("COLORTERM", "truecolor");
+    cmd.env("FORCE_COLOR", "3");
+    if std::env::var("WT_SESSION").is_err() {
+        cmd.env("WT_SESSION", "crew-board");
+    }
+    // Skip non-essential startup network calls
+    cmd.env("DISABLE_AUTOUPDATER", "1");
+    cmd.env("DO_NOT_TRACK", "1");
+    cmd.env("CLAUDE_CODE_DISABLE_AUTOUPDATE", "1");
     // Set additional env vars (e.g. hook communication vars)
     for (key, val) in &env_vars {
         cmd.env(key, val);
     }
 
-    let mut child = pair
+    let child = pair
         .slave
         .spawn_command(cmd)
         .context("spawn child process")?;
+    let child = Arc::new(Mutex::new(child));
 
     // Drop the slave side in the parent -- we don't need it after spawning
     drop(pair.slave);
@@ -229,6 +257,11 @@ pub fn spawn_pty_with_log(
         master.try_clone_reader().context("get pty reader")?
     };
 
+    // On Windows, portable-pty 0.9 uses PSEUDOCONSOLE_INHERIT_CURSOR which causes
+    // ConPTY to send ESC[6n (cursor position query) on the output pipe. ConPTY
+    // deadlocks until it receives ESC[1;1R. The reader thread detects ESC[6n inline
+    // and responds immediately. No proactive sending — that causes stdin garbage.
+
     // vt100 parser -- shared between the reader thread and the draw loop
     let parser: SharedParser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 10_000)));
 
@@ -243,6 +276,26 @@ pub fn spawn_pty_with_log(
     let exit_signal_clone = Arc::clone(&exit_signal);
     let attention_signal_clone = Arc::clone(&attention_signal);
     let last_output_clone = Arc::clone(&last_output);
+    // On Windows, ConPTY doesn't reliably send EOF on the output pipe when
+    // the child exits. Spawn a separate thread that waits for the child process
+    // to exit and sets the exit signal directly. This ensures poll_status()
+    // detects the exit even if the reader thread is blocked on read().
+    if cfg!(target_os = "windows") {
+        let child_wait = Arc::clone(&child);
+        let exit_signal_wait = Arc::clone(&exit_signal);
+        std::thread::spawn(move || {
+            let code = match child_wait.lock().unwrap().wait() {
+                Ok(status) => status.exit_code() as i32,
+                Err(_) => -1,
+            };
+            *exit_signal_wait.lock().unwrap() = Some(ExitEvent {
+                code,
+                timestamp: Instant::now(),
+            });
+        });
+    }
+
+    let writer_clone = Arc::clone(&pty_writer);
     std::thread::spawn(move || {
         let mut reader = pty_reader;
         let mut buf = [0u8; 4096];
@@ -265,6 +318,53 @@ pub fn spawn_pty_with_log(
             match reader.read(&mut buf) {
                 Ok(0) => break, // EOF -- child exited
                 Ok(n) => {
+                    // Respond to terminal feature queries that the raw PTY can't answer.
+                    // Without responses, Claude/Ink waits for each probe to timeout (~5-15s each).
+                    // This affects both ConPTY (Windows) and raw PTYs (WSL/Linux) inside crew-board.
+                    // Claude's Ink renderer sends:
+                    //   1. ESC[>0q (XTVERSION) — asks terminal name
+                    //   2. ESC[c (DA1 / Primary Device Attributes) — sentinel/flush
+                    // It waits until DA1 responds before proceeding. Both must be answered.
+                    {
+                        let chunk = &buf[..n];
+
+                        // ESC[6n — cursor position query
+                        if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                            if let Ok(mut w) = writer_clone.lock() {
+                                use std::io::Write;
+                                let _ = w.write_all(b"\x1b[1;1R");
+                                let _ = w.flush();
+                            }
+                        }
+
+                        // ESC[>0q — XTVERSION query (Claude/Ink terminal detection)
+                        // Claude sends XTVERSION then DA1 (ESC[c]) as sentinel.
+                        // On ConPTY, it passes XTVERSION to us but swallows DA1 internally.
+                        // On Linux/WSL PTY, neither gets answered by the PTY layer.
+                        // Claude blocks in Promise.all until DA1 resolves.
+                        // Send BOTH responses when we see XTVERSION — the DA1 response
+                        // (ESC[?62;c) triggers the sentinel and unblocks startup.
+                        if chunk.windows(5).any(|w| w == b"\x1b[>0q") {
+                            if let Ok(mut w) = writer_clone.lock() {
+                                use std::io::Write;
+                                let _ = w.write_all(b"\x1bP>|crew-board\x1b\\");
+                                let _ = w.write_all(b"\x1b[?62;c");
+                                let _ = w.flush();
+                            }
+                        }
+
+                        // ESC[c — DA1 (Primary Device Attributes) sent standalone
+                        // On Linux/WSL, the PTY doesn't answer DA1 either. If Claude sends
+                        // DA1 separately (not paired with XTVERSION), respond directly.
+                        if chunk.windows(3).any(|w| w == b"\x1b[c") && !chunk.windows(5).any(|w| w == b"\x1b[>0q") {
+                            if let Ok(mut w) = writer_clone.lock() {
+                                use std::io::Write;
+                                let _ = w.write_all(b"\x1b[?62;c");
+                                let _ = w.flush();
+                            }
+                        }
+                    }
+
                     let mut p = parser_clone.lock().unwrap();
                     p.process(&buf[..n]);
                     drop(p); // release parser lock before updating timestamp
@@ -290,15 +390,18 @@ pub fn spawn_pty_with_log(
         }
 
         // Reader finished -- collect exit code from child.
-        // portable_pty::ExitStatus::exit_code() returns u32; cast to i32.
-        let code = match child.wait() {
-            Ok(status) => status.exit_code() as i32,
-            Err(_) => -1,
-        };
-        *exit_signal_clone.lock().unwrap() = Some(ExitEvent {
-            code,
-            timestamp: Instant::now(),
-        });
+        // On Windows, the wait thread may have already set the exit signal.
+        // On Unix, we wait here. Either way, set the signal if not already set.
+        if exit_signal_clone.lock().unwrap().is_none() {
+            let code = match child.lock().unwrap().wait() {
+                Ok(status) => status.exit_code() as i32,
+                Err(_) => -1,
+            };
+            *exit_signal_clone.lock().unwrap() = Some(ExitEvent {
+                code,
+                timestamp: Instant::now(),
+            });
+        }
     });
 
     Ok(PtyHandles {

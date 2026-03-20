@@ -660,6 +660,21 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
            (task_description[0] == "'" and task_description[-1] == "'"):
             task_description = task_description[1:-1]
 
+    # Extract @file references from the task description
+    # Classify: .md/.txt files as potential task files, others as context/source files
+    _TASK_FILE_EXTS = {".md", ".txt"}
+    _at_refs = re.findall(r'@(\S+\.\w+)', task_description)
+    context_files: list[str] = []
+    for ref in _at_refs:
+        ext = "." + ref.rsplit(".", 1)[-1] if "." in ref else ""
+        if ext in _TASK_FILE_EXTS and "task_file" not in options:
+            # First .md/.txt @ref becomes the task file (if not already set via --task)
+            options["task_file"] = ref
+        else:
+            context_files.append(ref)
+    if context_files:
+        options["context_files"] = context_files
+
     return {
         "action": action,
         "task_description": task_description,
@@ -811,7 +826,8 @@ def _tokenize(text: str) -> list[str]:
 def crew_init_task(
     task_description: str,
     options: Optional[dict] = None,
-    project_dir: Optional[str] = None
+    project_dir: Optional[str] = None,
+    files_affected: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Full task initialization in one call.
 
@@ -823,6 +839,8 @@ def crew_init_task(
         task_description: Description of the task
         options: Parsed options dict from crew_parse_args
         project_dir: Optional project directory
+        files_affected: Optional list of source files referenced in the task
+                       (from @file refs). Used by mode detection for scope analysis.
 
     Returns:
         task_id, task_dir, mode, optional_agents, kb_inventory, config
@@ -861,10 +879,14 @@ def crew_init_task(
 
     # Step 4: Determine and set mode
     mode_to_set = options.get("mode", "auto")
-    mode_result = workflow_set_mode(mode=mode_to_set, task_id=task_id)
+    mode_result = workflow_set_mode(
+        mode=mode_to_set, task_id=task_id, files_affected=files_affected
+    )
     effective_mode = "standard"
+    mode_confidence = 0.5
     if mode_result.get("success"):
         effective_mode = mode_result["workflow_mode"]["effective"]
+        mode_confidence = mode_result["workflow_mode"].get("confidence", 0.5)
 
     # Note: We do NOT pre-transition to the first phase here.
     # workflow_initialize sets phase=None; crew_get_next_phase will detect
@@ -942,6 +964,7 @@ def crew_init_task(
         "task_id": task_id,
         "task_dir": task_dir_str,
         "mode": effective_mode,
+        "mode_confidence": mode_confidence,
         "config": config,
         "optional_agents": optional_result.get("enabled", []),
         "kb_inventory": {
@@ -1025,7 +1048,9 @@ def crew_apply_config_overrides(
 
     if options.get("parallel"):
         overrides.setdefault("parallelization", {}).setdefault("design_challenger_reviewer_skeptic", {})["enabled"] = True
+        overrides.setdefault("parallelization", {}).setdefault("optional_with_next", {})["enabled"] = True
         applied.append("parallelization.design_challenger_reviewer_skeptic.enabled = true")
+        applied.append("parallelization.optional_with_next.enabled = true")
 
     if options.get("beads"):
         overrides.setdefault("beads", {})["enabled"] = True
@@ -1395,6 +1420,25 @@ def crew_get_next_phase(
             if parallel_group:
                 parallel_with = parallel_group  # List of agents
 
+    # Run a solo optional agent in parallel with the next core phase
+    # e.g., api_guardian (after planner) runs alongside implementer
+    if parallel_with is None:
+        owt_config = config.get("parallelization", {}).get("optional_with_next", {})
+        if owt_config.get("enabled", False) and next_agent in optional_phases:
+            # Find the next core (non-optional) phase after this optional agent
+            scan_idx = next_idx + 1
+            while scan_idx < len(full_sequence):
+                candidate = full_sequence[scan_idx]
+                if candidate not in phases_completed and candidate not in optional_phases:
+                    # Found the next core phase — run the optional agent alongside it
+                    # Swap: make the core phase primary, optional agent parallel
+                    # This way implementation proceeds and optional review runs alongside
+                    parallel_with = next_agent  # optional agent becomes parallel
+                    next_agent = candidate      # core phase becomes primary
+                    next_idx = scan_idx
+                    break
+                scan_idx += 1
+
     return _build_phase_action(next_agent, state, config, task_dir, parallel_with=parallel_with)
 
 
@@ -1446,9 +1490,12 @@ def _build_phase_action(
     # Normalize knowledge_base to primary path string for template substitution
     kb_config = config.get("knowledge_base", "docs/ai-context/")
     kb_primary_path = kb_config[0] if isinstance(kb_config, list) and kb_config else (kb_config if isinstance(kb_config, str) else "docs/ai-context/")
+    # Use absolute task_dir for template substitution — in worktrees, the relative
+    # .tasks/ path depends on a symlink that may be broken.  Absolute paths are reliable.
+    task_dir_str = str(task_dir.parent) + "/"  # e.g., "/mnt/c/git/repo/.tasks/"
     variables = {
         "knowledge_base": kb_primary_path,
-        "task_directory": config.get("task_directory", ".tasks/"),
+        "task_directory": task_dir_str,
         "task_id": task_id,
         "task_dir": str(task_dir),
         "kb_path": kb_inv.get("path", "docs/ai-context/"),
@@ -1561,6 +1608,22 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
     task_md = task_dir / "task.md"
     if task_md.exists():
         files.append(str(task_md))
+
+    # Axiom miner output (available to planner and architect)
+    if agent in ("planner", "architect"):
+        axiom_output = task_dir / "axiom_miner.md"
+        if axiom_output.exists():
+            files.append(str(axiom_output))
+        # Also check hyphenated variant
+        axiom_output_alt = task_dir / "axiom-miner.md"
+        if axiom_output_alt.exists() and str(axiom_output_alt) not in files:
+            files.append(str(axiom_output_alt))
+
+    # Architect gets planner output (plan review gate)
+    if agent == "architect":
+        planner_output = task_dir / "planner.md"
+        if planner_output.exists():
+            files.append(str(planner_output))
 
     # Agent-specific context — support both old (architect/developer) and new (planner) outputs
     if agent in ("developer", "reviewer", "skeptic"):
@@ -1894,6 +1957,16 @@ def crew_parse_agent_output(
         recommendation = rec_match.group(1).strip().upper()
         extracted["recommendation"] = recommendation
         if recommendation == "REVISE":
+            has_blocking_issues = True
+
+    # Parse <verdict> (from architect — plan review gate)
+    verdict_match = re.search(r'<verdict>\s*(.*?)\s*</verdict>', output_text, re.DOTALL)
+    if verdict_match:
+        verdict = verdict_match.group(1).strip().upper()
+        extracted["verdict"] = verdict
+        if verdict == "REVISE":
+            has_blocking_issues = True
+        elif verdict == "ESCALATE":
             has_blocking_issues = True
 
     # Parse <ai_context_refs> (from planner)

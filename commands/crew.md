@@ -10,7 +10,7 @@ Run: `python3 {__scripts_dir__}/crew_orchestrator.py init --host {__platform__} 
 
 The script returns JSON with `action` and routing details. Handle by action:
 
-- **start** → Display task summary (ID, mode, optional agents), then run Context Preparation and Beads Integration (below), then enter Action Loop with `result.next`
+- **start** → Display task summary (ID, mode, optional agents), then run LLM Triage (if needed), Context Preparation, and Beads Integration (below), then enter Action Loop with `result.next`
 - **resume** → Display `result.resume_state.display_summary`, enter Action Loop with `result.next`
 - **status** → List `.tasks/` contents and show active workflows
 - **config** → Call `config_get_effective()` and display configuration
@@ -32,6 +32,20 @@ Or include `--no-resume` in the `/crew` arguments string:
 **Resume health warnings:** When resuming, check `result.resume_state.recovery_needed` and `result.resume_state.stale_phase_warning`. If set, display the warning to the user before entering the action loop:
 - `recovery_needed`: Missing output files for completed phases — suggest re-running affected phases
 - `stale_phase_warning`: Current phase has been running >30 min with no output — may indicate a crash
+
+### LLM Triage Fallback (if needed)
+
+If `result.mode_confidence < config.llm_triage.confidence_threshold` (default 0.8) and `config.llm_triage.enabled` is true:
+
+1. Spawn Haiku (1 turn) with model `config.llm_triage.model` (default: haiku):
+   ```
+   Agent(model: "haiku", prompt: "Classify this software task into exactly one mode. Respond with JSON only, no explanation.\n\nModes:\n- quick: trivial change — typo, rename, single-field addition, config tweak, one-file fix\n- standard: routine feature, refactor, multi-file change, non-trivial addition\n- thorough: security-sensitive, database migration, breaking API change, auth, crypto\n\nTask: <task_description>\nFiles: <files_affected or 'none'>\n\n{\"mode\": \"<quick|standard|thorough>\", \"reason\": \"<one sentence>\"}")
+   ```
+2. Parse the JSON response. If the LLM mode differs from `result.mode`:
+   - Call `workflow_set_mode(mode=<llm_mode>, task_id=<task_id>)`
+   - Re-call `crew_get_next_phase(task_id=<task_id>)` to update `result.next`
+   - Log the override: `python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role system --content "LLM triage override: <old_mode> → <llm_mode> (reason: <reason>)" --type message --phase init`
+3. If the LLM call fails or times out and `config.llm_triage.fallback_to_local` is true, keep the original detection result.
 
 ### Context Preparation (if configured)
 
@@ -69,7 +83,7 @@ Loop on the returned JSON action from the orchestrator:
    ```
    Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: "<composed prompt>")
    ```
-6. Save agent output to `.tasks/<task_id>/<agent>.md`
+6. Save agent output to `<next.variables.task_dir>/<agent>.md` (use the absolute task_dir path, not a relative `.tasks/` path — critical for worktree support)
 7. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model <next.model>]`
 8. If `result.parse_result.unaddressed_concerns` is non-empty, display them to the user:
    ```
@@ -175,13 +189,12 @@ The main workflow is complete, but the Technical Writer should run asynchronousl
 
 When building prompts for agents, include:
 1. **Agent prompt** from `~/{__platform_dir__}/agents/<agent>.md`
-2. **Task description** from `.tasks/<task_id>/task.md`
-3. **Previous agent outputs** (context_files from orchestrator response)
-4. **Gemini analysis** (if available, extract relevant section)
-5. **Knowledge base inventory** (list files, substitute `{knowledge_base}` path)
-6. **Variable substitution**: Replace `{knowledge_base}` and `{task_directory}` with config values
-7. **Convention injection** (implementer + quality_guard): If `next.convention_files` exists, read each file and include under a `## Mandatory Conventions (from ai-context)` header in the prompt. These are actual convention files referenced by the Planner for the implementer to follow exactly.
-8. **Human guidance trail**: Read `.tasks/<task_id>/interactions.jsonl` and include any entries with `role: "human"` and `type` in `["guidance", "correction", "new_requirement", "question"]` under a `## Human Guidance` header. This ensures agents have full context of user corrections and requirements given during the workflow. Skip if the file is empty or missing.
+2. **Task description and context files**: Read ALL paths from `next.context_files` (these are absolute paths resolved by the MCP server — they work correctly in worktrees). Do NOT construct `.tasks/` paths yourself; always use the paths from the orchestrator response.
+3. **Gemini analysis** (if available, extract relevant section)
+4. **Knowledge base inventory** (list files, substitute `{knowledge_base}` path)
+5. **Variable substitution**: Replace `{knowledge_base}`, `{task_directory}`, and `{task_dir}` with values from `next.variables`. Note: `{task_directory}` is an absolute path to the tasks directory (resolved through git for worktree support).
+6. **Convention injection** (implementer + quality_guard): If `next.convention_files` exists, read each file and include under a `## Mandatory Conventions (from ai-context)` header in the prompt. These are actual convention files referenced by the Planner for the implementer to follow exactly.
+7. **Human guidance trail**: Use `next.variables.task_dir` (absolute path) to read `interactions.jsonl` from the task directory. Include any entries with `role: "human"` and `type` in `["guidance", "correction", "new_requirement", "question"]` under a `## Human Guidance` header. This ensures agents have full context of user corrections and requirements given during the workflow. Skip if the file is empty or missing.
 
 ## Error Handling
 

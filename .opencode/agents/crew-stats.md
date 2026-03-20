@@ -35,4 +35,4 @@ When working in a shared repository:
 
 ## Command: /crew-stats
 
-Run `python3 /mnt/c/git/agentic-workflow/scripts/crew-stats.py` and display the output to the user.
+Run `python3 C:\git\agentic-workflow\scripts/crew-stats.py` and display the output to the user.

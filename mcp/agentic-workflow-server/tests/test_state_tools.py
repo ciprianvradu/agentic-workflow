@@ -217,11 +217,11 @@ class TestWorkflowTransitions:
         workflow_initialize(task_id="TASK_TEST_010")
         workflow_transition("planner", task_id="TASK_TEST_010")
 
-        result = workflow_transition("reviewer", task_id="TASK_TEST_010")
+        result = workflow_transition("architect", task_id="TASK_TEST_010")
 
         assert result["success"] is True
         assert result["from_phase"] == "planner"
-        assert result["to_phase"] == "reviewer"
+        assert result["to_phase"] == "architect"
 
     def test_invalid_skip_transition(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_011")
@@ -236,6 +236,7 @@ class TestWorkflowTransitions:
     def test_loopback_to_planner(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_012")
         workflow_transition("planner", task_id="TASK_TEST_012")
+        workflow_transition("architect", task_id="TASK_TEST_012")
         workflow_transition("reviewer", task_id="TASK_TEST_012")
 
         # Add a review issue to trigger loopback condition
@@ -602,6 +603,76 @@ class TestWorkflowModes:
 
         assert result["mode"] == "standard"
         assert "refactor" in [k.lower() for k in result["matched_keywords"]]
+
+    def test_detect_mode_quick_add_field(self, clean_tasks_dir):
+        """Adding a field/property should be quick mode."""
+        result = workflow_detect_mode("Add timestamp field to the response")
+        assert result["mode"] == "quick"
+
+    def test_detect_mode_quick_add_to_endpoint(self, clean_tasks_dir):
+        """Adding fields to a specific endpoint should be quick mode."""
+        result = workflow_detect_mode(
+            "Add a `timestamp` (ISO 8601) and `uptime` (seconds) field "
+            "to the `/health` endpoint response. @src/routes/health.ts"
+        )
+        assert result["mode"] == "quick"
+
+    def test_detect_mode_quick_add_property(self, clean_tasks_dir):
+        """Adding a property to a model should be quick mode."""
+        result = workflow_detect_mode("Add a status property to the user model")
+        assert result["mode"] == "quick"
+
+    def test_detect_mode_quick_single_file_ref(self, clean_tasks_dir):
+        """Single @file ref with generic 'add' should downgrade to quick."""
+        result = workflow_detect_mode("Add logging to the handler @src/handler.ts")
+        assert result["mode"] == "quick"
+
+    def test_detect_mode_standard_add_feature(self, clean_tasks_dir):
+        """'Add feature' should stay standard — not trivially additive."""
+        result = workflow_detect_mode("Add a new feature for user notifications")
+        assert result["mode"] == "standard"
+
+    def test_detect_mode_thorough_add_column_database(self, clean_tasks_dir):
+        """Adding a database column should be thorough despite additive pattern."""
+        result = workflow_detect_mode("Add created_at column to the database users table")
+        assert result["mode"] == "thorough"
+
+    def test_detect_mode_standard_implement_with_file_ref(self, clean_tasks_dir):
+        """'Implement' with @file should stay standard — not trivially additive."""
+        result = workflow_detect_mode("Implement the login page @src/pages/login.tsx")
+        assert result["mode"] == "standard"
+
+    def test_detect_mode_multiline_additive_pattern(self, clean_tasks_dir):
+        """Task file with heading + multiline content should detect quick via additive pattern."""
+        task_content = (
+            "# Task: Add timestamp field\n"
+            "\n"
+            "Add a `timestamp` (ISO 8601) and `uptime` (seconds) field "
+            "to the `/health` endpoint response."
+        )
+        result = workflow_detect_mode(task_content)
+        assert result["mode"] == "quick"
+
+    def test_detect_mode_files_affected_single_file(self, clean_tasks_dir):
+        """files_affected with one file and no @refs in description → single-file heuristic fires."""
+        result = workflow_detect_mode(
+            "Add logging to the handler",
+            files_affected=["src/routes/health.ts"]
+        )
+        assert result["mode"] == "quick"
+
+    def test_detect_mode_files_affected_sensitive_path(self, clean_tasks_dir):
+        """files_affected referencing auth path should NOT downgrade to quick."""
+        result = workflow_detect_mode(
+            "Add logging to the handler",
+            files_affected=["src/auth/handler.ts"]
+        )
+        assert result["mode"] != "quick"
+
+    def test_detect_mode_at_ref_sensitive_path(self, clean_tasks_dir):
+        """@file ref to auth path should NOT downgrade to quick."""
+        result = workflow_detect_mode("Add logging @src/auth/handler.ts")
+        assert result["mode"] != "quick"
 
     def test_set_mode_explicit(self, clean_tasks_dir):
         workflow_initialize(task_id="TASK_TEST_100")

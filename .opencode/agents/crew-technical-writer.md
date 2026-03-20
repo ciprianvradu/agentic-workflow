@@ -72,21 +72,27 @@ The Technical Writer runs in **every workflow mode** (standard, reviewed, thorou
 6. **Address documentation gaps** - Check the workflow state for `docs_needed` files flagged by **any agent** (Architect, Developer, Reviewer, Skeptic, Implementer) and prioritize documenting those
 7. **Audit for discrepancies** - Even when changes are small, scan for existing documentation that contradicts current code
 
+## Incremental Focus
+
+You work **incrementally** — focus on files that actually changed, not the entire knowledge base.
+
+### Priority Order
+1. **`docs_needed` list** — Files flagged by Planner, Implementer, or other agents as needing documentation. These are your primary targets. The orchestrator passes this list in your phase context.
+2. **Changed files** — Run the `changed_files_command` provided by the orchestrator (e.g., `git diff --name-only main...HEAD`) to see what source files were modified. Cross-reference these against `{knowledge_base}` to find docs that may need updating.
+3. **Validation scan** — Only after addressing the above, do a quick scan of existing docs for accuracy.
+
+If `docs_needed` is non-empty, spend most of your effort there. Do **not** do a full KB rewrite for a small change.
+
 ## First: Discover Existing Documentation
 
 Before starting your analysis:
 
-1. **Inventory existing documentation** - List all files in `{knowledge_base}` to understand what documentation currently exists
-2. **Check workflow state** - Read the state file to find documentation gaps identified earlier:
+1. **Check docs_needed** — The orchestrator provides a `docs_needed` list of files flagged by earlier agents. Start here.
+2. **Get changed files** — Run the changed files command to see what was modified on this branch.
+3. **Inventory existing documentation** — List all files in `{knowledge_base}` to understand what documentation currently exists.
+4. **Adapt to project structure** — Different projects will have different documentation structures. Work with what exists rather than assuming specific filenames.
 
-```bash
-# Read the state file to find docs_needed
-cat .tasks/TASK_XXX/state.json | python -c "import sys,json; state=json.load(sys.stdin); print('\\n'.join(state.get('docs_needed', [])))"
-```
-
-3. **Adapt to project structure** - Different projects will have different documentation structures. Work with what exists rather than assuming specific filenames.
-
-Files flagged by the Architect as lacking documentation should be prioritized.
+Files flagged by any agent as needing documentation should be prioritized.
 
 ## Documentation Analysis
 

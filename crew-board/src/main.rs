@@ -225,23 +225,12 @@ fn main() -> Result<()> {
                 Ok(result) => {
                     app.show_splash = false;
                     let task_id = result.task_id.clone();
-                    let shell_cmd = match host {
-                        launcher::AiHost::Shell => String::new(),
-                        launcher::AiHost::Copilot | launcher::AiHost::OpenCode => {
-                            host.command().to_string()
-                        }
-                        _ => format!("{} \"/crew resume {}\"", host.command(), task_id),
-                    };
                     let work_dir = result.worktree_abs.clone();
                     let color_idx = Some(result.color_scheme_index);
-                    if shell_cmd.is_empty() {
-                        app.spawn_terminal(&task_id, host.label(), "bash", &[], &work_dir, color_idx);
-                    } else {
-                        app.spawn_terminal(
-                            &task_id, host.label(), "bash",
-                            &["-lc".to_string(), shell_cmd], &work_dir, color_idx,
-                        );
-                    }
+                    let (command, args) = launcher::embed_cmd_args(host, &task_id);
+                    app.spawn_terminal(
+                        &task_id, host.label(), &command, &args, &work_dir, color_idx,
+                    );
                     app.active_view = app::ActiveView::Terminals;
                     app.refresh();
                 }
@@ -287,6 +276,18 @@ fn main() -> Result<()> {
         DisableBracketedPaste
     )?;
     terminal.show_cursor()?;
+
+    // On Windows, ClosePseudoConsole can deadlock if the ConPTY output pipe
+    // isn't fully drained (the reader thread is blocked on read()). Since we've
+    // already restored the terminal, force-exit to avoid hanging.
+    // The OS will clean up all child processes and handles.
+    if cfg!(target_os = "windows") {
+        if let Some(ref mgr) = app.terminal_manager {
+            if !mgr.terminals.is_empty() {
+                std::process::exit(result.as_ref().map_or(1, |_| 0));
+            }
+        }
+    }
 
     result
 }

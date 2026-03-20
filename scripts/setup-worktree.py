@@ -992,13 +992,15 @@ def main():
     main_tasks_abs = os.path.join(main_repo_abs, ".tasks")
 
     # Symlink .tasks/ (falls back to NTFS junction on native Windows)
+    # Use a relative path so the symlink works from both WSL and native Windows.
     symlink_target = os.path.join(worktree_abs, ".tasks")
+    rel_tasks_path = os.path.relpath(main_tasks_abs, worktree_abs)
     if not dry_run:
         if os.path.islink(symlink_target) or os.path.exists(symlink_target):
             _remove_symlink_or_junction(symlink_target)
-        _symlink_or_junction(main_tasks_abs, symlink_target)
+        _symlink_or_junction(rel_tasks_path, symlink_target)
     else:
-        print(f"  [dry-run] Would symlink {symlink_target} -> {main_tasks_abs}", file=sys.stderr)
+        print(f"  [dry-run] Would symlink {symlink_target} -> {rel_tasks_path}", file=sys.stderr)
 
     # Write .crew-resume for AI hosts that don't accept prompt arguments
     resume_file = os.path.join(worktree_abs, ".crew-resume")

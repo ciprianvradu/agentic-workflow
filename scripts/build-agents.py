@@ -27,11 +27,11 @@ ORCHESTRATORS_DIR = REPO_ROOT / "config" / "platform-orchestrators"
 
 # Agent name → short description for frontmatter
 AGENT_DESCRIPTIONS = {
-    "architect": "Senior Software Architect — analyzes system-wide implications",
+    "architect": "Senior Architect — reviews and gates the Planner's implementation plan",
     "developer": "Senior Developer — creates detailed implementation plans",
     "reviewer": "Plan Reviewer — validates completeness and correctness",
     "skeptic": "Devil's Advocate — stress-tests plans for failure modes",
-    "planner": "Combined architect and developer — system analysis + step-by-step planning in one pass",
+    "planner": "Planner — system analysis + step-by-step implementation planning in one pass",
     "implementer": "Implementer — executes plans step-by-step",
     "feedback": "Feedback Analyst — compares implementation vs plan",
     "quality-guard": "Quality Guard — reviews and fixes code quality, reuse, efficiency, and convention adherence",
@@ -40,6 +40,8 @@ AGENT_DESCRIPTIONS = {
     "performance-analyst": "Performance Analyst — identifies bottlenecks and scalability issues",
     "api-guardian": "API Guardian — protects API contracts and backward compatibility",
     "accessibility-reviewer": "Accessibility Reviewer — ensures WCAG compliance",
+    "axiom-miner": "Axiom Miner — surfaces hidden assumptions and unwritten rules before planning",
+    "design-challenger": "Design Challenger — challenges whether the proposed approach is the best one",
     "orchestrator": "Workflow Orchestrator — coordinates the multi-agent workflow",
     "crew-worktree": "Worktree Creator — creates isolated git worktrees for parallel crew workflows",
     "crew-status": "Workflow Status — read-only overview of all tasks, worktrees, and model health",
@@ -77,6 +79,8 @@ GEMINI_AGENT_TOOLS = {
     "performance-analyst":   ["read_file", "search_file_content", "list_directory", "run_shell_command"],
     "api-guardian":          ["read_file", "search_file_content", "list_directory"],
     "accessibility-reviewer": ["read_file", "search_file_content", "list_directory"],
+    "axiom-miner":           ["read_file", "search_file_content", "list_directory"],
+    "design-challenger":     ["read_file", "search_file_content", "list_directory"],
     "crew-worktree":          ["read_file", "write_file", "list_directory", "run_shell_command"],
     "crew-status":            ["read_file", "list_directory", "run_shell_command"],
 }
@@ -97,6 +101,8 @@ OPENCODE_AGENT_TOOLS = {
     "performance-analyst":   {"write": False, "edit": False, "patch": False},
     "api-guardian":          {"write": False, "edit": False, "patch": False},
     "accessibility-reviewer": {"write": False, "edit": False, "patch": False},
+    "axiom-miner":           {"write": False, "edit": False, "patch": False},
+    "design-challenger":     {"write": False, "edit": False, "patch": False},
     "crew-worktree":          {"patch": False},
     "crew-status":            {"write": False, "edit": False, "patch": False},
 }
@@ -160,6 +166,8 @@ OPENCODE_AGENT_PERMISSIONS: dict[str, dict | None] = {
     "performance-analyst":   {"edit": "deny", "bash": _FEEDBACK_BASH, "webfetch": "deny"},
     "api-guardian":          {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
     "accessibility-reviewer": {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
+    "axiom-miner":           {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
+    "design-challenger":     {"edit": "deny", "bash": _READ_ONLY_BASH, "webfetch": "deny"},
     "crew-worktree":          None,
     "crew-status":            {"edit": "deny", "bash": _READ_ONLY_BASH},
 }
@@ -319,7 +327,7 @@ def _merge_hooks_settings(output_dir: Path) -> int:
 
     # Load or create existing settings
     if settings_path.exists():
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
     else:
         settings = {}
 
@@ -612,6 +620,8 @@ GEMINI_MAX_TURNS = {
     "performance-analyst": 30,
     "api-guardian": 30,
     "accessibility-reviewer": 30,
+    "axiom-miner": 20,
+    "design-challenger": 30,
     "crew-worktree": 15,
     "crew-status": 10,
 }
@@ -632,6 +642,8 @@ GEMINI_AGENT_MODELS = {
     "performance-analyst":    "gemini-2.5-pro",
     "api-guardian":           "gemini-2.5-pro",
     "accessibility-reviewer": "gemini-2.0-flash",
+    "axiom-miner":            "gemini-2.5-pro",
+    "design-challenger":      "gemini-2.5-pro",
     "orchestrator":           "gemini-2.5-pro",
     "crew-worktree":          "gemini-2.0-flash",
     "crew-status":            "gemini-2.0-flash",
@@ -750,6 +762,8 @@ OPENCODE_AGENT_MODELS: dict[str, str] = {
     "performance-analyst":    "",
     "api-guardian":           "",
     "accessibility-reviewer": "",
+    "axiom-miner":            "",
+    "design-challenger":      "",
     "orchestrator":           "",
     # Utility agents — could use a cheaper/faster model
     "crew-worktree":          "",
