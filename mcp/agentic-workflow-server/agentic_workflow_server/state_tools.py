@@ -22,6 +22,14 @@ from filelock import FileLock, Timeout
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _FIX_WORKTREE_PATHS_SCRIPT = _REPO_ROOT / "scripts" / "fix-worktree-paths.py"
 
+def _read_tool_version() -> str:
+    """Read tool version from VERSION file at repo root."""
+    version_file = _REPO_ROOT / "VERSION"
+    if version_file.exists():
+        return version_file.read_text().strip()
+    return "unknown"
+
+
 PHASE_ORDER = [
     "planner",
     "architect",
@@ -373,6 +381,7 @@ def _load_state(task_dir: Path) -> dict:
 def _create_default_state(task_id: str) -> dict:
     return {
         "task_id": task_id,
+        "tool_version": _read_tool_version(),
         "phase": None,
         "phases_completed": [],
         "review_issues": [],

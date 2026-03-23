@@ -266,6 +266,58 @@ def slugify(text: str) -> str:
     return text.strip('-')
 
 
+_DOC_FILE_EXTS = {".md", ".txt"}
+
+
+def parse_file_references(description: str, repo_root: Path) -> dict:
+    """Parse @file references from task description.
+
+    Returns:
+        dict with keys:
+        - doc_files: list of (ref_path, abs_path) for .md/.txt files
+        - source_files: list of ref_path strings for non-doc files
+        - clean_description: description with @refs stripped
+    """
+    refs = re.findall(r'@(\S+\.\w+)', description)
+    doc_files: list[tuple[str, Path]] = []
+    source_files: list[str] = []
+    for ref in refs:
+        ext = "." + ref.rsplit(".", 1)[-1] if "." in ref else ""
+        abs_path = repo_root / ref
+        if ext in _DOC_FILE_EXTS and abs_path.exists():
+            doc_files.append((ref, abs_path))
+        else:
+            source_files.append(ref)
+    # Strip @refs from description for clean task text
+    clean = re.sub(r'\s*@\S+\.\w+', '', description).strip()
+    return {
+        "doc_files": doc_files,
+        "source_files": source_files,
+        "clean_description": clean,
+    }
+
+
+def build_task_md(description: str, doc_files: list, source_files: list) -> str:
+    """Build enriched task.md content with embedded doc content and source refs."""
+    lines = [f"# Task\n\n{description}\n"]
+
+    for ref_path, abs_path in doc_files:
+        try:
+            content = abs_path.read_text().strip()
+            if content:
+                lines.append(f"\n## Reference: {ref_path}\n\n{content}\n")
+        except OSError:
+            lines.append(f"\n## Reference: {ref_path}\n\n*(could not read file)*\n")
+
+    if source_files:
+        lines.append("\n## Source files\n")
+        for ref in source_files:
+            lines.append(f"- {ref}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 def extract_jira_key(text: str) -> Optional[str]:
     """Extract a Jira issue key (e.g., SAD-123) from text."""
     m = re.search(r'\b([A-Z][A-Z0-9]+-\d+)\b', text)
@@ -801,7 +853,14 @@ def main():
     # Step 7: Create task directory + initial state
     # -----------------------------------------------------------------------
     task_dir = tasks_dir / task_id
+
+    # Parse @file references from description
+    file_refs = parse_file_references(args.description, repo_root)
     state = create_initial_state(task_id, args.description)
+
+    # Store source file references in state for agents
+    if file_refs["source_files"]:
+        state["context_files"] = file_refs["source_files"]
 
     # Link Jira issue if detected
     jira_key = extract_jira_key(args.description)
@@ -810,6 +869,15 @@ def main():
 
     if not dry_run:
         save_state(task_dir / "state.json", state)
+
+        # Write enriched task.md with embedded doc content + source refs
+        task_md_content = build_task_md(
+            args.description,
+            file_refs["doc_files"],
+            file_refs["source_files"],
+        )
+        task_md_path = task_dir / "task.md"
+        task_md_path.write_text(task_md_content)
     else:
         print(f"  [dry-run] Would create {task_dir}/state.json", file=sys.stderr)
 

@@ -361,6 +361,31 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _compute_config_delta(effective: dict, defaults: dict) -> dict:
+    """Return only the keys in effective that differ from defaults.
+
+    Recursively walks both dicts. Keys present in effective but absent
+    from defaults are included. Keys identical to defaults are omitted.
+    Returns a nested dict mirroring the original structure, containing
+    only the differences.
+    """
+    delta: dict = {}
+    for key, value in effective.items():
+        default_value = defaults.get(key)
+        if isinstance(value, dict) and isinstance(default_value, dict):
+            sub = _compute_config_delta(value, default_value)
+            if sub:
+                delta[key] = sub
+        elif value != default_value:
+            delta[key] = value
+    return delta
+
+
+def config_compute_delta(effective: dict) -> dict:
+    """Compute config delta from DEFAULT_CONFIG."""
+    return _compute_config_delta(effective, DEFAULT_CONFIG)
+
+
 def _resolve_permission_profile(config: dict) -> dict:
     """Expand permission_profile into checkpoints and auto_actions.
 

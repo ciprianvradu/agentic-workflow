@@ -11,8 +11,10 @@ Usage:
     python3 scripts/crew-stats.py --json     # Output raw JSON
     python3 scripts/crew-stats.py --recent   # Show recent task details
     python3 scripts/crew-stats.py --compare  # Compare tasks by type
+    python3 scripts/crew-stats.py --repos ~/project-a ~/project-b  # Cross-repo
 """
 
+import argparse
 import json
 import sys
 from collections import Counter
@@ -59,22 +61,40 @@ def _fmt_duration(seconds: float) -> str:
     return f"{hours:.1f}h"
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Workflow statistics dashboard")
+    parser.add_argument("--json", action="store_true", help="Output raw JSON")
+    parser.add_argument("--recent", action="store_true", help="Show recent task details")
+    parser.add_argument("--compare", action="store_true", help="Compare tasks by type")
+    parser.add_argument("--repos", nargs="+", metavar="PATH",
+                        help="Aggregate stats across multiple repo paths")
+    return parser.parse_args()
+
+
 # ── Data Loading ─────────────────────────────────────────────────────────────
 
-def load_all_states(tasks_dir: Path) -> list[dict]:
+def load_all_states_multi(tasks_dirs: list[tuple[str, Path]]) -> list[dict]:
+    """Load states from multiple repos, tagging each with repo name."""
     states = []
-    if not tasks_dir.exists():
-        return states
-    for d in sorted(tasks_dir.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):
+    for repo_name, tasks_dir in tasks_dirs:
+        if not tasks_dir.exists():
             continue
-        sf = d / "state.json"
-        if sf.exists():
-            try:
-                states.append(json.loads(sf.read_text()))
-            except Exception:
+        for d in sorted(tasks_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
                 continue
+            sf = d / "state.json"
+            if sf.exists():
+                try:
+                    s = json.loads(sf.read_text())
+                    s["_repo"] = repo_name
+                    states.append(s)
+                except Exception:
+                    continue
     return states
+
+
+def load_all_states(tasks_dir: Path) -> list[dict]:
+    return load_all_states_multi([("local", tasks_dir)])
 
 
 def load_interactions(task_dir: Path) -> list[dict]:
@@ -300,10 +320,62 @@ def compute_stats(states: list[dict], patterns: list[dict]) -> dict:
     }
 
 
+def compute_version_stats(states: list[dict]) -> dict:
+    """Aggregate tool version data across tasks."""
+    version_counts: Counter = Counter()
+    for s in states:
+        version = s.get("tool_version", "unknown")
+        version_counts[version] += 1
+    return {"by_version": dict(version_counts.most_common())}
+
+
+def compute_config_delta_stats(states: list[dict]) -> dict:
+    """Aggregate config delta data — which settings are most commonly changed."""
+    key_counts: Counter = Counter()
+    for s in states:
+        delta = s.get("config_delta", {})
+        _count_delta_keys(delta, "", key_counts)
+    return {"most_customized": dict(key_counts.most_common(10))}
+
+
+def _count_delta_keys(delta: dict, prefix: str, counter: Counter) -> None:
+    for key, value in delta.items():
+        full_key = f"{prefix}{key}" if not prefix else f"{prefix}.{key}"
+        if isinstance(value, dict):
+            _count_delta_keys(value, full_key, counter)
+        else:
+            counter[full_key] += 1
+
+
+def compute_repo_breakdown(states: list[dict]) -> dict:
+    """Group states by repo and compute per-repo summary."""
+    by_repo: dict[str, list[dict]] = {}
+    for s in states:
+        repo = s.get("_repo", "local")
+        by_repo.setdefault(repo, []).append(s)
+
+    breakdown = {}
+    for repo_name, repo_states in sorted(by_repo.items()):
+        completed = [s for s in repo_states if is_complete(s)]
+        total_cost = sum(
+            s.get("cost_tracking", {}).get("totals", {}).get("total_cost", 0)
+            for s in repo_states
+        )
+        versions = Counter(s.get("tool_version", "unknown") for s in repo_states)
+        breakdown[repo_name] = {
+            "total_tasks": len(repo_states),
+            "completed": len(completed),
+            "total_cost": round(total_cost, 4),
+            "versions": dict(versions.most_common(3)),
+        }
+    return breakdown
+
+
 # ── Display ──────────────────────────────────────────────────────────────────
 
 def print_dashboard(stats: dict, cost_stats: dict, concern_stats: dict,
-                    phase_timing: dict) -> None:
+                    phase_timing: dict, version_stats: dict | None = None,
+                    config_delta_stats: dict | None = None) -> None:
     total = stats["total"]
 
     # Task Overview
@@ -392,6 +464,22 @@ def print_dashboard(stats: dict, cost_stats: dict, concern_stats: dict,
         seen = ep["top_pattern"]["times_seen"]
         print(f"  Most common:     \"{sig}\" (seen {seen} times)")
 
+    # Tool Versions
+    if version_stats:
+        version_data = version_stats.get("by_version", {})
+        if version_data:
+            print(f"\nTool Versions:")
+            for version, count in version_data.items():
+                print(f"  {version:<12} {count} tasks")
+
+    # Config Customizations
+    if config_delta_stats:
+        delta_data = config_delta_stats.get("most_customized", {})
+        if delta_data:
+            print(f"\nMost Customized Settings:")
+            for key, count in list(delta_data.items())[:5]:
+                print(f"  {key:<40} {count} tasks")
+
 
 def compute_task_comparison(tasks_dir: Path, states: list[dict]) -> dict:
     """Group tasks by type keywords and compare metrics."""
@@ -467,6 +555,19 @@ def print_comparison(comparison: dict) -> None:
         print(f"  {group_name:<12} {g['count']:>6} {cost_str:>10} {g['avg_phases']:>11.1f} {g['avg_concerns']:>13.1f}")
 
 
+def print_repo_breakdown(breakdown: dict) -> None:
+    """Display per-repo summary when using --repos."""
+    if not breakdown or len(breakdown) <= 1:
+        return
+    print(f"\nPer-Repo Breakdown:")
+    print(f"  {'Repo':<30} {'Tasks':>6} {'Done':>6} {'Cost':>10} {'Version'}")
+    print(f"  {'─' * 30} {'─' * 6} {'─' * 6} {'─' * 10} {'─' * 15}")
+    for repo_name, data in breakdown.items():
+        cost_str = _fmt_cost(data["total_cost"]) if data["total_cost"] > 0 else "-"
+        top_version = next(iter(data["versions"]), "?")
+        print(f"  {repo_name:<30} {data['total_tasks']:>6} {data['completed']:>6} {cost_str:>10} {top_version}")
+
+
 def print_recent(states: list[dict], n: int = 10) -> None:
     """Show details for the N most recent tasks."""
     recent = states[-n:]
@@ -488,25 +589,50 @@ def print_recent(states: list[dict], n: int = 10) -> None:
 
 
 def main():
-    tasks_dir = _find_tasks_dir()
-    states = load_all_states(tasks_dir)
-    patterns = load_error_patterns(tasks_dir)
+    args = _parse_args()
+
+    # Determine which tasks dirs to load from
+    if args.repos:
+        tasks_dirs = []
+        for repo_path in args.repos:
+            p = Path(repo_path).resolve()
+            repo_name = p.name
+            tasks_dir = p / ".tasks"
+            tasks_dirs.append((repo_name, tasks_dir))
+    else:
+        repo_root = _find_repo_root()
+        tasks_dirs = [(repo_root.name, repo_root / ".tasks")]
+
+    # Load states (with repo tagging for multi-repo)
+    states = load_all_states_multi(tasks_dirs)
+
+    # Error patterns only for single-repo mode
+    patterns = load_error_patterns(tasks_dirs[0][1]) if len(tasks_dirs) == 1 else []
 
     stats = compute_stats(states, patterns)
     cost_stats = compute_cost_stats(states)
     concern_stats = compute_concern_stats(states)
-    phase_timing = compute_phase_timing(tasks_dir, states)
+    version_stats = compute_version_stats(states)
+    config_delta_stats = compute_config_delta_stats(states)
 
-    comparison = compute_task_comparison(tasks_dir, states)
+    # Phase timing only for single-repo (needs interactions.jsonl access)
+    phase_timing = compute_phase_timing(tasks_dirs[0][1], states) if len(tasks_dirs) == 1 else {}
 
-    if "--json" in sys.argv:
+    # Task comparison uses first repo's tasks_dir for task.md fallback
+    comparison = compute_task_comparison(tasks_dirs[0][1], states)
+
+    if args.json:
         all_stats = {
             **stats,
             "cost": cost_stats,
             "concerns": concern_stats,
             "phase_timing": phase_timing,
             "comparison": comparison,
+            "versions": version_stats,
+            "config_deltas": config_delta_stats,
         }
+        if args.repos:
+            all_stats["repo_breakdown"] = compute_repo_breakdown(states)
         print(json.dumps(all_stats, indent=2))
         return
 
@@ -514,17 +640,20 @@ def main():
         print("No tasks found in .tasks/")
         return
 
-    if "--compare" in sys.argv:
+    if args.compare:
         print_comparison(comparison)
         return
 
-    if "--recent" in sys.argv:
+    if args.recent:
         print_recent(states)
         return
 
-    print_dashboard(stats, cost_stats, concern_stats, phase_timing)
+    print_dashboard(stats, cost_stats, concern_stats, phase_timing,
+                    version_stats, config_delta_stats)
     if comparison:
         print_comparison(comparison)
+    if args.repos:
+        print_repo_breakdown(compute_repo_breakdown(states))
     print_recent(states)
 
 

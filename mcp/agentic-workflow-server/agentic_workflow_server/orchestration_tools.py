@@ -41,6 +41,7 @@ from .state_tools import (
 from .config_tools import (
     config_get_effective,
     config_get_beads,
+    config_compute_delta,
     _deep_merge,
     DEFAULT_CONFIG,
     PERMISSION_PROFILES,
@@ -474,7 +475,7 @@ def _build_custom_phase_action(
 
         context_files = _get_context_files(phase_name, state, task_dir)
 
-        return {
+        result_action = {
             "action": "spawn_agent",
             "agent": phase_name,
             "agent_prompt_path": prompt_path,
@@ -489,6 +490,26 @@ def _build_custom_phase_action(
             "is_custom_phase": True,
             "output_file": str(task_dir / f"{phase_name}.md"),
         }
+
+        # Assemble complete prompt server-side
+        try:
+            assembled = _assemble_agent_prompt(
+                agent=phase_name,
+                agent_prompt_path=prompt_path,
+                context_files=context_files,
+                convention_files=[],
+                variables=variables,
+                task_dir=task_dir,
+            )
+            result_action["assembled_prompt"] = assembled
+            try:
+                (task_dir / f"{phase_name}-prompt.md").write_text(assembled)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        return result_action
 
     else:
         return {
@@ -869,12 +890,15 @@ def crew_init_task(
         return guard_result
     task_dir_str = init_result["task_dir"]
 
-    # Step 3.5: Store linked_issue if beads option provided
-    if options.get("beads"):
+    # Step 3.5: Store linked_issue and context_files if provided
+    if options.get("beads") or options.get("context_files"):
         task_dir = find_task_dir(task_id)
         if task_dir:
             state = _load_state(task_dir)
-            state["linked_issue"] = options["beads"]
+            if options.get("beads"):
+                state["linked_issue"] = options["beads"]
+            if options.get("context_files"):
+                state["context_files"] = options["context_files"]
             _save_state(task_dir, state)
 
     # Step 4: Determine and set mode
@@ -937,9 +961,36 @@ def crew_init_task(
             with open(task_dir / "config.yaml", "w") as f:
                 json.dump(config, f, indent=2)
 
-        # Save task description
+        # Save task description with embedded doc content and source refs
+        _DOC_EXTS = {".md", ".txt"}
+        task_md_lines = [f"# Task\n\n{task_description}\n"]
+
+        # Embed content from referenced doc files
+        for ref in (options.get("context_files") or []):
+            ext = Path(ref).suffix.lower()
+            if ext in _DOC_EXTS:
+                ref_path = Path(ref) if Path(ref).is_absolute() else (Path.cwd() / ref)
+                if ref_path.exists():
+                    try:
+                        content = ref_path.read_text().strip()
+                        if content:
+                            task_md_lines.append(f"\n## Reference: {ref}\n\n{content}\n")
+                    except OSError:
+                        task_md_lines.append(f"\n## Reference: {ref}\n\n*(could not read file)*\n")
+
+        # List non-doc source files as references
+        source_refs = [
+            ref for ref in (options.get("context_files") or [])
+            if Path(ref).suffix.lower() not in _DOC_EXTS
+        ]
+        if source_refs:
+            task_md_lines.append("\n## Source files\n")
+            for ref in source_refs:
+                task_md_lines.append(f"- {ref}")
+            task_md_lines.append("")
+
         with open(task_dir / "task.md", "w") as f:
-            f.write(f"# Task\n\n{task_description}\n")
+            f.write("\n".join(task_md_lines))
 
     # Log initial user input so every platform gets it automatically
     ai_host = options.get("ai_host", config.get("ai_host", "unknown"))
@@ -1547,6 +1598,26 @@ def _build_phase_action(
         if convention_files:
             result["convention_files"] = convention_files
 
+    # Assemble complete prompt server-side (optional, backward-compatible)
+    try:
+        assembled = _assemble_agent_prompt(
+            agent=agent,
+            agent_prompt_path=agent_prompt_path,
+            context_files=context_files,
+            convention_files=result.get("convention_files", []),
+            variables=variables,
+            task_dir=task_dir,
+        )
+        result["assembled_prompt"] = assembled
+        result["output_file"] = str(task_dir / f"{agent}.md")
+        # Save for debugging
+        try:
+            (task_dir / f"{agent}-prompt.md").write_text(assembled)
+        except Exception:
+            pass
+    except Exception:
+        pass  # Graceful degradation: LLM falls back to manual composition
+
     # Provide docs_needed list and changed_files command for technical_writer
     if agent == "technical_writer":
         docs_needed = state.get("docs_needed", [])
@@ -1577,13 +1648,34 @@ def _build_phase_action(
             par_model = mode_models.get(par_agent) or models_config.get(par_agent) or default_model
             par_effort_result = workflow_get_effort_level(agent=par_agent, task_id=task_id)
             par_effort = par_effort_result.get("effort", "high")
-            parallel_agents_info.append({
+            par_info: dict[str, Any] = {
                 "agent": par_agent,
                 "agent_prompt_path": str(agents_dir / par_prompt_file),
                 "model": par_model,
                 "max_turns": par_max_turns,
                 "effort_level": par_effort,
-            })
+            }
+            # Assemble prompt for parallel agent too
+            try:
+                par_context = _get_context_files(par_agent, state, task_dir)
+                par_conventions = _get_ai_context_convention_files(state) if par_agent in ("implementer", "quality_guard", "security_auditor") else []
+                par_assembled = _assemble_agent_prompt(
+                    agent=par_agent,
+                    agent_prompt_path=str(agents_dir / par_prompt_file),
+                    context_files=par_context,
+                    convention_files=par_conventions,
+                    variables=dict(variables),
+                    task_dir=task_dir,
+                )
+                par_info["assembled_prompt"] = par_assembled
+                par_info["output_file"] = str(task_dir / f"{par_agent}.md")
+                try:
+                    (task_dir / f"{par_agent}-prompt.md").write_text(par_assembled)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            parallel_agents_info.append(par_info)
 
         result["parallel_agents"] = parallel_agents_info
 
@@ -1729,6 +1821,101 @@ def _get_ai_context_convention_files(state: dict) -> list[str]:
             except OSError:
                 continue
     return result
+
+
+def _read_file_safe(path: str, label: str = "") -> str:
+    """Read file content, returning empty string with comment on failure."""
+    try:
+        p = Path(path)
+        if p.exists() and p.is_file():
+            return p.read_text()
+        return f"<!-- {label or path}: file not found -->\n"
+    except Exception as e:
+        return f"<!-- {label or path}: read error: {e} -->\n"
+
+
+def _read_human_guidance(task_dir: Path) -> str:
+    """Read interactions.jsonl and extract human guidance entries as markdown."""
+    interactions_file = task_dir / "interactions.jsonl"
+    if not interactions_file.exists():
+        return ""
+    try:
+        entries = []
+        for line in interactions_file.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+                if (entry.get("role") == "human" and
+                        entry.get("type") in ("guidance", "correction",
+                                               "new_requirement", "question")):
+                    entries.append(entry)
+            except json.JSONDecodeError:
+                continue
+        if not entries:
+            return ""
+        lines = ["## Human Guidance\n"]
+        for entry in entries:
+            etype = entry.get("type", "guidance")
+            content = entry.get("content", "")
+            phase = entry.get("phase", "")
+            prefix = f"[{etype}, {phase}]" if phase else f"[{etype}]"
+            lines.append(f"- {prefix} {content}")
+        return "\n".join(lines) + "\n"
+    except Exception:
+        return ""
+
+
+def _assemble_agent_prompt(
+    agent: str,
+    agent_prompt_path: str,
+    context_files: list,
+    convention_files: list,
+    variables: dict,
+    task_dir: Path,
+) -> str:
+    """Assemble the complete agent prompt from all components.
+
+    Reads all files server-side and applies variable substitution,
+    eliminating LLM file-reading overhead.
+    """
+    sections = []
+
+    # 1. Agent prompt (core instructions)
+    agent_content = _read_file_safe(agent_prompt_path, f"{agent} prompt")
+    sections.append(agent_content)
+
+    # 2. Context files (task.md, previous agent outputs, etc.)
+    if context_files:
+        sections.append("\n---\n\n## Task Context\n")
+        for cf in context_files:
+            filename = Path(cf).name
+            content = _read_file_safe(cf, filename)
+            if content and not content.startswith("<!--"):
+                sections.append(f"### {filename}\n\n{content}\n")
+
+    # 3. Convention files (for implementer, quality_guard, security_auditor)
+    if convention_files:
+        sections.append("\n## Mandatory Conventions (from ai-context)\n")
+        for cf in convention_files:
+            filename = Path(cf).name
+            content = _read_file_safe(cf, filename)
+            if content and not content.startswith("<!--"):
+                sections.append(f"### {filename}\n\n{content}\n")
+
+    # 4. Human guidance trail from interactions.jsonl
+    guidance = _read_human_guidance(task_dir)
+    if guidance:
+        sections.append(f"\n{guidance}")
+
+    # 5. Join and apply variable substitution
+    prompt = "\n".join(sections)
+    for key, value in variables.items():
+        if isinstance(value, str):
+            prompt = prompt.replace(f"{{{key}}}", value)
+
+    return prompt
 
 
 def _get_checkpoint_for_phase(phase: str, config: dict) -> Optional[str]:
@@ -2277,6 +2464,12 @@ def crew_format_completion(
             beads_commands.append("bd sync")
         else:
             beads_commands.append(f"# Skipped: {issue_warning}")
+
+    # Record config delta from defaults for PDCA feedback
+    config_delta = config_compute_delta(config)
+    if config_delta:
+        state["config_delta"] = config_delta
+        _save_state(task_dir, state)
 
     # Release workflow guard so task can be re-run if needed
     workflow_guard_release(task_id=resolved_task_id)

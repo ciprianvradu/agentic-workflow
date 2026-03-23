@@ -67,11 +67,11 @@ Loop on the returned JSON action from the orchestrator:
 
 #### action: "spawn_agent"
 
-1. Read agent prompt from `next.agent_prompt_path`
-2. Compose prompt using Agent Prompt Composition (below)
-3. If `next.beads_comment`, run: `bd comments add <issue> "<comment>"`
-4. If `next.parallel_agents` is set (list of agent dicts with agent, model, max_turns, effort_level, agent_prompt_path):
+1. **Prompt resolution**: If `next.assembled_prompt` exists, use it directly as the agent prompt (skip Agent Prompt Composition below — the orchestrator already read all files, applied variable substitution, and included human guidance). Otherwise, fall back to reading `next.agent_prompt_path` and composing manually using Agent Prompt Composition (below).
+2. If `next.beads_comment`, run: `bd comments add <issue> "<comment>"`
+3. If `next.parallel_agents` is set (list of agent dicts with agent, model, max_turns, effort_level, agent_prompt_path, assembled_prompt):
    - Spawn ALL agents simultaneously: the primary agent in foreground + each parallel agent with `run_in_background: true`
+   - Use `assembled_prompt` from each agent dict when available
    - Primary agent uses `model: next.model`; each parallel agent uses its own `model` from the list
    - Call `workflow_start_parallel_phase` with all phase names (primary + all parallel)
    - Wait for all parallel agents with TaskOutput
@@ -79,12 +79,12 @@ Loop on the returned JSON action from the orchestrator:
    - In `agent-done` calls, pass the actual model used for each agent
    Alternatively, if only `next.parallel_with` is set (single string, backwards compat):
    - Same as above but with just 2 agents (primary + one parallel agent using `next.parallel_agent_model`)
-5. Otherwise spawn single agent:
+4. Otherwise spawn single agent:
    ```
-   Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: "<composed prompt>")
+   Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: "<next.assembled_prompt OR composed prompt>")
    ```
-6. Save agent output to `<next.variables.task_dir>/<agent>.md` (use the absolute task_dir path, not a relative `.tasks/` path — critical for worktree support)
-7. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model <next.model>]`
+5. Save agent output to `next.output_file` (if set) or `<next.variables.task_dir>/<agent>.md`
+6. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--input-tokens N --output-tokens N --model <next.model>]`
 8. If `result.parse_result.unaddressed_concerns` is non-empty, display them to the user:
    ```
    **Unaddressed Concerns ({count}):**

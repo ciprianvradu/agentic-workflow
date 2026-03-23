@@ -96,6 +96,8 @@ Because the hook fires on every session stop (including ad-hoc user interactions
 
 **Reporting**: `scripts/crew-cost-report.py` reads `costs.jsonl` first; falls back to `state.json cost_tracking.entries[]` if the file is absent. Pricing is unified with `state_tools.py`: opus $5/$25, sonnet $3/$15, haiku $0.80/$4 per million tokens (input/output).
 
+**Cross-repo stats**: `scripts/crew-stats.py --repos ~/project-a ~/project-b` aggregates task states from multiple repositories. Includes per-repo breakdown (tasks, completions, cost, tool versions), version distribution, and most-customized config settings. Without `--repos`, behavior is unchanged (single-repo mode).
+
 #### Mode & Effort
 - `workflow_detect_mode(description)` — Auto-detect workflow mode from task text
 - `workflow_set_mode(mode)` / `workflow_get_mode()` — Manual mode control
@@ -145,10 +147,14 @@ The detection logic is in `workflow_detect_mode()` — pure Python, no LLM invol
 - `planner_mode: full` — forces full two-phase planning regardless of host
 - When `host_aware.enabled: false`, `planner_mode` is always `full`
 
+**Assembled Prompts:** `_build_phase_action()` and `_build_custom_phase_action()` return an `assembled_prompt` field containing the fully-composed agent prompt (agent instructions + context files + convention files + human guidance + variable substitution). This eliminates LLM file-reading overhead between agents. If assembly fails, the field is omitted and the LLM falls back to manual composition. Debug copies are saved to `<task_dir>/<agent>-prompt.md`.
+
 **Internal helpers (prefixed with `_`):**
 - `_load_state(task_dir)` / `_save_state(task_dir, state)` — JSON I/O with file locking
 - `_build_resume_prompt(task_id, path, ai_host)` — Platform-specific resume prompt
 - `find_task_dir(task_id)` — Locate `.tasks/TASK_XXX/` directory
+- `_assemble_agent_prompt(agent, path, context_files, conventions, variables, task_dir)` — Server-side prompt assembly
+- `_read_human_guidance(task_dir)` — Extract human guidance from interactions.jsonl
 
 ### config_tools.py — Configuration (~900 lines)
 
@@ -340,6 +346,7 @@ New settings added in TASK_083:
 ```json
 {
   "task_id": "TASK_002",
+  "tool_version": "0.9.0",
   "phase": "implementer",
   "phases_completed": ["planner", "reviewer"],
   "review_issues": [],
@@ -367,11 +374,16 @@ New settings added in TASK_083:
       "color_scheme": "Crew Sunset"
     }
   },
+  "config_delta": {"phases": {"skip_optional": true}},
   "description": "task description text",
   "created_at": "...",
   "updated_at": "..."
 }
 ```
+
+**PDCA feedback fields** (added for continuous improvement):
+- `tool_version` — Set at task creation by `_read_tool_version()`, reads from `VERSION` file at repo root. Older tasks without this field show as `"unknown"` in stats.
+- `config_delta` — Set at workflow completion by `crew_format_completion()`. Contains only config keys that differ from `DEFAULT_CONFIG`, computed by `config_compute_delta()` in `config_tools.py`. Empty deltas are not stored.
 
 **File locking**: `_save_state()` uses `filelock` to prevent concurrent writes. Lock files are `state.json.lock`. See also the Filelock Fallback pattern under Cross-Platform Fallback Patterns below.
 
