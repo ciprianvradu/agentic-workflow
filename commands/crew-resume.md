@@ -4,85 +4,43 @@ Resume an existing workflow from its saved state.
 
 ## Command: /crew-resume $ARGS
 
-Arguments should be a task ID like `TASK_042` or a path like `.tasks/TASK_042_auth-jwt`.
+Arguments should be a task ID like `TASK_042` or a path like `.tasks/TASK_042`.
 
-### Step 1: Load State
+### Step 1: Let the Orchestrator Find Everything
 
-Read `.tasks/TASK_XXX/state.json`:
+Run: `python3 {__scripts_dir__}/crew_orchestrator.py init --host {__platform__} --args "$ARGS"`
 
-```json
-{
-  "task_id": "TASK_042",
-  "description": "Add user authentication with JWT",
-  "phase": "implementer",
-  "phases_completed": ["planner", "reviewer"],
-  "review_issues": [],
-  "iteration": 1,
-  "docs_needed": [],
-  "implementation_progress": {
-    "total_steps": 20,
-    "current_step": 13,
-    "steps_completed": ["1.1", "1.2", "1.3", "2.1", "2.2", "2.3"]
-  },
-  "created_at": "2024-01-15T10:30:00Z",
-  "updated_at": "2024-01-15T12:30:00Z"
-}
-```
+The orchestrator handles all path resolution automatically:
+- Detects worktrees and resolves `.tasks/` to the main repo
+- Finds the active task from `.active_task` file or recent state
+- Reads `state.json`, determines resume point
+- Returns `action: "resume"` with full context
 
-### Step 2: Load Context
+**Do NOT search for `.tasks/` directories or read `state.json` yourself.** The orchestrator does this and returns everything you need.
 
-Load all saved artifacts:
-- `.tasks/TASK_XXX/planner.md` - Planner analysis and plan
-- `.tasks/TASK_XXX/reviewer.md` - Reviewer feedback
-- `.tasks/TASK_XXX/plan.md` - Final implementation plan
+### Step 2: Display Resume Summary
 
-### Step 3: Determine Resume Point
-
-Based on `current_phase` and `current_agent`:
-
-**If in Planning phase:**
-- Resume the planning loop at the current agent
-- Provide previous agent outputs as context
-
-**If in Implementation phase:**
-- Load plan.md
-- Find first unchecked step
-- Resume implementation from there
-
-**If at Checkpoint:**
-- Show checkpoint summary
-- Ask human how to proceed
-
-### Step 4: Show Resume Summary
+From `result.resume_state.display_summary`, show the user where we left off:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Resuming: TASK_042 - auth-jwt                               │
+│ Resuming: TASK_042 - description                            │
 ├─────────────────────────────────────────────────────────────┤
-│ Where we left off:                                          │
-│   Phase: Implementation                                     │
-│   Last completed: Step 2.3 - Added auth middleware          │
-│   Progress: 60% (12/20 steps)                              │
-│                                                             │
-│ What's next:                                                │
-│   Step 2.4 - Add token refresh endpoint                     │
-│                                                             │
-│ Context loaded:                                             │
-│   ✓ Architect analysis                                      │
-│   ✓ Implementation plan (20 steps)                          │
-│   ✓ Previous checkpoints (25%, 50%)                         │
+│ Phase: [current phase]                                      │
+│ Progress: [completed phases] / [total phases]               │
+│ Last activity: [timestamp]                                  │
 └─────────────────────────────────────────────────────────────┘
-
-Ready to continue?
 ```
 
-### Step 5: Continue Workflow
+Check `result.resume_state.recovery_needed` and `result.resume_state.stale_phase_warning` — display warnings if set.
 
-Based on state, invoke the appropriate agent:
-- Load agent prompt from `~/{__platform_dir__}/agents/`
-- Provide all necessary context
-- Continue workflow loop
+### Step 3: Enter Action Loop
 
-Now, find and resume the specified task:
+Use `result.next` to enter the action loop from `/crew`:
+- `next.assembled_prompt` contains the complete agent prompt (use directly)
+- `next.output_file` is where to save agent output
+- Follow the same action loop as `/crew` (spawn_agent → agent-done → loop)
+
+Now, resume the specified task:
 
 Task ID: $ARGS

@@ -1303,7 +1303,25 @@ def crew_get_next_phase(
 
     # Check if current phase is complete
     if current_phase not in phases_completed:
-        # Current phase still running - check for checkpoint
+        # Check if the phase has actually produced output
+        output_file = task_dir / f"{current_phase}.md"
+        has_output = output_file.exists() and output_file.stat().st_size > 0
+
+        if not has_output:
+            # Phase was started but never produced output (stale/crashed).
+            # Skip checkpoint and re-spawn the agent directly.
+            # Check if it's a custom phase
+            custom_in_seq = state.get("custom_phases_in_sequence", [])
+            if current_phase in custom_in_seq:
+                custom_phases = _load_custom_phases(config)
+                if current_phase in custom_phases:
+                    return _build_custom_phase_action(
+                        current_phase, custom_phases[current_phase],
+                        state, config, task_dir
+                    )
+            return _build_phase_action(current_phase, state, config, task_dir)
+
+        # Phase has output — check for checkpoint
         checkpoint = _get_checkpoint_for_phase(current_phase, config)
         if checkpoint:
             concerns = state.get("concerns", [])
@@ -1693,101 +1711,80 @@ def _build_phase_action(
 
 
 def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
-    """Determine which context files an agent needs."""
+    """Determine which context files an agent needs.
+
+    Phase-aware: each agent gets only the artifacts it needs, not everything.
+    Custom phases (ba_designer, product_manager) get prior custom phase outputs.
+    """
     files = []
 
+    def _add(name: str) -> None:
+        f = task_dir / name
+        if f.exists() and str(f) not in files:
+            files.append(str(f))
+
     # Always include task description
-    task_md = task_dir / "task.md"
-    if task_md.exists():
-        files.append(str(task_md))
+    _add("task.md")
 
-    # Axiom miner output (available to planner and architect)
+    # Custom phases: chain outputs from prior custom phases
+    custom_in_seq = state.get("custom_phases_in_sequence", [])
+    if agent in custom_in_seq:
+        idx = custom_in_seq.index(agent)
+        for prior in custom_in_seq[:idx]:
+            _add(f"{prior}.md")
+
+    # Planner/architect: axiom miner + prior custom phase outputs
     if agent in ("planner", "architect"):
-        axiom_output = task_dir / "axiom_miner.md"
-        if axiom_output.exists():
-            files.append(str(axiom_output))
-        # Also check hyphenated variant
-        axiom_output_alt = task_dir / "axiom-miner.md"
-        if axiom_output_alt.exists() and str(axiom_output_alt) not in files:
-            files.append(str(axiom_output_alt))
+        _add("axiom_miner.md")
+        _add("axiom-miner.md")
+        # Include custom phase outputs (BA, PM verdicts)
+        for cp in custom_in_seq:
+            _add(f"{cp}.md")
 
-    # Architect gets planner output (plan review gate)
+    # Architect gets planner output
     if agent == "architect":
-        planner_output = task_dir / "planner.md"
-        if planner_output.exists():
-            files.append(str(planner_output))
+        _add("planner.md")
 
-    # Agent-specific context — support both old (architect/developer) and new (planner) outputs
+    # Developer/reviewer/skeptic: planner + architect (old pipeline)
     if agent in ("developer", "reviewer", "skeptic"):
-        # Old pipeline: architect output
-        arch_output = task_dir / "architect.md"
-        if arch_output.exists():
-            files.append(str(arch_output))
-        # New pipeline: planner output
-        planner_output = task_dir / "planner.md"
-        if planner_output.exists():
-            files.append(str(planner_output))
+        _add("architect.md")
+        _add("planner.md")
 
     if agent in ("reviewer", "skeptic", "implementer"):
-        dev_output = task_dir / "developer.md"
-        if dev_output.exists():
-            files.append(str(dev_output))
-        # New pipeline: planner output (if not already added)
-        planner_output = task_dir / "planner.md"
-        if planner_output.exists() and str(planner_output) not in files:
-            files.append(str(planner_output))
+        _add("developer.md")
+        if agent != "implementer":
+            _add("planner.md")
 
+    # Implementer: needs the plan, not the analysis artifacts
     if agent == "implementer":
-        plan = task_dir / "plan.md"
-        if plan.exists():
-            files.append(str(plan))
-        review = task_dir / "reviewer.md"
-        if review.exists():
-            files.append(str(review))
-        skeptic_output = task_dir / "skeptic.md"
-        if skeptic_output.exists():
-            files.append(str(skeptic_output))
-        context_map = task_dir / "context-map.md"
-        if context_map.exists():
-            files.append(str(context_map))
+        _add("planner.md")
+        _add("plan.md")
+        _add("reviewer.md")
+        _add("skeptic.md")
+        _add("context-map.md")
 
+    # Quality guard: plan + implementation for plan-vs-reality validation
     if agent == "quality_guard":
-        # Quality guard needs planner or architect/developer outputs for plan-vs-reality validation
-        for name in ["planner.md", "architect.md", "developer.md"]:
-            f = task_dir / name
-            if f.exists():
-                files.append(str(f))
-        plan = task_dir / "plan.md"
-        if plan.exists():
-            files.append(str(plan))
-        impl_output = task_dir / "implementer.md"
-        if impl_output.exists():
-            files.append(str(impl_output))
-        context_map = task_dir / "context-map.md"
-        if context_map.exists():
-            files.append(str(context_map))
+        _add("planner.md")
+        _add("plan.md")
+        _add("implementer.md")
+        _add("context-map.md")
 
+    # Technical writer: plan + implementation + review findings
+    # Does NOT need ba_designer.md or product_manager.md (internal analysis)
     if agent == "technical_writer":
-        # Technical writer needs all prior agent outputs to capture
-        # documentation gaps, patterns, and findings from every phase
-        for name in [
-            "task.md", "planner.md", "architect.md", "developer.md",
-            "reviewer.md", "skeptic.md", "implementer.md",
-            "quality-guard.md", "context-map.md",
-        ]:
-            f = task_dir / name
-            if f.exists():
-                files.append(str(f))
+        _add("planner.md")
+        _add("implementer.md")
+        _add("reviewer.md")
+        _add("context-map.md")
 
     if agent == "security_auditor":
-        context_map = task_dir / "context-map.md"
-        if context_map.exists():
-            files.append(str(context_map))
+        _add("planner.md")
+        _add("implementer.md")
+        _add("context-map.md")
 
     # Gemini analysis if available
-    gemini = task_dir / "gemini-analysis.md"
-    if gemini.exists():
-        files.append(str(gemini))
+    _add("gemini-analysis.md")
 
     return files
 

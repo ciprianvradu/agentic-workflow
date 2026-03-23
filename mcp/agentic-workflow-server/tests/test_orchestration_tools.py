@@ -1347,6 +1347,14 @@ class TestValidateBeadsIssue:
 class TestDeterministicCheckpoints:
     """Test that checkpoint invocation is deterministic and config-driven."""
 
+    @staticmethod
+    def _create_phase_output(task_id: str, phase: str = "planner"):
+        """Create a dummy output file so crew_get_next_phase sees the phase as having output."""
+        from agentic_workflow_server.state_tools import find_task_dir
+        task_dir = find_task_dir(task_id)
+        if task_dir:
+            (task_dir / f"{phase}.md").write_text(f"# {phase} output\nDummy output for testing.")
+
     def test_checkpoint_always_fires_at_threshold_zero(self, clean_tasks_dir):
         """With concern_threshold=0 (default), checkpoint fires even with no concerns."""
         from unittest.mock import patch
@@ -1355,6 +1363,7 @@ class TestDeterministicCheckpoints:
         workflow_initialize(task_id="TASK_ORCH_CP_001", description="Checkpoint test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_001")
         workflow_transition("planner", task_id="TASK_ORCH_CP_001")
+        self._create_phase_output("TASK_ORCH_CP_001")
 
         # Config with after_planner: true and threshold=0
         mock_config = {
@@ -1380,6 +1389,7 @@ class TestDeterministicCheckpoints:
         workflow_initialize(task_id="TASK_ORCH_CP_002", description="Threshold test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_002")
         workflow_transition("planner", task_id="TASK_ORCH_CP_002")
+        self._create_phase_output("TASK_ORCH_CP_002")
 
         mock_config = {
             "checkpoints": {
@@ -1404,6 +1414,7 @@ class TestDeterministicCheckpoints:
         workflow_initialize(task_id="TASK_ORCH_CP_003", description="Concern threshold test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_003")
         workflow_transition("planner", task_id="TASK_ORCH_CP_003")
+        self._create_phase_output("TASK_ORCH_CP_003")
 
         # Add a concern
         workflow_add_concern(
@@ -1437,6 +1448,7 @@ class TestDeterministicCheckpoints:
         workflow_initialize(task_id="TASK_ORCH_CP_004", description="Severity filter test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_004")
         workflow_transition("planner", task_id="TASK_ORCH_CP_004")
+        self._create_phase_output("TASK_ORCH_CP_004")
 
         # Add a low-severity concern
         workflow_add_concern(
@@ -1469,6 +1481,7 @@ class TestDeterministicCheckpoints:
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_005")
         # Transition to planner (first phase) — phase is active but not completed
         workflow_transition("planner", task_id="TASK_ORCH_CP_005")
+        self._create_phase_output("TASK_ORCH_CP_005")
 
         mock_config = {
             "checkpoints": {
@@ -1490,6 +1503,7 @@ class TestDeterministicCheckpoints:
         workflow_initialize(task_id="TASK_ORCH_CP_006", description="Structured question test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_006")
         workflow_transition("planner", task_id="TASK_ORCH_CP_006")
+        self._create_phase_output("TASK_ORCH_CP_006")
 
         mock_config = {
             "checkpoints": {
@@ -1521,6 +1535,7 @@ class TestDeterministicCheckpoints:
         workflow_initialize(task_id="TASK_ORCH_CP_007", description="Summary test")
         workflow_set_mode("standard", task_id="TASK_ORCH_CP_007")
         workflow_transition("planner", task_id="TASK_ORCH_CP_007")
+        self._create_phase_output("TASK_ORCH_CP_007")
 
         workflow_add_concern(
             source="planner",
