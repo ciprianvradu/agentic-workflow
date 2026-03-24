@@ -9,7 +9,7 @@ Run: `python3 {__scripts_dir__}/crew_orchestrator.py init --host {__platform__} 
 Handle `result.action`:
 
 - **start** → Show task ID, mode, phases. If `result.mode_confidence < 0.8` and LLM triage is enabled, run LLM Triage (below). If `result.beads_issue`, run: `bd update <issue> --status=in_progress`. Enter Action Loop with `result.next`.
-- **resume** → Show task ID and phase in one line. Then go to Action Loop with `result.next`. **CRITICAL: Do NOT read files, search patterns, call MCP tools, explore the codebase, check for discoveries, or do ANY investigation. The orchestrator already provided `assembled_prompt` with all context. Go directly to spawn_agent.**
+- **resume** → Follow `result.instructions` exactly (it contains the display text and spawn steps). **Do NOT add any steps, read files, search, call MCP tools, or explore.**
 - **status** → List `.tasks/` contents.
 - **config** → Call `config_get_effective()` and display.
 - **ask** → Load `~/{__platform_dir__}/agents/<agent>.md`, spawn agent with question + context.
@@ -19,15 +19,17 @@ To force a new task: `/crew "description" --no-resume`
 
 ### Step 2: Action Loop
 
-Loop on `result.next` from the orchestrator. The script provides everything — just execute.
+Loop on `result.next` from the orchestrator. **If `next.instructions` exists, follow it literally — it contains the exact steps to execute. Do not add, skip, or modify any steps.**
 
 #### spawn_agent
 
-1. Spawn agent **immediately** — no preparation needed, the script provided everything:
+**If `next.instructions` exists**: follow it exactly (spawn → save → agent-done → continue).
+
+**Otherwise**: Spawn agent using `next.assembled_prompt`:
    ```
    Task(subagent_type: "general-purpose", model: next.model, max_turns: next.max_turns, prompt: next.assembled_prompt)
    ```
-   **Do NOT** read files, search patterns, call MCP tools, check discoveries, or explore before spawning. If `assembled_prompt` is absent (legacy), fall back: read `next.agent_prompt_path`, `next.context_files`, apply `next.variables`.
+   If `assembled_prompt` is also absent (legacy), fall back: read `next.agent_prompt_path`, `next.context_files`, apply `next.variables`.
 2. **Parallel agents**: If `next.parallel_agents` is set, spawn all simultaneously (primary in foreground, others with `run_in_background: true`). Use each agent's own `assembled_prompt`, `model`, `max_turns`. Call `workflow_start_parallel_phase`, wait with TaskOutput, call `workflow_complete_parallel_phase` for each, then `workflow_merge_parallel_results`.
 3. Save output to `next.output_file`
 4. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <agent> --output-file <path> [--model <next.model>]`

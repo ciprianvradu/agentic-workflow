@@ -502,6 +502,15 @@ def _build_custom_phase_action(
                 task_dir=task_dir,
             )
             result_action["assembled_prompt"] = assembled
+            output_file = str(task_dir / f"{phase_name}.md")
+            result_action["instructions"] = (
+                f"1. Spawn: Task(subagent_type=\"general-purpose\", model=\"{model}\", "
+                f"max_turns={max_turns}, prompt=next.assembled_prompt)\n"
+                f"2. Save agent output to: {output_file}\n"
+                f"3. Run: python3 {{__scripts_dir__}}/crew_orchestrator.py agent-done "
+                f"--task-id {task_id} --agent {phase_name} --output-file {output_file}\n"
+                f"4. Continue with result.next"
+            )
             try:
                 (task_dir / f"{phase_name}-prompt.md").write_text(assembled)
             except Exception:
@@ -1628,6 +1637,16 @@ def _build_phase_action(
         )
         result["assembled_prompt"] = assembled
         result["output_file"] = str(task_dir / f"{agent}.md")
+        # Build exact instructions for the LLM — no interpretation needed
+        output_file = str(task_dir / f"{agent}.md")
+        result["instructions"] = (
+            f"1. Spawn: Task(subagent_type=\"general-purpose\", model=\"{model}\", "
+            f"max_turns={max_turns}, prompt=next.assembled_prompt)\n"
+            f"2. Save agent output to: {output_file}\n"
+            f"3. Run: python3 {{__scripts_dir__}}/crew_orchestrator.py agent-done "
+            f"--task-id {task_id} --agent {agent} --output-file {output_file}\n"
+            f"4. Continue with result.next"
+        )
         # Save for debugging
         try:
             (task_dir / f"{agent}-prompt.md").write_text(assembled)

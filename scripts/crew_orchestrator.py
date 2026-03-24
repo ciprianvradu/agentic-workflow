@@ -827,11 +827,18 @@ def cmd_resume(args: argparse.Namespace) -> None:
     next_action = crew_get_next_phase(task_id=task_id)
     _write_active_task(task_id)
 
-    _output({
+    # Build resume instructions: print summary, then follow next.instructions
+    display = resume.get("display_summary", f"Resuming {task_id}")
+    next_instructions = next_action.get("instructions", "")
+    resume_instructions = f"Print this summary to the user:\n{display}\nThen execute:\n{next_instructions}"
+
+    result = {
         "action": "resume",
         "resume_state": resume,
         "next": next_action,
-    })
+        "instructions": resume_instructions,
+    }
+    _output(result)
 
 
 def cmd_config(_args: argparse.Namespace) -> None:
