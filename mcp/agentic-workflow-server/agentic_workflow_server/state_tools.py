@@ -303,6 +303,17 @@ def _detect_worktree_task_id() -> Optional[str]:
                             return task_dir.name
                 except (json.JSONDecodeError, OSError):
                     continue
+
+    # Fallback: extract TASK_XXX from current directory name
+    # Worktree dirs follow the pattern: TASK_XXX or TASK_XXX-description
+    cwd_name = Path(cwd).name
+    import re
+    m = re.match(r'(TASK_\d+)', cwd_name)
+    if m:
+        candidate = m.group(1)
+        if (tasks_dir / candidate / "state.json").exists():
+            return candidate
+
     return None
 
 

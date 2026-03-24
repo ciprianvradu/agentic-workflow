@@ -502,6 +502,9 @@ def _build_custom_phase_action(
                 task_dir=task_dir,
             )
             result_action["assembled_prompt"] = assembled
+            # Remove context_files/agent_prompt_path to prevent LLM from re-reading them
+            result_action.pop("context_files", None)
+            result_action.pop("agent_prompt_path", None)
             output_file = str(task_dir / f"{phase_name}.md")
             result_action["instructions"] = (
                 f"1. Spawn: Task(subagent_type=\"general-purpose\", model=\"{model}\", "
@@ -1636,6 +1639,9 @@ def _build_phase_action(
             task_dir=task_dir,
         )
         result["assembled_prompt"] = assembled
+        # Remove context_files/agent_prompt_path to prevent LLM from re-reading them
+        result.pop("context_files", None)
+        result.pop("agent_prompt_path", None)
         result["output_file"] = str(task_dir / f"{agent}.md")
         # Build exact instructions for the LLM — no interpretation needed
         output_file = str(task_dir / f"{agent}.md")

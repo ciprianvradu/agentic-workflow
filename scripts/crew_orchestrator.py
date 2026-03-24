@@ -330,10 +330,33 @@ def cmd_init(args: argparse.Namespace) -> None:
         )
         next_action = crew_get_next_phase(task_id=task_id)
         _write_active_task(task_id)
+
+        # Build explicit instructions so the LLM doesn't freelance
+        desc = resume.get("display_summary", "").strip().split("\n")[0]
+        instructions = (
+            f"1. Display this resume summary to the user:\n"
+            f"   Resuming {task_id} — {desc}\n"
+            f"   Phase: {resume.get('current_agent', '?')}, "
+            f"Mode: {resume.get('mode', '?')}\n"
+        )
+        if resume.get("stale_phase_warning"):
+            sp = resume["stale_phase_warning"]
+            instructions += (
+                f"   WARNING: Phase '{sp.get('phase')}' stale for "
+                f"{sp.get('minutes_stale')}min — restarting.\n"
+            )
+        if resume.get("recovery_needed"):
+            instructions += "   WARNING: Missing outputs — recovery may be needed.\n"
+        instructions += (
+            f"2. Immediately follow next.instructions (spawn the agent, save output, call agent-done).\n"
+            f"   Do NOT read files, call MCP tools, search, or explore before spawning."
+        )
+
         _output({
             "action": "resume",
             "resume_state": resume,
             "next": next_action,
+            "instructions": instructions,
         })
         return
 
@@ -807,8 +830,48 @@ def cmd_resume(args: argparse.Namespace) -> None:
     """Load resume context.
 
     Batches: crew_get_resume_state → crew_get_next_phase
+
+    Auto-detects task ID from:
+    1. --task-id flag
+    2. Current directory name (TASK_XXX pattern)
+    3. Worktree metadata match
+    4. .crew-resume file
+    5. .active_task file
     """
-    task_id = args.task_id
+    task_id = getattr(args, "task_id", None)
+
+    # Auto-detect task ID if not provided
+    if not task_id:
+        import re
+        # Try directory name first (fastest)
+        cwd_name = Path.cwd().name
+        m = re.match(r'(TASK_\d+)', cwd_name)
+        if m:
+            candidate = m.group(1)
+            tasks_dir = get_tasks_dir()
+            if (tasks_dir / candidate / "state.json").exists():
+                task_id = candidate
+
+    if not task_id:
+        task_id = _detect_worktree_task_id()
+
+    if not task_id:
+        resume_file = Path.cwd() / ".crew-resume"
+        if resume_file.exists():
+            try:
+                for line in resume_file.read_text().splitlines():
+                    if line.startswith("task_id:"):
+                        task_id = line.split(":", 1)[1].strip()
+                        break
+            except OSError:
+                pass
+
+    if not task_id:
+        task_id = _read_active_task()
+
+    if not task_id:
+        _output({"error": True, "errors": ["No task ID found. Provide --task-id or run from a worktree directory."]})
+        return
 
     resume = crew_get_resume_state(task_id=task_id)
     if resume.get("error"):
@@ -828,12 +891,17 @@ def cmd_resume(args: argparse.Namespace) -> None:
     _write_active_task(task_id)
 
     # Build resume instructions: print summary, then follow next.instructions
-    display = resume.get("display_summary", f"Resuming {task_id}")
+    desc = resume.get("display_summary", "").strip().split("\n")[0]
     next_instructions = next_action.get("instructions", "")
-    resume_instructions = f"Print this summary to the user:\n{display}\nThen execute:\n{next_instructions}"
+    resume_instructions = (
+        f"Resuming {task_id} — {desc}\n"
+        f"Follow these steps exactly. Do NOT read files, call MCP tools, or explore:\n"
+        f"{next_instructions}"
+    )
 
     result = {
         "action": "resume",
+        "task_id": task_id,
         "resume_state": resume,
         "next": next_action,
         "instructions": resume_instructions,
@@ -1035,8 +1103,8 @@ def main():
     p_log.add_argument("--metadata", help="JSON metadata string")
 
     # resume
-    p_resume = subparsers.add_parser("resume", help="Load resume context")
-    p_resume.add_argument("--task-id", required=True, help="Task identifier")
+    p_resume = subparsers.add_parser("resume", help="Load resume context (auto-detects task from cwd)")
+    p_resume.add_argument("--task-id", required=False, default=None, help="Task identifier (auto-detected if omitted)")
     p_resume.add_argument("--host", default="unknown", help="AI host platform identifier")
 
     # config
