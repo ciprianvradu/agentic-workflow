@@ -78,6 +78,7 @@ AI_HOST_CLI = {
     "gemini": "gemini",
     "copilot": "copilot",
     "opencode": "opencode",
+    "devin": "devin",
 }
 
 HOST_SETTINGS = {
@@ -85,6 +86,7 @@ HOST_SETTINGS = {
     "gemini": ["gemini_trust"],
     "copilot": [],
     "opencode": [],
+    "devin": [],
 }
 # NOTE: AI_HOST_CLI and HOST_SETTINGS are inlined from state_tools.py
 # (see _AI_HOST_CLI and _HOST_SETTINGS in that module) to keep this script standalone. Keep in sync.
@@ -276,7 +278,7 @@ def extract_jira_key(text: str) -> Optional[str]:
 # Config loading (inlined from config_tools.py)
 # ---------------------------------------------------------------------------
 
-PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode"]
+PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin"]
 # NOTE: PLATFORM_DIRS is inlined from config_tools.py to keep this script standalone. Keep in sync.
 
 # Full default config — only worktree section needed but we merge the whole thing
@@ -468,7 +470,7 @@ def build_resume_prompt(task_id: str, main_tasks_path: str, ai_host: str = "clau
     """Build the resume prompt string for a worktree session."""
     if ai_host in ("gemini", "copilot"):
         resume_cmd = f"@crew-resume {task_id}"
-    elif ai_host == "opencode":
+    elif ai_host in ("opencode", "devin"):
         resume_cmd = f"/crew-resume {task_id}"
     else:
         resume_cmd = f"/crew resume {task_id}"
@@ -603,6 +605,9 @@ def build_launch_commands(
         cli_with_prompt = cli
     elif ai_host == "gemini":
         cli_with_prompt = f"{cli} -i {safe_prompt}"
+    elif ai_host == "devin":
+        # devin -- "prompt" starts interactive with the prompt as the first message
+        cli_with_prompt = f"{cli} -- {safe_prompt}"
     else:
         cli_with_prompt = f"{cli} {safe_prompt}"
 
@@ -681,7 +686,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("description", help="Task description (free text or Jira key)")
 
-    parser.add_argument("--ai-host", default=None, choices=["claude", "copilot", "gemini", "opencode"],
+    parser.add_argument("--ai-host", default=None, choices=["claude", "copilot", "gemini", "opencode", "devin"],
                         help="AI host platform (default: auto-detect from config)")
     parser.add_argument("--base-branch", default=None,
                         help="Base branch (default: current branch)")

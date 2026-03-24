@@ -182,6 +182,7 @@ PLATFORM_DIRS = {
     "copilot": ".copilot",
     "gemini": ".gemini",
     "opencode": ".opencode",  # project-level; global uses .config/opencode/
+    "devin": ".devin",
 }
 
 SCRIPTS_DIRS = {
@@ -189,6 +190,7 @@ SCRIPTS_DIRS = {
     "copilot": ".github/scripts",   # overridden dynamically in build_copilot
     "gemini": str(REPO_ROOT / "scripts"),
     "opencode": str(REPO_ROOT / "scripts"),
+    "devin": str(REPO_ROOT / "scripts"),
 }
 
 # Scripts that need to be bundled alongside agents for platforms that don't
@@ -921,6 +923,171 @@ def build_opencode(output_dir: Path):
 
 
 # ---------------------------------------------------------------------------
+# Devin for Terminal support
+# ---------------------------------------------------------------------------
+
+# Devin sub-agent tool restrictions per agent role.
+# Devin uses a list of allowed tool names: read, edit, grep, glob, exec
+DEVIN_AGENT_TOOLS = {
+    "architect":              ["read", "grep", "glob"],
+    "developer":              ["read", "grep", "glob"],
+    "reviewer":               ["read", "grep", "glob"],
+    "skeptic":                ["read", "grep", "glob"],
+    "planner":                ["read", "grep", "glob"],
+    "implementer":            ["read", "edit", "grep", "glob", "exec"],
+    "feedback":               ["read", "grep", "glob", "exec"],
+    "quality-guard":          ["read", "edit", "grep", "glob", "exec"],
+    "technical-writer":       ["read", "edit", "grep", "glob"],
+    "security-auditor":       ["read", "grep", "glob"],
+    "performance-analyst":    ["read", "grep", "glob", "exec"],
+    "api-guardian":           ["read", "grep", "glob"],
+    "accessibility-reviewer": ["read", "grep", "glob"],
+    "axiom-miner":            ["read", "grep", "glob"],
+    "design-challenger":      ["read", "grep", "glob"],
+    "crew-worktree":          ["read", "edit", "grep", "glob", "exec"],
+    "crew-status":            ["read", "grep", "glob", "exec"],
+}
+
+
+def _devin_base(output_dir: Path) -> Path:
+    """Return the Devin config base directory.
+
+    Devin stores global config under ~/.config/devin/ and project-level
+    config under .devin/.  When output_dir is the user's home directory
+    (global install), return output_dir / .config / devin.  Otherwise
+    (project-level install), return output_dir / .devin.
+    """
+    if output_dir == Path.home():
+        return output_dir / ".config" / "devin"
+    return output_dir / ".devin"
+
+
+def _devin_skill_frontmatter(name: str, description: str, tools: list) -> str:
+    """Generate YAML frontmatter for a Devin skill SKILL.md file."""
+    lines = [
+        "---",
+        f"name: {name}",
+        f'description: "{description}"',
+        "triggers:",
+        "  - user",
+        "  - model",
+    ]
+    if tools:
+        lines.append("allowed-tools:")
+        for tool in tools:
+            lines.append(f"  - {tool}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
+
+
+def build_devin(output_dir: Path):
+    """Build agents in Devin format: .devin/skills/<name>/SKILL.md files.
+
+    Each crew agent becomes a Devin skill in its own directory.
+    Global install (output == $HOME): ~/.config/devin/skills/
+    Project install: .devin/skills/
+    """
+    devin_base = _devin_base(output_dir)
+    skills_out = devin_base / "skills"
+    skills_out.mkdir(parents=True, exist_ok=True)
+
+    preamble_path = PREAMBLES_DIR / "devin.md"
+    preamble = read_file(preamble_path) if preamble_path.exists() else ""
+    shared_preamble = _load_shared_preamble()
+
+    written_files: list = []
+
+    # Build orchestrator from platform-specific template
+    orchestrator_path = ORCHESTRATORS_DIR / "devin.md"
+    if orchestrator_path.exists():
+        orch_body = read_file(orchestrator_path)
+        desc = AGENT_DESCRIPTIONS.get("orchestrator", "Workflow Orchestrator")
+        orch_tools = ["read", "edit", "grep", "glob", "exec"]
+        orch_fm = _devin_skill_frontmatter("crew", desc, orch_tools)
+        skill_dir = skills_out / "crew"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        dest = skill_dir / "SKILL.md"
+        dest.write_text(
+            _substitute_platform(orch_fm + "\n" + orch_body, "devin"),
+            encoding="utf-8"
+        )
+        written_files.append(dest)
+        print(f"  + skills/crew/SKILL.md (orchestrator)")
+    else:
+        print(f"  ! No orchestrator template at {orchestrator_path}")
+
+    count = 0
+    cmd_count = 0
+    for agent_path in list_agents():
+        name = agent_path.stem
+        body = _apply_shared_preamble(read_file(agent_path), name, shared_preamble)
+
+        if name == "orchestrator":
+            continue
+
+        desc = AGENT_DESCRIPTIONS.get(name, f"Crew agent: {name}")
+        out_name = _agent_output_name(name)
+
+        # Command agents get argument-hint for $ARGUMENTS
+        if name in COMMAND_AGENTS:
+            # Command agents act as slash commands — include argument hint
+            tools = ["read", "edit", "grep", "glob", "exec"]
+            suffix = COMMAND_SUFFIXES.get(name, "\n\nArguments: $ARGUMENTS\n")
+            fm_lines = [
+                "---",
+                f"name: {out_name}",
+                f'description: "{desc}"',
+                'argument-hint: "[arguments]"',
+                "triggers:",
+                "  - user",
+                "  - model",
+                "allowed-tools:",
+            ] + [f"  - {t}" for t in tools] + ["---"]
+            fm = "\n".join(fm_lines) + "\n"
+            content = _substitute_platform(
+                fm + "\n" + preamble + "\n" + body.rstrip() + "\n" + suffix.replace("$ARGS", "$ARGUMENTS"),
+                "devin"
+            )
+            skill_dir = skills_out / out_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            dest = skill_dir / "SKILL.md"
+            dest.write_text(content, encoding="utf-8")
+            written_files.append(dest)
+            print(f"  + skills/{out_name}/SKILL.md (command)")
+            cmd_count += 1
+        else:
+            tools = DEVIN_AGENT_TOOLS.get(name, ["read", "grep", "glob"])
+            frontmatter = _devin_skill_frontmatter(out_name, desc, tools)
+            body = body.replace("$ARGS", "$ARGUMENTS")  # defensive: match opencode pattern
+            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "devin")
+            skill_dir = skills_out / out_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            dest = skill_dir / "SKILL.md"
+            dest.write_text(content, encoding="utf-8")
+            written_files.append(dest)
+            print(f"  + skills/{out_name}/SKILL.md")
+            count += 1
+
+    # Copy main commands from commands/ directory (crew.md, crew-config.md, crew-resume.md, etc.)
+    commands_src = REPO_ROOT / "commands"
+    if commands_src.exists():
+        for cmd_path in sorted(commands_src.glob("*.md")):
+            body = read_file(cmd_path)
+            content = _substitute_platform(body, "devin")
+            cmd_name = cmd_path.stem  # e.g. "crew", "crew-resume"
+            skill_dir = skills_out / cmd_name
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            dest = skill_dir / "SKILL.md"
+            dest.write_text(content, encoding="utf-8")
+            written_files.append(dest)
+            print(f"  + skills/{cmd_name}/SKILL.md (command)")
+            cmd_count += 1
+
+    _assert_no_raw_placeholders(devin_base, "devin", written_files=written_files)
+    print(f"\n  {count} agents + {cmd_count} commands + orchestrator written to {skills_out}")
+
+
+# ---------------------------------------------------------------------------
 # Platform registry
 # ---------------------------------------------------------------------------
 
@@ -944,6 +1111,11 @@ PLATFORMS = {
         "build": build_opencode,
         "default_output": lambda: Path.home(),
         "description": "OpenCode — agent .md files in ~/.config/opencode/agents/",
+    },
+    "devin": {
+        "build": build_devin,
+        "default_output": lambda: Path.home(),
+        "description": "Devin for Terminal — skill .md files in ~/.config/devin/skills/",
     },
 }
 

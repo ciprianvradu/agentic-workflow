@@ -6,7 +6,7 @@ Detailed architecture reference for AI agents working on the agentic-workflow co
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  AI Host CLI (Claude Code / Copilot / Gemini / OpenCode)     │
+│  AI Host CLI (Claude Code / Copilot / Gemini / OpenCode / Devin)│
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │  /crew command (commands/crew.md)                     │  │
 │  │  Orchestrates the agent loop, spawns subagents        │  │
@@ -176,7 +176,7 @@ Key config sections:
 
 **`config_get_effective(task_id?)`** — Returns merged config from all 4 cascade levels.
 
-**Multi-platform config paths** — The server searches for config files in Claude, Copilot, Gemini, and OpenCode config directories (in that preference order).
+**Multi-platform config paths** — The server searches for config files in Claude, Copilot, Gemini, OpenCode, and Devin config directories (in that preference order).
 
 ### orchestration_tools.py — Crew Helpers (~1500 lines)
 
@@ -476,6 +476,7 @@ Each agent is a markdown file in `agents/` with:
 | Copilot  | `~/.copilot/agents/` (global) or `.github/agents/` (project) `crew-*.agent.md` | YAML frontmatter with name, description, tools |
 | Gemini   | `~/.gemini/agents/crew-*.md` | YAML frontmatter with tools, `max_turns`, `timeout_mins` |
 | OpenCode | `~/.config/opencode/` (global) or `.opencode/` (project): `agents/crew-*.md` + `commands/` | YAML frontmatter with `mode: subagent`, tool restrictions; commands use `$ARGUMENTS` |
+| Devin    | `~/.config/devin/skills/` (global) or `.devin/skills/` (project): `<name>/SKILL.md` | YAML frontmatter with `name`, `description`, `triggers`, `allowed-tools`; **directory-per-skill** |
 
 **Do not edit mirror files directly.** Edit `agents/` source and run the build script.
 
@@ -485,6 +486,7 @@ Two platforms require path routing based on whether the build is global (`--outp
 
 - **`_copilot_agents_dir(output_dir)`**: Routes to `~/.copilot/agents/` for global installs, `.github/agents/` for project installs
 - **`_opencode_base(output_dir)`**: Routes to `~/.config/opencode/` for global installs, `.opencode/` for project installs
+- **`_devin_base(output_dir)`**: Routes to `~/.config/devin/` for global installs, `.devin/` for project installs (skills go in `<base>/skills/<name>/SKILL.md`)
 
 Claude and Gemini use fixed output paths regardless of install scope.
 
@@ -494,8 +496,8 @@ Agent source files use three template placeholders that `build-agents.py` replac
 
 | Placeholder | Purpose | Example Substitution |
 |---|---|---|
-| `{__platform__}` | Platform name | `claude`, `copilot`, `gemini`, `opencode` |
-| `{__platform_dir__}` | Platform config directory | `.claude`, `.copilot`, `.gemini`, `.opencode` |
+| `{__platform__}` | Platform name | `claude`, `copilot`, `gemini`, `opencode`, `devin` |
+| `{__platform_dir__}` | Platform config directory | `.claude`, `.copilot`, `.gemini`, `.opencode`, `.devin` |
 | `{__scripts_dir__}` | Absolute path to helper scripts | `~/.claude/scripts`, `/home/user/agentic-workflow/scripts` |
 
 The mappings are defined in `PLATFORM_DIRS` and `SCRIPTS_DIRS` in `build-agents.py`:
@@ -506,6 +508,7 @@ PLATFORM_DIRS = {
     "copilot": ".copilot",
     "gemini": ".gemini",
     "opencode": ".opencode",
+    "devin": ".devin",
 }
 
 SCRIPTS_DIRS = {
@@ -513,6 +516,7 @@ SCRIPTS_DIRS = {
     "copilot": str(REPO_ROOT / "scripts"),   # absolute repo path
     "gemini": str(REPO_ROOT / "scripts"),    # absolute repo path
     "opencode": str(REPO_ROOT / "scripts"),  # absolute repo path
+    "devin": str(REPO_ROOT / "scripts"),     # absolute repo path
 }
 ```
 
@@ -529,6 +533,7 @@ Each platform limits what tools sub-agents can use:
 - **Copilot**: No per-tool restrictions; orchestrator gets `tools: ["*"]`
 - **Gemini**: Explicit tool allowlists per agent (`GEMINI_AGENT_TOOLS` dict), plus `max_turns` limits (`GEMINI_MAX_TURNS`)
 - **OpenCode**: Tool deny-maps per agent (`OPENCODE_AGENT_TOOLS` dict), e.g., `{"write": false, "edit": false}` to restrict read-only agents. Additionally, `OPENCODE_AGENT_PERMISSIONS` provides granular bash command permissions via glob patterns (see [cross-platform.md](./cross-platform.md#opencode-granular-permissions) for details)
+- **Devin**: Explicit allowlists of tool names per agent (`DEVIN_AGENT_TOOLS` dict). Available tools: `read`, `edit`, `grep`, `glob`, `exec`.
 
 #### Per-Agent Model Selection
 
@@ -808,7 +813,7 @@ python3 -m pytest tests/ -k "test_tmux" -v     # By name pattern
 
 3. **State file locking**: `state.json` uses filelock. If a lock file is stale, delete `state.json.lock`.
 
-4. **Config cascade order**: Claude dirs are searched first, then Copilot, then Gemini, then OpenCode. The first found wins at each level. The search order is defined by `PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode"]`. Both `.config/opencode` (XDG standard) and `.opencode` (legacy) are searched for OpenCode.
+4. **Config cascade order**: Claude dirs are searched first, then Copilot, then Gemini, then OpenCode, then Devin. The first found wins at each level. The search order is defined by `PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin"]`. Both `.config/opencode` (XDG standard) and `.opencode` (legacy) are searched for OpenCode; similarly both `.config/devin` (global XDG) and `.devin` (project-level) are searched for Devin.
 
 5. **Worktree .tasks/ symlink or junction**: In worktrees, `.tasks/` is a symlink (Unix) or NTFS junction (Windows) to the main repo. MCP tools resolve this automatically via `find_task_dir()`, but direct file reads should use the absolute main repo path. **Never use `os.unlink()` or `shutil.rmtree()` on a junction** — use `os.rmdir()` instead to avoid deleting the target's contents.
 

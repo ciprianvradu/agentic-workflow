@@ -6,7 +6,7 @@
 
 A multi-agent development workflow that orchestrates specialized AI agents through planning, implementation, and documentation phases.
 
-**Supports Claude Code, GitHub Copilot CLI, Gemini CLI, and OpenCode.**
+**Supports Claude Code, GitHub Copilot CLI, Gemini CLI, OpenCode, and Devin for Terminal.**
 
 > **New here?** Check out the [Visual Overview](docs/overview.md) -- a jargon-free guide with diagrams, perfect for managers, team leads, and anyone curious about how it works.
 
@@ -51,6 +51,8 @@ Complex development tasks require multiple perspectives: architecture considerat
 | Claude Code | [github.com/anthropics/claude-code](https://github.com/anthropics/claude-code) |
 | GitHub Copilot CLI | [docs.github.com/copilot](https://docs.github.com/copilot/how-tos/set-up/install-copilot-cli) |
 | Gemini CLI | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
+| OpenCode | [github.com/sst/opencode](https://github.com/sst/opencode) |
+| Devin for Terminal | [cli.devin.ai](https://cli.devin.ai/) |
 
 ### Optional
 - [Repomix](https://github.com/yamadashy/repomix) for intelligent file aggregation
@@ -102,6 +104,19 @@ Installs to:
 
 Existing config files are backed up with a timestamp.
 
+### Devin for Terminal
+
+```bash
+git clone https://github.com/Spiris-Innovation-Tech-Dev/agentic-workflow.git
+cd agentic-workflow
+./install-devin.sh
+```
+
+Installs to:
+- Skills → `~/.config/devin/skills/` (global) + `.devin/skills/` (project)
+- Config → `~/.config/devin/workflow-config.yaml`
+- MCP server → Python package + `~/.config/devin/config.json`
+
 ### Build Script (Advanced)
 
 The `scripts/build-agents.py` script transforms shared agent sources (`agents/*.md`) and command sources (`commands/*.md`) into platform-specific formats. It substitutes template placeholders (`{__platform__}`, `{__platform_dir__}`, `{__scripts_dir__}`) so that built files reference the correct paths for each platform. Some agents are "command agents" (like `crew-worktree`) -- on Claude/OpenCode these become slash commands (`commands/`), on Copilot/Gemini they become regular agents with full tool access.
@@ -111,6 +126,7 @@ python3 scripts/build-agents.py claude                    # Build agents/ + comm
 python3 scripts/build-agents.py copilot                   # Build .github/agents/
 python3 scripts/build-agents.py gemini                    # Build ~/.gemini/agents/
 python3 scripts/build-agents.py opencode                  # Build ~/.opencode/agents/ + commands/
+python3 scripts/build-agents.py devin                     # Build ~/.config/devin/skills/
 python3 scripts/build-agents.py copilot --output /path    # Custom output directory
 python3 scripts/build-agents.py --list-platforms           # Show available platforms
 ```
@@ -1047,28 +1063,33 @@ to see all resumable tasks.
 ./uninstall-gemini.sh
 ```
 
+### Devin for Terminal
+```bash
+./uninstall-devin.sh
+```
+
 All uninstallers preserve task state in `.tasks/`.
 
 ## Platform Support
 
 ### Feature Comparison
 
-| Feature | Claude Code | Copilot CLI | Gemini CLI | OpenCode |
-|---------|:-----------:|:-----------:|:----------:|:--------:|
-| **Agents** | All 16 | All 16 | All 16 | All 16 |
-| **MCP Tools** | 69 tools | 69 tools | 69 tools | 69 tools |
-| **State Management** | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` |
-| **Config Cascade** | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task |
-| **Workflow Modes** | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto |
-| **Cost Tracking** | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown |
-| **Memory/Discoveries** | Persistent | Persistent | Persistent | Persistent |
-| **Orchestration** | `/crew` command (automated) | `/agent crew-orchestrator` (sub-agent chaining) | Autonomous routing (description-based) | `@crew` agent (@mention delegation) |
-| **Worktree Support** | `/crew-worktree` (command) | `@crew-worktree` (agent) | `@crew-worktree` (agent) | `/crew-worktree` (command) |
-| **Slash Commands** | `/crew`, `/crew-ask`, etc. | `/agent` only | Custom commands (`.toml`) | `/crew`, custom commands |
-| **Hook Enforcement** | PreToolUse, Stop hooks | Not available | Not available | Not available |
-| **Agent Teams** | Experimental parallel agents | Not available | Not available | Not available |
-| **Effort Levels** | API parameter (`output_config`) | Informational only | Informational only | Informational only |
-| **Compaction** | Server-side auto-compaction | Not available | Not available | Not available |
+| Feature | Claude Code | Copilot CLI | Gemini CLI | OpenCode | Devin |
+|---------|:-----------:|:-----------:|:----------:|:--------:|:-----:|
+| **Agents** | All 16 | All 16 | All 16 | All 16 | All 16 |
+| **MCP Tools** | 69 tools | 69 tools | 69 tools | 69 tools | 69 tools |
+| **State Management** | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` |
+| **Config Cascade** | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task |
+| **Workflow Modes** | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto |
+| **Cost Tracking** | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown |
+| **Memory/Discoveries** | Persistent | Persistent | Persistent | Persistent | Persistent |
+| **Orchestration** | `/crew` command (automated) | `/agent crew-orchestrator` (sub-agent chaining) | Autonomous routing (description-based) | `@crew` agent (@mention delegation) | `/crew` skill (slash command) |
+| **Worktree Support** | `/crew-worktree` (command) | `@crew-worktree` (agent) | `@crew-worktree` (agent) | `/crew-worktree` (command) | `/crew-worktree` (skill) |
+| **Slash Commands** | `/crew`, `/crew-ask`, etc. | `/agent` only | Custom commands (`.toml`) | `/crew`, custom commands | `/crew`, `/crew-*` skills |
+| **Hook Enforcement** | PreToolUse, Stop hooks | Not available | Not available | Not available | Not available |
+| **Agent Teams** | Experimental parallel agents | Not available | Not available | Not available | Not available |
+| **Effort Levels** | API parameter (`output_config`) | Informational only | Informational only | Informational only | Informational only |
+| **Compaction** | Server-side auto-compaction | Not available | Not available | Not available | Not available |
 
 ### Platform Details
 
@@ -1107,6 +1128,16 @@ All uninstallers preserve task state in `.tasks/`.
 - Worktrees: `/crew-worktree "task description"` (command with `subtask: true`)
 - MCP server registered in `opencode.json` (project-level)
 - Multi-model support (75+ models including Claude, GPT, Gemini, local)
+- No hook enforcement
+
+#### Devin for Terminal
+- Skills installed to `~/.config/devin/skills/` (global) and `.devin/skills/` (project)
+- Each skill lives in its own directory: `skills/<name>/SKILL.md`
+- Skills are slash commands: `/crew`, `/crew-planner`, `/crew-implementer`, etc.
+- Per-skill tool restrictions via `allowed-tools:` YAML list (`read`, `edit`, `grep`, `glob`, `exec`)
+- Reads `AGENTS.md` natively as an always-on rule
+- Worktrees: `/crew-worktree "task description"` (skill)
+- MCP server registered in `~/.config/devin/config.json` (with `"transport": "stdio"`)
 - No hook enforcement
 
 ### What's Shared Across All Platforms
