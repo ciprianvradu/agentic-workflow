@@ -13,7 +13,7 @@ Skills can run in the **foreground** (agent pauses and waits) or **background** 
 
 ## Platform-Specific Capabilities
 
-**Non-interactive execution:** Devin supports `devin -p "prompt"` for non-interactive agent execution. This is used by the worktree launcher.
+**Non-interactive execution:** Devin supports `devin -p -- "prompt"` for non-interactive agent execution (print response and exit). The worktree launcher uses `devin -- "prompt"` for interactive sessions.
 
 **Background subagents:** When parallel phases are needed, start a skill as a background subagent by pressing Ctrl+B after invocation.
 
@@ -38,6 +38,7 @@ Call MCP tool: agentic-workflow__workflow_initialize({ description: "<user's tas
 ```
 
 Log the session start:
+
 ```
 Call MCP tool: agentic-workflow__workflow_log_interaction({
   role: "human", content: "<user's task>", interaction_type: "message",
@@ -53,6 +54,7 @@ Call MCP tool: agentic-workflow__workflow_detect_mode({ task_id: "TASK_042", des
 ```
 
 **Mode determines which agents run:**
+
 - **thorough**: planner → reviewer → implementer → quality_guard + security_auditor (parallel) → technical_writer
 - **standard**: planner → implementer → technical_writer
 - **quick**: implementer
@@ -64,7 +66,9 @@ For each phase in the detected mode's agent chain:
 1. **Transition**: Call `agentic-workflow__workflow_transition({ task_id: "TASK_042", phase: "<agent_name>" })`
 2. **Delegate to skill**: Use slash command to invoke the crew agent:
 
-> /crew-planner Analyze and plan: [task description]. Task ID: TASK_042. Knowledge base files: [inventory].
+   ```text
+   /crew-planner Analyze and plan: [task description]. Task ID: TASK_042. Knowledge base files: [inventory].
+   ```
 
 3. **Save output**: Write agent output to `.tasks/TASK_042/<agent_name>.md`
 4. **Complete phase**: Call `agentic-workflow__workflow_complete_phase({ task_id: "TASK_042", phase: "<agent_name>" })`
@@ -148,6 +152,7 @@ Since Devin skills run with isolated contexts, pass relevant information when de
 ## Configuration
 
 The orchestrator respects `workflow-config.yaml` settings:
+
 - `checkpoints.*` — when to pause for user input
 - `models.*` — which model to use per agent (informational)
 - `max_iterations.*` — loop limits for planning and implementation
