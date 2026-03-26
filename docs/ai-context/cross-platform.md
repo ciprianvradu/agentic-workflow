@@ -109,6 +109,7 @@ OpenCode is the outlier -- it uses different key names, transport types, and dat
 **Claude Code** -- no frontmatter; agents are plain markdown files.
 
 **Copilot** (`docs.github.com`):
+
 ```yaml
 ---
 name: crew-architect           # Optional (filename used if omitted)
@@ -117,9 +118,11 @@ tools:
   - "*"                        # Only on orchestrator
 ---
 ```
+
 No model selection (GitHub assigns the model).
 
 **Gemini CLI** (`geminicli.com`):
+
 ```yaml
 ---
 name: crew-architect
@@ -135,6 +138,7 @@ timeout_mins: 10
 ```
 
 **OpenCode** (`opencode.ai`):
+
 ```yaml
 ---
 description: "..."
@@ -154,6 +158,7 @@ permission:                    # Granular permission map (see Permissions below)
 ```
 
 OpenCode command agents use a different frontmatter:
+
 ```yaml
 ---
 description: "..."
@@ -163,6 +168,7 @@ subtask: true
 ```
 
 **Devin** (`devin.ai`):
+
 ```yaml
 ---
 name: crew-architect
@@ -178,6 +184,7 @@ allowed-tools:                 # Allowlist (not a deny-map); only these tools ar
 ```
 
 Devin command/orchestrator agents also include `argument-hint`:
+
 ```yaml
 ---
 name: crew
@@ -204,20 +211,24 @@ Skills are invoked as slash commands: `/crew "task"`, `/crew-resume TASK_XXX`, e
 The build script routes output to different directories depending on whether the install is global (output_dir == `$HOME`) or project-level:
 
 **`_copilot_agents_dir(output_dir)`**:
+
 - Global (`$HOME`): `~/.copilot/agents/`
 - Project (any other dir): `<output_dir>/.github/agents/`
 
 **`_opencode_base(output_dir)`**:
+
 - Global (`$HOME`): `~/.config/opencode/`
 - Project (any other dir): `<output_dir>/.opencode/`
 
 **`_devin_base(output_dir)`**:
+
 - Global (`$HOME`): `~/.config/devin/`
 - Project (any other dir): `<output_dir>/.devin/`
 
 Skills always go into a `skills/` subdirectory: `<base>/skills/<name>/SKILL.md`.
 
 Claude and Gemini always use fixed paths:
+
 - Claude: `<output_dir>/agents/` and `<output_dir>/commands/` (default output is `~/.claude/`)
 - Gemini: `<output_dir>/.gemini/agents/` (default output is `$HOME`)
 
@@ -350,7 +361,7 @@ The `effort_levels` section in `workflow-config.yaml` defines reasoning depth pe
 | Gemini CLI | `thinkingConfig.thinkingBudget` in settings.json overrides (see table above) |
 | OpenCode | Temperature (lower = more deterministic) |
 | Copilot | Informational only (Copilot assigns its own model) |
-| Devin | Informational only (Devin assigns its own model)
+| Devin | Informational only (Devin assigns its own model) |
 
 ## Template Placeholder System
 
@@ -512,6 +523,7 @@ if is_wsl() and worktree_abs.startswith("/mnt/"):
 ```
 
 When `wsl_use_native` is True:
+
 - Git commands are routed through `powershell.exe -Command "cd 'C:\...'; git ..."` to use native Windows git
 - Dependency installation uses Windows-native commands (e.g., `python -m pip` instead of `pip`)
 - Path conversion uses `wslpath -w` to translate WSL paths to Windows paths
@@ -525,6 +537,7 @@ def is_wsl() -> bool:
 ```
 
 This function exists in three places:
+
 - `scripts/shared_utils.py` — The canonical version, used by most scripts
 - `scripts/setup-worktree.py` — An inlined copy to keep the script standalone (no cross-script imports)
 - `scripts/install-wt-colorschemes.py` — An inlined copy (standalone WSL-only helper)
@@ -601,10 +614,12 @@ Claude Code supports lifecycle hooks that run scripts at specific points. The ag
 Session-isolated: only activates when a crew workflow is active (via `.active_task` file or worktree detection). Non-crew sessions are never affected.
 
 **Destructive command warnings** (always warn during crew workflows):
+
 - `git reset --hard`, `git clean -fd`, `git checkout .`, `git restore .`
 - `git stash drop`, `git push --force`, `git branch -D`
 
 **Context-aware warnings:**
+
 - `git push` during active workflow (work should be merged locally, not pushed)
 - `git commit` during planning phases (before implementer has run)
 
@@ -613,6 +628,7 @@ All warnings use `"decision": "approve"` with a `"reason"` — they inform but d
 ### Enhanced Stop Hook Details (`check-workflow-complete.py`)
 
 When the workflow IS complete, the stop hook checks for session-close protocol reminders:
+
 - **Uncommitted changes**: Runs `git status --porcelain` and warns if files are modified
 - **Open beads issues**: Runs `bd list --status=in_progress` and warns if issues remain open
 
