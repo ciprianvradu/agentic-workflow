@@ -9,7 +9,7 @@ echo "========================================"
 echo ""
 
 # Remove skills from global location
-echo "Removing skills..."
+echo "Removing global skills..."
 removed=0
 SKILLS_DIR="$DEVIN_GLOBAL/skills"
 if [ -d "$SKILLS_DIR" ]; then
@@ -21,17 +21,43 @@ if [ -d "$SKILLS_DIR" ]; then
     done
 fi
 if [ "$removed" -eq 0 ]; then
-    echo "  No skills found to remove"
+    echo "  No global skills found to remove"
 fi
 
-# Remove config
+# Remove project-level skills (.devin/skills/)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo ""
+echo "Removing project skills..."
+removed=0
+PROJECT_SKILLS="$SCRIPT_DIR/.devin/skills"
+if [ -d "$PROJECT_SKILLS" ]; then
+    for skill_dir in "$PROJECT_SKILLS"/crew-* "$PROJECT_SKILLS/crew"; do
+        [ -d "$skill_dir" ] || continue
+        rm -rf "$skill_dir"
+        echo "  + Removed $skill_dir"
+        removed=$((removed + 1))
+    done
+fi
+if [ "$removed" -eq 0 ]; then
+    echo "  No project skills found to remove"
+fi
+
+# Remove config (global and project-level)
 echo ""
 echo "Removing config..."
+removed=0
 if [ -f "$DEVIN_GLOBAL/workflow-config.yaml" ]; then
     rm -f "$DEVIN_GLOBAL/workflow-config.yaml"
     echo "  + Removed $DEVIN_GLOBAL/workflow-config.yaml"
-else
-    echo "  Config file not found"
+    removed=$((removed + 1))
+fi
+if [ -f "$SCRIPT_DIR/.devin/workflow-config.yaml" ]; then
+    rm -f "$SCRIPT_DIR/.devin/workflow-config.yaml"
+    echo "  + Removed $SCRIPT_DIR/.devin/workflow-config.yaml"
+    removed=$((removed + 1))
+fi
+if [ "$removed" -eq 0 ]; then
+    echo "  Config files not found"
 fi
 
 # Remove MCP server from global config (~/.config/devin/config.json)
@@ -79,7 +105,6 @@ echo "========================================"
 echo ""
 echo "Note: Preserved:"
 echo "  * .tasks/ (workflow state)"
-echo "  * .devin/ (project config, if any)"
 echo ""
 echo "To reinstall, run: ./install-devin.sh"
 echo ""
