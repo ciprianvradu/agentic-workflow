@@ -1153,6 +1153,7 @@ def main():
         ".config/opencode/workflow-config.yaml",
         ".opencode/workflow-config.yaml",
         ".devin/workflow-config.yaml",
+        ".config/devin/workflow-config.yaml",
     ]
     configs_copied = 0
     for wf_config in WORKFLOW_CONFIG_PATHS:
