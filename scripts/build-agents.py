@@ -962,16 +962,21 @@ def _devin_base(output_dir: Path) -> Path:
     return output_dir / ".devin"
 
 
-def _devin_skill_frontmatter(name: str, description: str, tools: list) -> str:
+def _devin_skill_frontmatter(name: str, description: str, tools: list,
+                             argument_hint: str | None = None) -> str:
     """Generate YAML frontmatter for a Devin skill SKILL.md file."""
     lines = [
         "---",
         f"name: {name}",
         f'description: "{description}"',
+    ]
+    if argument_hint:
+        lines.append(f'argument-hint: "{argument_hint}"')
+    lines.extend([
         "triggers:",
         "  - user",
         "  - model",
-    ]
+    ])
     if tools:
         lines.append("allowed-tools:")
         for tool in tools:
@@ -1003,7 +1008,7 @@ def build_devin(output_dir: Path):
         orch_body = read_file(orchestrator_path)
         desc = AGENT_DESCRIPTIONS.get("orchestrator", "Workflow Orchestrator")
         orch_tools = ["read", "edit", "grep", "glob", "exec"]
-        orch_fm = _devin_skill_frontmatter("crew", desc, orch_tools)
+        orch_fm = _devin_skill_frontmatter("crew", desc, orch_tools, argument_hint="task description")
         skill_dir = skills_out / "crew"
         skill_dir.mkdir(parents=True, exist_ok=True)
         dest = skill_dir / "SKILL.md"
@@ -1028,9 +1033,8 @@ def build_devin(output_dir: Path):
         desc = AGENT_DESCRIPTIONS.get(name, f"Crew agent: {name}")
         out_name = _agent_output_name(name)
 
-        # Command agents get argument-hint for $ARGUMENTS
+        # Command agents act as slash commands with $ARGUMENTS substitution
         if name in COMMAND_AGENTS:
-            # Command agents act as slash commands — include argument hint
             tools = ["read", "edit", "grep", "glob", "exec"]
             suffix = COMMAND_SUFFIXES.get(name, "\n\nArguments: $ARGUMENTS\n")
             fm_lines = [
