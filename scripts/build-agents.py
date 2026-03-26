@@ -1072,9 +1072,11 @@ def build_devin(output_dir: Path):
     commands_src = REPO_ROOT / "commands"
     if commands_src.exists():
         for cmd_path in sorted(commands_src.glob("*.md")):
+            cmd_name = cmd_path.stem  # e.g. "crew", "crew-resume"
+            if cmd_name == "crew":
+                continue  # orchestrator already written above
             body = read_file(cmd_path)
             content = _substitute_platform(body, "devin")
-            cmd_name = cmd_path.stem  # e.g. "crew", "crew-resume"
             skill_dir = skills_out / cmd_name
             skill_dir.mkdir(parents=True, exist_ok=True)
             dest = skill_dir / "SKILL.md"
