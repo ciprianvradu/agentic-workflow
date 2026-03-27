@@ -312,6 +312,7 @@ DEFAULT_CONFIG = {
             "copilot": False,
             "gemini": False,
             "opencode": True,
+            "devin": True,
         },
         "planner_mode": "auto",
     },
@@ -471,7 +472,7 @@ def _load_yaml(path: Path) -> Optional[dict]:
         return None
 
 
-PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode"]
+PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin"]
 
 
 def _get_global_config_path() -> Path:

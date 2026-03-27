@@ -4367,6 +4367,7 @@ _AI_HOST_CLI = {
     "gemini": "gemini",
     "copilot": "copilot",
     "opencode": "opencode",
+    "devin": "devin",
 }
 
 # Host-specific settings files to copy into worktrees
@@ -4375,6 +4376,7 @@ _HOST_SETTINGS = {
     "gemini": ["gemini_trust"],
     "copilot": [],
     "opencode": [],
+    "devin": [],
 }
 
 # Python script to add worktree to Gemini trustedFolders.json
@@ -4427,7 +4429,7 @@ def _build_resume_prompt(task_id: str, main_tasks_path: str, ai_host: str = "cla
     """Build the resume prompt string for a worktree session."""
     if ai_host in ("gemini", "copilot"):
         resume_cmd = f"@crew-resume {task_id}"
-    elif ai_host == "opencode":
+    elif ai_host in ("opencode", "devin"):
         resume_cmd = f"/crew-resume {task_id}"
     else:
         resume_cmd = f"/crew resume {task_id}"
@@ -4519,6 +4521,9 @@ def workflow_get_launch_command(
     elif ai_host == "gemini":
         # gemini -i "prompt" executes prompt then stays interactive
         cli_with_prompt = f"{cli} -i {safe_prompt}"
+    elif ai_host == "devin":
+        # devin -- "prompt" starts interactive with the prompt as the first message
+        cli_with_prompt = f"{cli} -- {safe_prompt}"
     else:
         # claude "prompt" starts interactive with the prompt as the first message
         cli_with_prompt = f"{cli} {safe_prompt}"
