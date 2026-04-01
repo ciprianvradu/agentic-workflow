@@ -7,10 +7,10 @@ For project context and architecture, see [docs/ai-context/](./docs/ai-context/)
 
 ## Project Overview
 
-A multi-agent orchestration framework for AI-augmented software development. Supports Claude Code, GitHub Copilot, Gemini CLI, and OpenCode from a single source of agent definitions.
+A multi-agent orchestration framework for AI-augmented software development. Supports Claude Code, GitHub Copilot, Gemini CLI, OpenCode, and Devin for Terminal from a single source of agent definitions.
 
 **Key components:**
-- `agents/` — Agent prompt sources (16 agents, compiled to 4 platforms via `scripts/build-agents.py`)
+- `agents/` — Agent prompt sources (16 agents, compiled to 5 platforms via `scripts/build-agents.py`)
 - `mcp/agentic-workflow-server/` — MCP server (state, config, orchestration tools)
 - `config/workflow-config.yaml` — Single configuration file (4-level cascade: global → project → task → CLI); essential settings at top, advanced settings below separator
 - `docs/orchestrator-spec.md` — Orchestrator agent specification (formerly `agents/orchestrator.md`)

@@ -8,7 +8,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 |------|---------|
 | [README.md](./README.md) | Project overview, structure, and getting started (this file) |
 | [architecture.md](./architecture.md) | Detailed architecture, patterns, and conventions |
-| [cross-platform.md](./cross-platform.md) | Cross-platform patterns: 4 AI hosts, Windows/WSL/macOS, fallbacks |
+| [cross-platform.md](./cross-platform.md) | Cross-platform patterns: 5 AI hosts, Windows/WSL/macOS, fallbacks |
 | [custom-phases.md](./custom-phases.md) | Custom phases (lifecycle hooks): inject skills, scripts, or agents into the workflow |
 | [memory-preservation.md](./memory-preservation.md) | How to save/retrieve discoveries across context compaction |
 | [severity-scale.md](./severity-scale.md) | Unified severity levels (Critical/High/Medium/Low) used by all agents |
@@ -21,7 +21,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 
 The **Agentic Development Workflow** is a multi-agent orchestration system for software development. It coordinates specialized AI agents — planner, design-challenger, reviewer, skeptic, implementer, quality-guard, and technical-writer — through a structured pipeline that plans, challenges design choices, reviews, stress-tests, builds, verifies, and documents code changes.
 
-It runs on **four platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, and OpenCode — using the same agent definitions and workflow configuration across all of them.
+It runs on **five platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, OpenCode, and Devin — using the same agent definitions and workflow configuration across all of them.
 
 The core infrastructure is an **MCP server** (Model Context Protocol) written in Python that manages workflow state, configuration, and orchestration logic.
 
@@ -62,11 +62,13 @@ agentic-workflow/
 │   ├── hooks-settings.json     # Claude Code lifecycle hooks (PreToolUse + Stop)
 │   ├── platform-orchestrators/ # Platform-specific orchestrator prompts
 │   │   ├── copilot.md
+│   │   ├── devin.md
 │   │   ├── gemini.md
 │   │   └── opencode.md
 │   └── platform-preambles/     # Platform-specific agent preambles
 │       ├── claude.md
 │       ├── copilot.md
+│       ├── devin.md
 │       ├── gemini.md
 │       └── opencode.md
 ├── mcp/agentic-workflow-server/  # MCP server (Python)
@@ -99,10 +101,12 @@ agentic-workflow/
 ├── .tasks/                     # Per-task workflow state (symlink in worktrees)
 ├── install.sh                  # Claude installer (primary)
 ├── install-copilot.sh          # Copilot installer
+├── install-devin.sh            # Devin installer
 ├── install-gemini.sh           # Gemini installer
 ├── install-opencode.sh         # OpenCode installer
 ├── uninstall.sh                # Claude uninstaller
 ├── uninstall-copilot.sh        # Copilot uninstaller
+├── uninstall-devin.sh          # Devin uninstaller
 ├── uninstall-gemini.sh         # Gemini uninstaller
 ├── uninstall-opencode.sh       # OpenCode uninstaller
 ├── plugin.json                 # Plugin manifest
@@ -216,11 +220,12 @@ Agent prompts are platform-agnostic markdown. Platform differences are handled b
 
 - **Preambles** (`config/platform-preambles/`) — Prepended to agent prompts per platform
 - **Orchestrators** (`config/platform-orchestrators/`) — Platform-specific orchestration instructions
-- **build-agents.py** — Generates platform-specific agent and command files with correct frontmatter, tool restrictions, output paths, and template placeholder substitution (`{__platform__}`, `{__platform_dir__}`, `{__scripts_dir__}`). Routes global installs to platform-specific directories (`~/.copilot/agents/`, `~/.config/opencode/`, etc.)
+- **build-agents.py** — Generates platform-specific agent and command files with correct frontmatter, tool restrictions, output paths, and template placeholder substitution (`{__platform__}`, `{__platform_dir__}`, `{__scripts_dir__}`). Routes global installs to platform-specific directories (`~/.copilot/agents/`, `~/.config/opencode/`, `~/.config/devin/skills/`, etc.)
 
 Commands differ by platform:
 - Claude: `/crew "task"`, `/crew-worktree "task"`, `/crew-quick "task"`
 - OpenCode: `/crew "task"`, `/crew-worktree "task"` (uses `$ARGUMENTS` instead of `$ARGS`)
+- Devin: `/crew "task"`, `/crew-worktree "task"` (uses skills: `/skill-name`)
 - Copilot: `@crew "task"`, `@crew-worktree "task"`
 - Gemini: `@crew-orchestrator "task"`, `@crew-worktree "task"`
 
@@ -246,7 +251,7 @@ See [cross-platform.md](./cross-platform.md) for detailed platform configuration
 1. Edit the markdown file in `agents/` or `commands/`
 2. Use `{__scripts_dir__}` when referencing helper scripts (e.g., `python3 {__scripts_dir__}/crew_orchestrator.py`) -- never use bare relative paths like `python3 scripts/...`
 3. Run `scripts/build-agents.py <platform>` to regenerate platform-specific copies
-4. All output files are auto-generated -- don't edit them directly (`.github/agents/`, `~/.copilot/agents/`, `~/.gemini/agents/`, `~/.config/opencode/`, `.opencode/`, `~/.claude/commands/`)
+4. All output files are auto-generated -- don't edit them directly (`.github/agents/`, `~/.copilot/agents/`, `~/.gemini/agents/`, `~/.config/opencode/`, `.opencode/`, `~/.claude/commands/`, `~/.config/devin/skills/`, `.devin/skills/`)
 
 ### Adding tests
 - Tests go in `mcp/agentic-workflow-server/tests/`
