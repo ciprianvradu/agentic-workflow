@@ -2480,13 +2480,8 @@ impl App {
 
         let candidates = cleanup::list_cleanup_candidates(&repo_path);
 
-        // Pre-select completed tasks by default
-        let mut selected = HashSet::new();
-        for (i, c) in candidates.iter().enumerate() {
-            if c.is_complete {
-                selected.insert(i);
-            }
-        }
+        // No pre-selection — user must explicitly choose one task at a time
+        let selected = HashSet::new();
 
         self.cleanup_popup = Some(CleanupPopup {
             step: CleanupStep::SelectWorktrees,
@@ -2619,21 +2614,14 @@ impl App {
                     }
                 }
                 KeyCode::Char(' ') => {
+                    // Single-select only (radio button) — one worktree at a time
                     if let Some(p) = &mut self.cleanup_popup {
                         let idx = p.cursor;
                         if p.selected.contains(&idx) {
-                            p.selected.remove(&idx);
-                        } else {
-                            p.selected.insert(idx);
-                        }
-                    }
-                }
-                KeyCode::Char('a') => {
-                    if let Some(p) = &mut self.cleanup_popup {
-                        if p.selected.len() == p.candidates.len() {
                             p.selected.clear();
                         } else {
-                            p.selected = (0..p.candidates.len()).collect();
+                            p.selected.clear();
+                            p.selected.insert(idx);
                         }
                     }
                 }

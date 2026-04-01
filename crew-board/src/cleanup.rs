@@ -258,8 +258,10 @@ fn execute_single_cleanup(
                 // Fallback: if git says "not a working tree" or "prunable",
                 // remove the directory manually and prune.
                 if stderr.contains("not a working tree") || stderr.contains("not a valid") {
-                    messages.push(format!("git worktree remove failed ({}), using fallback", stderr.trim()));
-                    // Remove directory if it exists
+                    messages.push(format!("git worktree remove failed ({}), manual cleanup only", stderr.trim()));
+                    // Only remove the specific worktree directory — never run
+                    // `git worktree prune` as it is a global operation that can
+                    // unregister other worktrees that appear stale (common on WSL).
                     if wt_abs.exists() {
                         if let Err(e) = std::fs::remove_dir_all(&wt_abs) {
                             return CleanupResult {
@@ -269,12 +271,6 @@ fn execute_single_cleanup(
                         }
                         messages.push("Directory removed".to_string());
                     }
-                    // Prune stale worktree entries
-                    let _ = Command::new("git")
-                        .args(["worktree", "prune"])
-                        .current_dir(repo_path)
-                        .output();
-                    messages.push("Stale worktree entries pruned".to_string());
                     true
                 } else {
                     return CleanupResult {

@@ -61,13 +61,14 @@ fn draw_select(frame: &mut Frame, area: Rect, popup: &crate::app::CleanupPopup) 
     } else {
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "Select worktrees to clean up",
+                "Select one worktree to clean up",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("  ({}/{} selected)", selected_count, total),
+                if selected_count == 0 { "  (none selected)".to_string() }
+                else { format!("  (1/{} selected)", total) },
                 Style::default().fg(Color::DarkGray),
             ),
         ]))
@@ -83,7 +84,7 @@ fn draw_select(frame: &mut Frame, area: Rect, popup: &crate::app::CleanupPopup) 
                 let is_cursor = i == popup.cursor;
                 let is_selected = popup.selected.contains(&i);
 
-                let checkbox = if is_selected { "[x]" } else { "[ ]" };
+                let checkbox = if is_selected { "(●)" } else { "( )" };
                 let prefix = if is_cursor { ">" } else { " " };
 
                 let status_icon = if c.is_complete {
@@ -134,7 +135,7 @@ fn draw_select(frame: &mut Frame, area: Rect, popup: &crate::app::CleanupPopup) 
     let hint_text = if popup.candidates.is_empty() {
         "Esc close"
     } else {
-        "Space toggle  a all  Enter next  Esc cancel"
+        "Space select  Enter next  Esc cancel"
     };
     let hint = Paragraph::new(Line::from(Span::styled(
         hint_text,
