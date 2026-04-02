@@ -19,7 +19,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 
 ## What This Project Is
 
-The **Agentic Development Workflow** is a multi-agent orchestration system for software development. It coordinates specialized AI agents — planner, design-challenger, reviewer, skeptic, implementer, quality-guard, and technical-writer — through a structured pipeline that plans, challenges design choices, reviews, stress-tests, builds, verifies, and documents code changes.
+The **Agentic Development Workflow** is a multi-agent orchestration system. It coordinates specialized AI agents through a structured pipeline that plans, reviews, builds, verifies, and documents work. While the built-in default crew targets software development (planner, design-challenger, reviewer, skeptic, implementer, quality-guard, and technical-writer), the system is **domain-agnostic** — custom crew definitions can configure entirely different roles and pipelines for content creation, research, legal review, or any other domain.
 
 It runs on **five platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, OpenCode, and Devin — using the same agent definitions and workflow configuration across all of them.
 
@@ -77,9 +77,10 @@ agentic-workflow/
 │   │   ├── state_tools.py      # Workflow state management (~3800 lines)
 │   │   ├── config_tools.py     # Configuration cascade & defaults
 │   │   ├── orchestration_tools.py  # High-level crew orchestration helpers
+│   │   ├── crew_definitions.py # Crew abstraction: roles, pipelines, resolution chain
 │   │   └── resources.py        # MCP resource providers
-│   ├── tests/                  # pytest test suite (432+ tests)
-│   └── pyproject.toml          # Package metadata (v0.4.0)
+│   ├── tests/                  # pytest test suite (460+ tests)
+│   └── pyproject.toml          # Package metadata
 ├── scripts/                    # Helper scripts
 │   ├── build-agents.py         # Builds platform-specific agent files
 │   ├── setup-worktree.py       # Worktree creation (standalone, no MCP imports)
@@ -97,6 +98,11 @@ agentic-workflow/
 ├── docs/
 │   ├── overview.md             # Non-technical overview (for managers)
 │   └── ai-context/             # AI-agent-facing documentation (this dir)
+├── examples/
+│   └── crews/                  # Example crew definitions for non-software domains
+│       ├── README.md           # How to use crew definitions
+│       ├── content-creation.yaml  # Editorial workflow (research → write → edit)
+│       └── research-analysis.yaml # Investigation workflow (scout → analyze → synthesize)
 ├── .beads/                     # Issue tracker data (beads/bd)
 ├── .tasks/                     # Per-task workflow state (symlink in worktrees)
 ├── install.sh                  # Claude installer (primary)
@@ -189,6 +195,7 @@ The MCP server (`mcp/agentic-workflow-server/`) is the backbone. It exposes tool
 | `state_tools.py` | All workflow state: initialize, transition, worktree, launch, discoveries, assertions, costs | ~3800 lines |
 | `config_tools.py` | Configuration loading, cascade, defaults, validation | ~900 lines |
 | `orchestration_tools.py` | High-level crew helpers: arg parsing, phase routing, implementation actions | ~2600 lines |
+| `crew_definitions.py` | Crew abstraction: roles, pipelines, auto-detection, resolution chain | ~510 lines |
 | `server.py` | MCP tool registration, schema definitions, dispatch | ~1500 lines |
 | `resources.py` | MCP resource providers (agent prompts, config files) | ~200 lines |
 
@@ -240,6 +247,21 @@ See [cross-platform.md](./cross-platform.md) for detailed platform configuration
 4. Add to MCP tool schema in `server.py` if exposed as a tool parameter
 5. Add tests
 6. Update agent docs if the setting affects agent behavior
+
+### Adding a new role or pipeline to the default crew
+1. Add the role to `SOFTWARE_DEV_CREW["roles"]` in `crew_definitions.py`
+2. Add to the appropriate pipeline(s) in `SOFTWARE_DEV_CREW["pipelines"]`
+3. Set effort levels in `SOFTWARE_DEV_CREW["effort_levels"]`
+4. If optional, add trigger rules in `SOFTWARE_DEV_CREW["specialized_roles"]`
+5. Create the agent prompt file in `agents/`
+6. Add tests in `tests/test_crew_definitions.py`
+
+### Creating a custom crew definition
+1. Copy a template from `examples/crews/` or start from the schema in `config/workflow-config.yaml`
+2. Define roles, pipelines, auto_detection, specialized_roles, categories, effort_levels
+3. Place under the `crew:` key in `workflow-config.yaml` (project or global)
+4. Create prompt files for each role in the agents directory
+5. See `examples/crews/README.md` for detailed instructions
 
 ### Adding a new MCP tool
 1. Implement the function in the appropriate module (state_tools.py or config_tools.py)

@@ -19,10 +19,16 @@ Detailed architecture reference for AI agents working on the agentic-workflow co
 │  │  │             │ │              │ │ _tools         │ │  │
 │  │  └──────┬──────┘ └──────┬───────┘ └───────┬────────┘ │  │
 │  │         │               │                  │          │  │
-│  │         ▼               ▼                  ▼          │  │
-│  │    .tasks/TASK_XXX/   config cascade    crew_* helpers│  │
-│  │    state.json         (4 levels)        (arg parsing, │  │
-│  │    *.md outputs                          phase loop)  │  │
+│  │         └───────┬───────┘──────────────────┘          │  │
+│  │                 ▼                                     │  │
+│  │         crew_definitions  ← resolve_crew(config)      │  │
+│  │         (roles, pipelines, auto-detection rules)      │  │
+│  │                 │                                     │  │
+│  │         ┌───────┼─────────────────┐                   │  │
+│  │         ▼       ▼                 ▼                   │  │
+│  │    .tasks/    config cascade    crew_* helpers         │  │
+│  │    state.json (4 levels)       (arg parsing,          │  │
+│  │    *.md outputs                 phase loop)           │  │
 │  └───────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -99,18 +105,20 @@ Because the hook fires on every session stop (including ad-hoc user interactions
 **Cross-repo stats**: `scripts/crew-stats.py --repos ~/project-a ~/project-b` aggregates task states from multiple repositories. Includes per-repo breakdown (tasks, completions, cost, tool versions), version distribution, and most-customized config settings. Without `--repos`, behavior is unchanged (single-repo mode).
 
 #### Mode & Effort
-- `workflow_detect_mode(description)` — Auto-detect workflow mode from task text
+- `workflow_detect_mode(description)` — Auto-detect workflow mode from task text (uses crew's `auto_detection` rules)
 - `workflow_set_mode(mode)` / `workflow_get_mode()` — Manual mode control
-- `workflow_get_effort_level(agent)` — Recommended thinking depth per mode
+- `workflow_get_effort_level(agent)` — Recommended thinking depth per mode (uses crew's `effort_levels`)
 
-**Workflow Modes:**
+**Workflow Modes (default software-dev crew):**
 | Mode | Agents | Use case | Est. cost |
 |------|--------|----------|-----------|
 | **quick** | implementer | Typos, one-line fixes | ~$0.03 |
 | **standard** | planner → skeptic → implementer → technical_writer | Routine features, refactors | ~$0.15 |
 | **thorough** | planner → design_challenger + reviewer + skeptic (parallel) → implementer → quality_guard + security_auditor (parallel) → technical_writer | Security, migrations, breaking changes | ~$0.40+ |
 
-Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough.
+These modes are now defined in `crew_definitions.py:SOFTWARE_DEV_CREW["pipelines"]` rather than hardcoded constants. Custom crews can define entirely different pipeline names and phase sequences.
+
+Legacy aliases: `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough. These are domain-agnostic (`MODE_ALIASES` in `crew_definitions.py`).
 
 The **technical_writer** phase is a required phase in all modes that include it (standard and thorough). REQUIRED_PHASES are: planner, implementer, technical_writer.
 
@@ -120,7 +128,7 @@ When `documentation.async_mode` is true, the standard mode workflow completes af
 
 **Auto-Detection (default `--mode auto`):**
 
-Mode is selected by two signals — highest wins (thorough > standard > quick):
+Mode is selected by two signals — highest wins (thorough > standard > quick). The keyword lists and rules are now defined in the crew's `auto_detection` section (see `crew_definitions.py`), making them customizable per domain:
 
 1. **Keyword matching** against task description (case-insensitive):
    - **quick**: "typo", "spelling", "whitespace", "one-line", "trivial", "rename variable", "update comment", "fix import" — but excluded if description also contains "implement", "refactor", "create", "build", "security", etc.
@@ -156,6 +164,61 @@ The detection logic is in `workflow_detect_mode()` — pure Python, no LLM invol
 - `_assemble_agent_prompt(agent, path, context_files, conventions, variables, task_dir)` — Server-side prompt assembly
 - `_read_human_guidance(task_dir)` — Extract human guidance from interactions.jsonl
 
+### crew_definitions.py — Crew Abstraction Layer (~510 lines)
+
+The crew definitions module provides a domain-agnostic abstraction over the workflow engine. It decouples the *what* (roles, pipelines, detection rules) from the *how* (state management, orchestration, config loading).
+
+**Core concept:** A *crew definition* is a dict packaging everything the orchestrator needs for a domain-specific workflow:
+
+| Section | Purpose | Replaces |
+|---------|---------|----------|
+| `roles` | Agent definitions (prompt file, category, description) | Hardcoded `AGENT_PROMPT_FILES`, `AGENT_LIMIT_CATEGORY` |
+| `pipelines` | Named phase sequences (quick/standard/thorough) | Hardcoded `WORKFLOW_MODES` |
+| `effort_levels` | Per-pipeline, per-role thinking depth | Hardcoded `EFFORT_LEVELS` |
+| `auto_detection` | Keyword/pattern rules for pipeline selection | Hardcoded `AUTO_DETECT_RULES` |
+| `specialized_roles` | Optional roles with auto-triggers | Hardcoded `OPTIONAL_AGENT_TRIGGERS` |
+| `categories` | Turn limits and cost grouping | Hardcoded `SUBAGENT_LIMITS` |
+
+**Built-in default:** `SOFTWARE_DEV_CREW` — the complete software-development crew definition. This is used when no `crew:` section exists in config, preserving full backward compatibility.
+
+**Resolution chain** (`resolve_crew(config)`):
+
+1. **Explicit `crew:` key** in effective config → merge with defaults for completeness
+2. **Synthesized from legacy config keys** (`workflow_modes`, `specialized_agents`, `effort_levels`, etc.) → maps onto crew structure
+3. **Built-in `SOFTWARE_DEV_CREW`** → used as-is when no config overrides exist
+
+**`_extend: true` merge behavior:** By default, a user-defined section (e.g., `roles`) *replaces* the default entirely. Setting `_extend: true` inside a section deep-merges with defaults instead — useful for adding roles to the software-dev crew without redefining all existing ones:
+
+```yaml
+crew:
+  roles:
+    _extend: true
+    my_custom_linter:
+      prompt_file: custom-linter.md
+      category: planning
+      description: "Domain-specific linting"
+```
+
+**Accessor functions** (used by `state_tools.py` and `orchestration_tools.py`):
+
+- `get_pipelines(crew)` — All pipeline definitions
+- `get_pipeline(crew, name)` — Single pipeline by name (resolves aliases)
+- `get_roles(crew)` / `get_role_prompt_file(crew, name)` — Role definitions and prompt files
+- `get_role_category(crew, name)` — Category for turn limits
+- `get_category_max_turns(crew, category)` — Max turns for a category
+- `get_effort_level(crew, pipeline, role)` — Thinking depth for a role in a pipeline
+- `get_specialized_roles(crew)` — Optional auto-triggered roles
+- `get_auto_detection_rules(crew)` — Pipeline auto-detection rules
+- `get_phase_order(crew)` — Derived phase order from longest pipeline + remaining roles
+
+**Mode aliases** (`MODE_ALIASES` dict): `micro`/`minimal` → quick, `turbo`/`fast`/`reviewed` → standard, `full` → thorough. These are domain-agnostic and always available.
+
+**Integration point:** `_get_crew_config(task_id)` in `state_tools.py` (line ~50) resolves the crew from effective config. All functions that previously used hardcoded constants now call this helper and pass the crew dict to the appropriate accessor.
+
+**Example custom crews** are in `examples/crews/`:
+- `content-creation.yaml` — Editorial workflow (researcher → writer → editor → fact_checker → seo_optimizer)
+- `research-analysis.yaml` — Investigation workflow (scout → analyst → critic → synthesizer → visualizer → summarizer)
+
 ### config_tools.py — Configuration (~900 lines)
 
 **`DEFAULT_CONFIG` dict** (line ~24) — All settings with defaults. This is the source of truth for what settings exist.
@@ -163,6 +226,7 @@ The detection logic is in `workflow_detect_mode()` — pure Python, no LLM invol
 **Config caching**: `config_get_effective()` caches merged results with a 5-minute TTL. The cache key is based on file paths and their `mtime` values, so editing any config file invalidates the cache on the next call. The cache is per-process only — restarting the MCP server always starts fresh.
 
 Key config sections:
+- `crew` — Custom crew definition (roles, pipelines, auto-detection, specialized roles, categories, effort levels). When absent, the built-in software-dev crew is used. See `crew_definitions.py` and `examples/crews/`. Added in v0.5.0.
 - `permission_profile` — Preset that controls both `checkpoints` and `auto_actions` as a single setting. Values: `strict` (all checkpoints, minimal auto), `standard` (current default), `autonomous` (minimal checkpoints, git auto-enabled). Can be overridden by the `--profile` CLI flag passed to `crew_parse_args()`.
 - `checkpoints` — Which human approval points are active per phase (overrides `permission_profile` when set explicitly)
 - `knowledge_base` — Path to AI context docs (default: `docs/ai-context/`)
@@ -437,9 +501,120 @@ Follow this checklist:
 
 `config_get_effective()` warns about unknown keys but doesn't reject them. The `_get_valid_keys()` helper recursively collects valid keys from `DEFAULT_CONFIG`.
 
+## Crew Definitions Pattern
+
+### Overview
+
+Crew definitions are the abstraction layer between configuration and the agent system. They decouple *domain-specific* concerns (which roles exist, what pipelines are available, how to auto-detect pipeline from task description) from *engine-level* concerns (state management, phase transitions, orchestration).
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ workflow-config.yaml                                     │
+│   crew:              ─── or ─── legacy keys              │
+│     roles: {...}                 workflow_modes: {...}    │
+│     pipelines: {...}             specialized_agents: {...}│
+│     auto_detection: {...}        effort_levels: {...}     │
+└──────────────┬──────────────────────────┬────────────────┘
+               │                          │
+               ▼                          ▼
+        resolve_crew()           _synthesize_from_legacy()
+               │                          │
+               └──────────┬───────────────┘
+                          ▼
+                 Crew Definition Dict
+                 (always complete)
+                          │
+            ┌─────────────┼──────────────┐
+            ▼             ▼              ▼
+      state_tools    orchestration   crew_orchestrator
+      (mode, effort)  (phase routing)  (CLI batching)
+```
+
+### Terminology
+
+The crew definitions feature introduces a deliberate naming distinction:
+
+| Term | Meaning | Context |
+|------|---------|---------|
+| **Role** | A position in a crew (e.g., "researcher", "editor") | Crew definition YAML, `crew_definitions.py` |
+| **Agent** | The AI entity that fills a role | Runtime, agent prompts, orchestration |
+| **Pipeline** | A named sequence of roles (e.g., "standard") | Crew definition (replaces "mode" at the definition level) |
+| **Mode** | User-facing name for a pipeline (e.g., `--mode standard`) | CLI, config, state.json |
+| **Phase** | A single step in a pipeline execution | State transitions, `state.json` |
+| **Crew** | The complete package of roles + pipelines + rules | Config (`crew:` key), `crew_definitions.py` |
+| **Category** | Grouping of roles for turn limits and cost tracking | Crew definition (`categories` section) |
+
+In practice, "role" and "agent" are often used interchangeably. "Pipeline" and "mode" refer to the same thing at different levels of abstraction. The distinction matters when reading `crew_definitions.py` (uses role/pipeline) vs `state_tools.py` (uses agent/mode/phase).
+
+### Backward Compatibility
+
+Zero breaking changes. The resolution chain ensures all existing configs work:
+
+1. If `crew:` exists in config → use it (merged with defaults for completeness)
+2. If legacy keys exist (`workflow_modes`, `specialized_agents`, etc.) → synthesize a crew from them
+3. Otherwise → use `SOFTWARE_DEV_CREW` as-is
+
+The `_synthesize_from_legacy()` function maps legacy config keys:
+- `workflow_modes.modes` → `pipelines`
+- `specialized_agents` → `specialized_roles`
+- `effort_levels` → `effort_levels`
+- `workflow_modes.auto_detection` or `auto_detection` → `auto_detection`
+- `subagent_limits.max_turns` → `categories` (with name mapping: `planning_agents` → `planning`, etc.)
+
+### Custom Crew YAML Schema
+
+```yaml
+crew:
+  name: my-workflow                    # Crew identifier
+  description: "What this crew does"   # Human-readable description
+
+  roles:                               # Agent definitions
+    role_name:
+      prompt_file: role-name.md        # Relative to agents_dir
+      category: category_name          # For turn limits / cost grouping
+      description: "What this role does"
+
+  pipelines:                           # Named phase sequences
+    quick:
+      description: "Minimal pipeline"
+      phases: [role_a]
+      estimated_cost: "$0.03"
+    standard:
+      phases: [role_a, role_b, role_c]
+    thorough:
+      phases: [role_a, role_b, role_c, role_d]
+
+  auto_detection:                      # Pipeline selection from task text
+    quick:
+      keywords: [fast, simple, fix]
+      exclude_keywords: [complex, critical]
+    standard:
+      keywords: [build, create, update]
+    thorough:
+      keywords: [security, critical, migration]
+
+  specialized_roles:                   # Optional auto-triggered roles
+    role_d:
+      triggers:
+        keywords: [keyword1, keyword2]
+        file_patterns: ["**/path/**"]
+
+  categories:                          # Turn limits
+    category_name: { max_turns: 30 }
+
+  effort_levels:                       # Per-pipeline thinking depth
+    quick:
+      role_a: low
+    standard:
+      role_a: high
+      role_b: medium
+```
+
 ## Agent System Pattern
 
-### Agent Roster
+### Agent Roster (Default Software-Dev Crew)
+
+The built-in software-dev crew defines these roles. Custom crews can define entirely different rosters — see `crew_definitions.py` and `examples/crews/`.
 
 | Agent | Mode(s) | Role |
 |-------|---------|------|
@@ -768,6 +943,7 @@ tests/
 ├── test_config_tools.py         # Config loading, cascade, platform paths
 ├── test_config_tools_extended.py # Additional config edge cases
 ├── test_orchestration_tools.py  # Crew helpers (arg parsing, phase routing, checkpoints, Jira transition)
+├── test_crew_definitions.py     # Crew definition resolution, merging, accessors, legacy synthesis (27 tests)
 ├── test_crew_orchestrator.py    # CLI orchestrator script (subprocess tests)
 ├── test_resources.py            # MCP resource tests
 ├── test_scripts.py              # Deterministic CLI scripts (crew-config, crew-status, crew-cost-report, crew-stats)

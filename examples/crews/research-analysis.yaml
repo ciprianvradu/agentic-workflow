@@ -1,0 +1,117 @@
+# Research & Analysis Crew
+#
+# Example crew definition for research and analysis workflows.
+# Suitable for market research, competitive analysis, literature reviews,
+# due diligence, and investigative research.
+#
+# Usage in workflow-config.yaml:
+#   crew:
+#     ... (paste the crew block below)
+
+crew:
+  name: research-analysis
+  description: "Multi-agent research, analysis, and synthesis workflow"
+
+  roles:
+    scout:
+      prompt_file: scout.md
+      category: gathering
+      description: "Defines research scope, identifies sources, creates search strategy"
+
+    analyst:
+      prompt_file: analyst.md
+      category: analysis
+      description: "Analyzes gathered data, identifies patterns, draws insights"
+
+    synthesizer:
+      prompt_file: synthesizer.md
+      category: synthesis
+      description: "Combines findings into coherent narrative with recommendations"
+
+    critic:
+      prompt_file: critic.md
+      category: review
+      description: "Challenges assumptions, tests conclusions, identifies blind spots"
+
+    visualizer:
+      prompt_file: visualizer.md
+      category: presentation
+      description: "Creates data visualizations, charts, and presentation materials"
+
+    summarizer:
+      prompt_file: summarizer.md
+      category: presentation
+      description: "Produces executive summaries and key takeaways"
+
+  pipelines:
+    quick:
+      description: "Quick analysis — single question, fast answer"
+      phases: [analyst]
+      estimated_cost: "$0.05"
+
+    standard:
+      description: "Scout + Analyze + Synthesize — standard research workflow"
+      phases: [scout, analyst, synthesizer, summarizer]
+      estimated_cost: "$0.25"
+
+    thorough:
+      description: "Full pipeline — deep research with critical review"
+      phases: [scout, analyst, critic, synthesizer, visualizer, summarizer]
+      estimated_cost: "$0.50+"
+
+  auto_detection:
+    quick:
+      keywords:
+        - quick look
+        - what is
+        - explain
+        - summarize
+        - check
+    standard:
+      keywords:
+        - research
+        - analyze
+        - investigate
+        - compare
+        - evaluate
+        - assess
+    thorough:
+      keywords:
+        - deep dive
+        - comprehensive
+        - due diligence
+        - competitive analysis
+        - market research
+        - literature review
+        - systematic review
+
+  specialized_roles:
+    critic:
+      triggers:
+        keywords: [investment, risk, decision, strategy, recommendation]
+    visualizer:
+      triggers:
+        keywords: [chart, graph, visualization, dashboard, presentation, slides]
+
+  categories:
+    gathering:    { max_turns: 25 }
+    analysis:     { max_turns: 40 }
+    synthesis:    { max_turns: 30 }
+    review:       { max_turns: 20 }
+    presentation: { max_turns: 15 }
+
+  effort_levels:
+    quick:
+      analyst: medium
+    standard:
+      scout: high
+      analyst: high
+      synthesizer: high
+      summarizer: medium
+    thorough:
+      scout: max
+      analyst: max
+      critic: high
+      synthesizer: high
+      visualizer: medium
+      summarizer: medium

@@ -163,6 +163,7 @@ def _generate_branch_name(task_id: str, state: dict) -> str:
 
 # ============================================================================
 # Optional agent detection patterns
+# Legacy fallback — overridden by crew definitions from config.
 # ============================================================================
 
 OPTIONAL_AGENT_TRIGGERS = {
@@ -199,6 +200,31 @@ OPTIONAL_AGENT_TRIGGERS = {
         "file_patterns": ["**/*.tsx", "**/*.jsx", "**/*.vue"]
     }
 }
+
+
+def _get_optional_agent_triggers(config: Optional[dict] = None) -> dict:
+    """Get optional agent trigger definitions from crew or config.
+
+    Checks crew definitions first, then falls back to hardcoded OPTIONAL_AGENT_TRIGGERS.
+    """
+    try:
+        from .crew_definitions import resolve_crew, get_specialized_roles
+        if config is None:
+            from .config_tools import config_get_effective
+            config = config_get_effective().get("config", {})
+        crew = resolve_crew(config)
+        specialized = get_specialized_roles(crew)
+        if specialized:
+            # Convert crew format to trigger format
+            triggers = {}
+            for name, role_cfg in specialized.items():
+                if isinstance(role_cfg, dict) and "triggers" in role_cfg:
+                    triggers[name] = role_cfg["triggers"]
+            if triggers:
+                return triggers
+    except Exception:
+        pass
+    return OPTIONAL_AGENT_TRIGGERS
 
 
 # ============================================================================
@@ -1156,7 +1182,7 @@ def crew_detect_optional_agents(
     reasons = {}
     skipped = []
 
-    for agent, triggers in OPTIONAL_AGENT_TRIGGERS.items():
+    for agent, triggers in _get_optional_agent_triggers(config=None).items():
         matched_keywords = []
         for kw in triggers["keywords"]:
             if kw in desc_lower:
@@ -1199,7 +1225,7 @@ def crew_detect_optional_agents(
 # Tool 5: crew_get_next_phase (highest impact)
 # ============================================================================
 
-# Agent prompt file mapping
+# Legacy fallback — overridden by crew definitions from config.
 AGENT_PROMPT_FILES = {
     "architect": "architect.md",
     "developer": "developer.md",
@@ -1215,7 +1241,7 @@ AGENT_PROMPT_FILES = {
     "accessibility_reviewer": "accessibility-reviewer.md",
 }
 
-# Subagent turn limits by category
+# Legacy fallback — overridden by crew categories.
 SUBAGENT_LIMITS = {
     "planning_agents": 30,
     "implementation_agents": 50,
@@ -1223,7 +1249,15 @@ SUBAGENT_LIMITS = {
     "consultation_agents": 15,
 }
 
-# Map agents to their limit category
+# Legacy category mapping — maps old category names to crew category names
+_LEGACY_CATEGORY_MAP = {
+    "planning_agents": "planning",
+    "implementation_agents": "execution",
+    "documentation_agents": "documentation",
+    "consultation_agents": "consultation",
+}
+
+# Legacy fallback — overridden by crew role categories.
 AGENT_LIMIT_CATEGORY = {
     "architect": "planning_agents",
     "developer": "planning_agents",
@@ -1538,9 +1572,31 @@ def _build_phase_action(
     if agent in custom_phases:
         return _build_custom_phase_action(agent, custom_phases[agent], state, config, task_dir)
 
-    # Get agent prompt path (supports custom agents via {agent}.md fallback)
-    prompt_file = AGENT_PROMPT_FILES.get(agent, f"{agent.replace('_', '-')}.md")
-    agents_dir = Path.home() / ".claude" / "agents"
+    # Resolve crew once — reused for prompt file and max turns below
+    _crew = None
+    try:
+        from .crew_definitions import resolve_crew, get_role_prompt_file, get_role_category, get_category_max_turns
+        _crew = resolve_crew(config)
+        prompt_file = get_role_prompt_file(_crew, agent)
+    except Exception:
+        prompt_file = AGENT_PROMPT_FILES.get(agent, f"{agent.replace('_', '-')}.md")
+
+    # Resolve agents directory: config → platform-specific default
+    agents_dir_cfg = config.get("agents_dir")
+    if agents_dir_cfg:
+        agents_dir = Path(agents_dir_cfg)
+        if not agents_dir.is_absolute():
+            agents_dir = _REPO_ROOT / agents_dir_cfg
+    else:
+        # Platform-specific default (check multiple platform dirs)
+        agents_dir = None
+        for platform_dir in (".claude", ".copilot", ".gemini", ".opencode"):
+            candidate = Path.home() / platform_dir / "agents"
+            if candidate.exists():
+                agents_dir = candidate
+                break
+        if agents_dir is None:
+            agents_dir = Path.home() / ".claude" / "agents"
     agent_prompt_path = str(agents_dir / prompt_file)
 
     # Get effort level (custom agents get "high" default via workflow_get_effort_level)
@@ -1555,10 +1611,25 @@ def _build_phase_action(
     # Fallback chain: mode-specific → flat agent-specific → default
     model = mode_models.get(agent) or models_config.get(agent) or default_model
 
-    # Get max turns from config first, then hardcoded defaults
-    subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
-    category = AGENT_LIMIT_CATEGORY.get(agent, "planning_agents")
-    max_turns = subagent_limits.get(category, SUBAGENT_LIMITS.get(category, 30))
+    # Get max turns — crew-aware with config and hardcoded fallback
+    try:
+        if _crew is None:
+            from .crew_definitions import resolve_crew as _rc, get_role_category, get_category_max_turns
+            _crew = _rc(config)
+        crew_category = get_role_category(_crew, agent)
+        max_turns = get_category_max_turns(_crew, crew_category)
+    except Exception:
+        max_turns = None
+    if max_turns is None:
+        subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
+        category = AGENT_LIMIT_CATEGORY.get(agent, "planning_agents")
+        max_turns = subagent_limits.get(category, SUBAGENT_LIMITS.get(category, 30))
+    else:
+        # Config subagent_limits can still override crew defaults
+        subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
+        category = AGENT_LIMIT_CATEGORY.get(agent, "planning_agents")
+        if category in subagent_limits:
+            max_turns = subagent_limits[category]
 
     # Get context files
     context_files = _get_context_files(agent, state, task_dir)

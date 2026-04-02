@@ -806,3 +806,91 @@ worktree:
 #       file_patterns: ["**/auth/**", "**/security/**"]
 #     writes_to_state: true
 custom_phases: {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Crew Definition (optional — for non-software-development workflows)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# A crew definition packages everything the orchestrator needs for a
+# domain-specific workflow: roles, pipelines, auto-detection rules,
+# specialized role triggers, and category settings.
+#
+# When omitted, the built-in "software-dev" crew is used. All existing
+# config keys (workflow_modes, specialized_agents, effort_levels, etc.)
+# still work and are automatically synthesized into a crew definition.
+#
+# To fully customize the workflow for a non-software domain, define a
+# crew: section here. Any section you omit falls back to the software-dev
+# default. Set _extend: true in a section to merge with defaults instead
+# of replacing them.
+#
+# See examples/crews/ for complete examples (content-creation, research, etc.)
+#
+# crew:
+#   name: my-custom-workflow
+#   description: "My domain-specific multi-agent workflow"
+#
+#   # Roles — the cast of agents in your workflow
+#   roles:
+#     researcher:
+#       prompt_file: researcher.md     # Relative to agents_dir
+#       category: research             # For turn limits and cost grouping
+#       description: "Gathers and analyzes source material"
+#     writer:
+#       prompt_file: writer.md
+#       category: creation
+#       description: "Produces the primary output"
+#     editor:
+#       prompt_file: editor.md
+#       category: review
+#       description: "Reviews and improves output quality"
+#
+#   # Pipelines — named sequences (replace workflow_modes)
+#   pipelines:
+#     quick:
+#       description: "Writer only — simple edits"
+#       phases: [writer]
+#       estimated_cost: "$0.03"
+#     standard:
+#       description: "Research + Write + Edit"
+#       phases: [researcher, writer, editor]
+#       estimated_cost: "$0.15"
+#     thorough:
+#       description: "Full pipeline with fact-checking"
+#       phases: [researcher, writer, editor, fact_checker]
+#       estimated_cost: "$0.30+"
+#
+#   # Auto-detection — how to pick a pipeline from task description
+#   auto_detection:
+#     quick:
+#       keywords: [tweet, caption, short post, quick edit]
+#     standard:
+#       keywords: [blog, article, newsletter, write]
+#     thorough:
+#       keywords: [whitepaper, report, legal, compliance]
+#
+#   # Specialized roles — optional, auto-triggered by task content
+#   specialized_roles:
+#     fact_checker:
+#       triggers:
+#         keywords: [facts, statistics, claims, data]
+#
+#   # Role categories — for turn limits and cost grouping
+#   categories:
+#     research: { max_turns: 30 }
+#     creation: { max_turns: 50 }
+#     review: { max_turns: 20 }
+#
+#   # Per-pipeline effort levels
+#   effort_levels:
+#     quick:
+#       writer: low
+#     standard:
+#       researcher: high
+#       writer: high
+#       editor: medium
+#
+# You can also set agents_dir to control where agent prompt files are found:
+# agents_dir: agents/         # Relative to repo root
+# agents_dir: /absolute/path  # Or an absolute path

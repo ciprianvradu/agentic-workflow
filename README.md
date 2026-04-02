@@ -4,7 +4,7 @@
   <img src="logo.png" alt="Agentic Workflow Logo" width="300">
 </p>
 
-A multi-agent development workflow that orchestrates specialized AI agents through planning, implementation, and documentation phases.
+A multi-agent development workflow that orchestrates specialized AI agents through planning, implementation, and documentation phases. Supports custom crew definitions for any domain — software development, content creation, research, and more.
 
 **Supports Claude Code, GitHub Copilot CLI, Gemini CLI, OpenCode, and Devin for Terminal.**
 
@@ -24,6 +24,7 @@ Complex development tasks require multiple perspectives: architecture considerat
 ## Features
 
 - **Multi-agent architecture** - 8 specialized agents for different concerns (including the new planner agent)
+- **Custom crew definitions** - Define custom roles and pipelines for any domain via YAML config (`crew:` section). Built-in software-dev crew is the default. See `examples/crews/`
 - **Single agent consultation** - Quick `/crew ask` for second opinions without full workflow
 - **Workflow modes** - Quick, standard, thorough modes for different task complexity (`--mode`)
 - **Human checkpoints** - Control points for review and approval at each phase

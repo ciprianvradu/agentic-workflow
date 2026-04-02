@@ -46,6 +46,23 @@ REQUIRED_PHASES = [
     "technical_writer"
 ]
 
+
+def _get_crew_config(task_id: Optional[str] = None) -> dict:
+    """Get the resolved crew definition from config, with full fallback chain.
+
+    Returns the crew definition dict. Uses built-in software-dev defaults
+    when no explicit ``crew:`` config is present.
+    """
+    try:
+        from .crew_definitions import resolve_crew
+        from .config_tools import config_get_effective
+        effective = config_get_effective(task_id=task_id)
+        config = effective.get("config", {})
+        return resolve_crew(config)
+    except Exception:
+        from .crew_definitions import SOFTWARE_DEV_CREW
+        return SOFTWARE_DEV_CREW
+
 # Maximum error patterns to keep in .error_patterns.jsonl (oldest-first eviction)
 MAX_ERROR_PATTERNS = 500
 
@@ -2337,6 +2354,8 @@ def workflow_clear_model_cooldown(
 # Workflow Modes
 # ============================================================================
 
+# Legacy fallback — overridden by crew definitions from config.
+# Kept for backward compatibility when config loading fails.
 WORKFLOW_MODES = {
     "quick": {
         "description": "Implementer only — typos, one-line fixes, trivial changes",
@@ -2355,7 +2374,8 @@ WORKFLOW_MODES = {
     }
 }
 
-# Backward-compatible aliases for old mode names
+# Backward-compatible aliases for old mode names.
+# Also available via crew_definitions.MODE_ALIASES.
 MODE_ALIASES = {
     "micro": "quick",
     "minimal": "quick",
@@ -2444,41 +2464,44 @@ SCOPE_ESCALATION_RULES = {
 
 
 def _resolve_mode(mode_name: str, task_id: Optional[str] = None) -> Optional[dict]:
-    """Resolve a workflow mode by name, checking config first then hardcoded defaults.
+    """Resolve a workflow mode by name, checking crew definitions first then hardcoded defaults.
 
-    This allows projects to define custom modes in their workflow-config.yaml
-    under workflow_modes.modes, which take precedence over the hardcoded WORKFLOW_MODES.
+    Resolution order:
+      1. Crew definition pipelines (from config ``crew:`` or synthesized from legacy keys)
+      2. Config ``workflow_modes.modes`` (legacy, handled by crew synthesis)
+      3. Hardcoded WORKFLOW_MODES (final fallback)
 
     Args:
-        mode_name: The mode name to resolve (e.g., "standard", "reviewed", "thorough", or legacy/custom name)
+        mode_name: The mode name to resolve (e.g., "standard", "reviewed", "thorough", or custom)
         task_id: Optional task ID for config resolution
 
     Returns:
         Mode config dict with "phases", "description", "estimated_cost", or None if not found
     """
     # Resolve aliases first (turbo→standard, full→thorough, etc.)
+    # Note: get_pipeline() also resolves aliases internally, but we resolve
+    # here for the hardcoded WORKFLOW_MODES fallback path.
     resolved_name = MODE_ALIASES.get(mode_name, mode_name)
 
-    # Check hardcoded modes
-    if resolved_name in WORKFLOW_MODES:
-        return WORKFLOW_MODES[resolved_name]
-
-    # Check config for custom modes (try both original and resolved name)
+    # Try crew definitions (config-driven) first
     try:
-        from .config_tools import config_get_effective
-        effective = config_get_effective(task_id=task_id)
-        config = effective.get("config", {})
-        custom_modes = config.get("workflow_modes", {}).get("modes", {})
-        if mode_name in custom_modes:
-            return custom_modes[mode_name]
+        crew = _get_crew_config(task_id=task_id)
+        from .crew_definitions import get_pipeline
+        pipeline = get_pipeline(crew, resolved_name)
+        if pipeline:
+            return pipeline
     except Exception:
         pass
+
+    # Fallback to hardcoded modes
+    if resolved_name in WORKFLOW_MODES:
+        return WORKFLOW_MODES[resolved_name]
 
     return None
 
 
 def _get_all_mode_names(task_id: Optional[str] = None) -> list[str]:
-    """Get all available mode names (hardcoded + aliases + config-defined).
+    """Get all available mode names (crew pipelines + hardcoded + aliases + config-defined).
 
     Args:
         task_id: Optional task ID for config resolution
@@ -2487,6 +2510,18 @@ def _get_all_mode_names(task_id: Optional[str] = None) -> list[str]:
         List of all known mode names
     """
     modes = list(WORKFLOW_MODES.keys()) + list(MODE_ALIASES.keys())
+
+    # Add crew pipeline names
+    try:
+        crew = _get_crew_config(task_id=task_id)
+        from .crew_definitions import get_all_pipeline_names
+        for name in get_all_pipeline_names(crew):
+            if name not in modes:
+                modes.append(name)
+    except Exception:
+        pass
+
+    # Legacy: also check config directly for any we missed
     try:
         from .config_tools import config_get_effective
         effective = config_get_effective(task_id=task_id)
@@ -2597,6 +2632,14 @@ def workflow_detect_mode(
     """
     desc_lower = task_description.lower()
 
+    # Use crew-aware auto-detection rules (falls back to hardcoded AUTO_DETECT_RULES)
+    try:
+        crew = _get_crew_config()
+        from .crew_definitions import get_auto_detection_rules
+        detect_rules = get_auto_detection_rules(crew)
+    except Exception:
+        detect_rules = AUTO_DETECT_RULES
+
     # --- Signal 1: keyword analysis ---
     keyword_mode = "standard"
     keyword_confidence = 0.5
@@ -2608,7 +2651,7 @@ def workflow_detect_mode(
     # even though "auth" is also a thorough keyword). Patterns are specific enough
     # that exclude_keywords are not applied to them.
     quick_pattern_matches = []
-    for pattern in AUTO_DETECT_RULES["quick"].get("patterns", []):
+    for pattern in detect_rules.get("quick", {}).get("patterns", []):
         if re.search(pattern, task_description, re.IGNORECASE):
             quick_pattern_matches.append(pattern)
 
@@ -2621,7 +2664,7 @@ def workflow_detect_mode(
     if keyword_mode != "quick":
         # Check for thorough mode triggers (highest priority among keyword checks)
         thorough_matches = []
-        for keyword in AUTO_DETECT_RULES["thorough"]["keywords"]:
+        for keyword in detect_rules.get("thorough", {}).get("keywords", []):
             if keyword in desc_lower:
                 thorough_matches.append(keyword)
 
@@ -2633,14 +2676,14 @@ def workflow_detect_mode(
         else:
             # Check for standard mode (routine tasks without critical keywords)
             standard_excluded = False
-            for exclude_keyword in AUTO_DETECT_RULES["standard"]["exclude_keywords"]:
+            for exclude_keyword in detect_rules.get("standard", {}).get("exclude_keywords", []):
                 if exclude_keyword in desc_lower:
                     standard_excluded = True
                     break
 
             if not standard_excluded:
                 standard_matches = []
-                for keyword in AUTO_DETECT_RULES["standard"]["keywords"]:
+                for keyword in detect_rules.get("standard", {}).get("keywords", []):
                     if keyword in desc_lower:
                         standard_matches.append(keyword)
 
@@ -2653,14 +2696,14 @@ def workflow_detect_mode(
                     # Check if this could be quick mode (trivial keywords only,
                     # no broader feature keywords that would require planning)
                     quick_excluded = False
-                    for exclude_keyword in AUTO_DETECT_RULES["quick"]["exclude_keywords"]:
+                    for exclude_keyword in detect_rules.get("quick", {}).get("exclude_keywords", []):
                         if exclude_keyword in desc_lower:
                             quick_excluded = True
                             break
 
                     if not quick_excluded:
                         quick_matches = []
-                        for kw in AUTO_DETECT_RULES["quick"]["keywords"]:
+                        for kw in detect_rules.get("quick", {}).get("keywords", []):
                             if kw in desc_lower:
                                 quick_matches.append(kw)
 
@@ -2674,7 +2717,7 @@ def workflow_detect_mode(
                             # These are separate from top-level patterns because
                             # they need exclude_keywords to be checked first
                             additive_pattern_matches = []
-                            for pattern in AUTO_DETECT_RULES["quick"].get("additive_patterns", []):
+                            for pattern in detect_rules.get("quick", {}).get("additive_patterns", []):
                                 if re.search(pattern, task_description, re.IGNORECASE | re.MULTILINE):
                                     additive_pattern_matches.append(pattern)
                             if additive_pattern_matches:
@@ -2908,10 +2951,17 @@ def workflow_get_effort_level(
 
     state = _load_state(task_dir)
     mode = state.get("workflow_mode", {}).get("effective", "standard")
-    # Resolve any legacy mode names to new names for effort lookup
     resolved_mode = MODE_ALIASES.get(mode, mode)
-    mode_efforts = EFFORT_LEVELS.get(resolved_mode, EFFORT_LEVELS["standard"])
-    effort = mode_efforts.get(agent, "high")
+
+    # Try crew definitions first for effort levels
+    try:
+        crew = _get_crew_config(task_id=state.get("task_id"))
+        from .crew_definitions import get_effort_level as crew_get_effort
+        effort = crew_get_effort(crew, resolved_mode, agent)
+    except Exception:
+        # Fallback to hardcoded EFFORT_LEVELS
+        mode_efforts = EFFORT_LEVELS.get(resolved_mode, EFFORT_LEVELS["standard"])
+        effort = mode_efforts.get(agent, "high")
 
     return {
         "effort": effort,

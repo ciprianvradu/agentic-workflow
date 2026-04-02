@@ -1,0 +1,122 @@
+# Content Creation Crew
+#
+# Example crew definition for content creation workflows.
+# Copy this into your project's workflow-config.yaml under the `crew:` key,
+# or reference it as a starting point for your own domain.
+#
+# Usage in workflow-config.yaml:
+#   crew:
+#     <<: *content-creation   # if using YAML anchors
+#   # — or just paste the crew: block below into your config
+
+crew:
+  name: content-creation
+  description: "Multi-agent content creation and editorial workflow"
+
+  roles:
+    researcher:
+      prompt_file: researcher.md
+      category: research
+      description: "Gathers source material, finds references, and creates a research brief"
+
+    writer:
+      prompt_file: writer.md
+      category: creation
+      description: "Produces the primary content based on research and brief"
+
+    editor:
+      prompt_file: editor.md
+      category: review
+      description: "Reviews for clarity, structure, tone, and grammar"
+
+    fact_checker:
+      prompt_file: fact-checker.md
+      category: review
+      description: "Verifies claims, statistics, and attributions"
+
+    seo_optimizer:
+      prompt_file: seo-optimizer.md
+      category: optimization
+      description: "Optimizes headlines, meta descriptions, keywords, and structure for search"
+
+    brand_voice_reviewer:
+      prompt_file: brand-voice.md
+      category: review
+      description: "Ensures content aligns with brand voice and style guidelines"
+
+  pipelines:
+    quick:
+      description: "Writer only — social posts, captions, quick edits"
+      phases: [writer]
+      estimated_cost: "$0.03"
+
+    standard:
+      description: "Research + Write + Edit — blog posts, articles, newsletters"
+      phases: [researcher, writer, editor]
+      estimated_cost: "$0.15"
+
+    thorough:
+      description: "Full pipeline — whitepapers, reports, high-stakes content"
+      phases: [researcher, writer, editor, fact_checker, seo_optimizer]
+      estimated_cost: "$0.35+"
+
+  auto_detection:
+    quick:
+      keywords:
+        - tweet
+        - caption
+        - short post
+        - social media
+        - quick edit
+        - tagline
+        - subject line
+    standard:
+      keywords:
+        - blog
+        - article
+        - newsletter
+        - write
+        - draft
+        - post
+        - content
+    thorough:
+      keywords:
+        - whitepaper
+        - report
+        - case study
+        - documentation
+        - press release
+        - legal
+        - compliance
+        - annual report
+
+  specialized_roles:
+    fact_checker:
+      triggers:
+        keywords: [statistics, data, claims, research, study, survey, percentage]
+    seo_optimizer:
+      triggers:
+        keywords: [SEO, search, ranking, organic, keywords, meta]
+    brand_voice_reviewer:
+      triggers:
+        keywords: [brand, voice, tone, style guide, rebrand]
+
+  categories:
+    research:    { max_turns: 25 }
+    creation:    { max_turns: 40 }
+    review:      { max_turns: 20 }
+    optimization: { max_turns: 15 }
+
+  effort_levels:
+    quick:
+      writer: low
+    standard:
+      researcher: high
+      writer: high
+      editor: medium
+    thorough:
+      researcher: max
+      writer: high
+      editor: high
+      fact_checker: high
+      seo_optimizer: medium
