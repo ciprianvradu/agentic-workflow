@@ -21,6 +21,17 @@ Some agents emit additional signals alongside their completion:
 | Quality Guard | `<promise>FIXES_APPLIED: N fixes, M flagged</promise>` | Fix summary |
 | Implementer | `<promise>STEP_COMPLETE</promise>` | Individual step verified (loop mode) |
 
+## Orchestrator Handling of BLOCKED and ESCALATE
+
+`BLOCKED` and `ESCALATE` are **machine-parsed** by the orchestrator via `crew_parse_agent_output`. When detected, the `agent-done` subcommand routes them before any REVISE logic and does **not** complete the current phase:
+
+| Signal | Orchestrator Action | Result |
+|--------|--------------------|-|
+| `BLOCKED` | Returns `agent_blocked` action | Orchestrator presents guidance options (provide info / skip phase / abort) |
+| `ESCALATE` | Returns `agent_escalated` action | Orchestrator **must** pause and ask the human via `AskUserQuestion` |
+
+**Priority**: If both signals appear in the output, `ESCALATE` takes priority over `BLOCKED`.
+
 ## Rules
 
 1. **Always emit exactly one** completion signal (`*_COMPLETE`, `BLOCKED`, or `ESCALATE`) at the end of your output.

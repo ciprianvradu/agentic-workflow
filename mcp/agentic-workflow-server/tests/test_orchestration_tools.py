@@ -2004,3 +2004,382 @@ class TestAsyncDocsThorough:
         # Should spawn TW normally, not async
         assert result["action"] == "spawn_agent"
         assert result["agent"] == "technical_writer"
+
+
+# ============================================================================
+# Promise parsing tests (BLOCKED, ESCALATE, COMPLETE)
+# ============================================================================
+
+class TestPromiseParsing:
+    """Tests for <promise> tag parsing in crew_parse_agent_output."""
+
+    def test_blocked_with_reason(self):
+        output = """
+        # Analysis
+        I cannot proceed because the database schema is missing.
+        <promise>BLOCKED:Database schema file not found at db/schema.sql</promise>
+        """
+        result = crew_parse_agent_output("planner", output)
+        assert result["extracted"]["blocked_reason"] == "Database schema file not found at db/schema.sql"
+        assert result["has_blocking_issues"] is True
+
+    def test_blocked_without_reason(self):
+        output = """
+        <promise>BLOCKED</promise>
+        """
+        result = crew_parse_agent_output("planner", output)
+        assert result["extracted"]["blocked_reason"] == "Agent blocked without providing a reason"
+        assert result["has_blocking_issues"] is True
+
+    def test_blocked_empty_colon_reason(self):
+        """BLOCKED: with nothing after the colon should give a default reason."""
+        output = """
+        <promise>BLOCKED:</promise>
+        """
+        result = crew_parse_agent_output("planner", output)
+        assert result["extracted"]["blocked_reason"] == "Agent blocked without providing a reason"
+        assert result["has_blocking_issues"] is True
+
+    def test_escalate_with_reason(self):
+        output = """
+        <promise>ESCALATE:Security concern requires human review of auth flow</promise>
+        """
+        result = crew_parse_agent_output("reviewer", output)
+        assert result["extracted"]["escalation_reason"] == "Security concern requires human review of auth flow"
+        assert result["has_blocking_issues"] is True
+        assert "blocked_reason" not in result["extracted"]
+
+    def test_escalate_without_reason(self):
+        output = """
+        <promise>ESCALATE</promise>
+        """
+        result = crew_parse_agent_output("reviewer", output)
+        assert result["extracted"]["escalation_reason"] == "Agent escalated without providing a reason"
+        assert result["has_blocking_issues"] is True
+
+    def test_escalate_priority_over_blocked(self):
+        """When both ESCALATE and BLOCKED appear, ESCALATE should take priority."""
+        output = """
+        <promise>BLOCKED:Missing config file</promise>
+        <promise>ESCALATE:Critical security issue found</promise>
+        """
+        result = crew_parse_agent_output("reviewer", output)
+        assert "escalation_reason" in result["extracted"]
+        assert result["extracted"]["escalation_reason"] == "Critical security issue found"
+        # blocked_reason should NOT be in extracted when ESCALATE takes priority
+        assert "blocked_reason" not in result["extracted"]
+        assert result["has_blocking_issues"] is True
+
+    def test_complete_signal(self):
+        output = """
+        # Plan complete
+        <promise>PLANNER_COMPLETE</promise>
+        """
+        result = crew_parse_agent_output("planner", output)
+        assert result["extracted"]["completion_signal"] == "PLANNER_COMPLETE"
+        assert result["has_blocking_issues"] is False
+
+    def test_blocked_and_complete_together(self):
+        """BLOCKED should still be detected even when COMPLETE is also present."""
+        output = """
+        <promise>PLANNER_COMPLETE</promise>
+        <promise>BLOCKED:Cannot proceed without API key</promise>
+        """
+        result = crew_parse_agent_output("planner", output)
+        assert result["extracted"]["blocked_reason"] == "Cannot proceed without API key"
+        assert result["extracted"]["completion_signal"] == "PLANNER_COMPLETE"
+        assert result["has_blocking_issues"] is True
+
+    def test_multiline_blocked_reason(self):
+        """Blocked reason that spans multiple lines within <promise> tags."""
+        output = """
+        <promise>BLOCKED:Missing dependencies:
+- package-a not installed
+- package-b version mismatch</promise>
+        """
+        result = crew_parse_agent_output("implementer", output)
+        assert "Missing dependencies:" in result["extracted"]["blocked_reason"]
+        assert "package-a" in result["extracted"]["blocked_reason"]
+        assert result["has_blocking_issues"] is True
+
+    def test_no_promise_tags(self):
+        """Output without any <promise> tags should not set blocked/escalation/completion."""
+        output = "Just some plain analysis text without any promise tags."
+        result = crew_parse_agent_output("architect", output)
+        assert "blocked_reason" not in result["extracted"]
+        assert "escalation_reason" not in result["extracted"]
+        assert "completion_signal" not in result["extracted"]
+        assert result["has_blocking_issues"] is False
+
+    def test_promise_complete_plain(self):
+        """<promise>COMPLETE</promise> should be recognized as a completion signal."""
+        output = "<promise>COMPLETE</promise>"
+        result = crew_parse_agent_output("implementer", output)
+        assert result["extracted"]["completion_signal"] == "COMPLETE"
+
+    def test_promise_blocked_alongside_concerns(self):
+        """BLOCKED alongside parsed concerns should set has_blocking_issues from both."""
+        output = """
+        <concerns>[{"description": "Race condition", "severity": "critical"}]</concerns>
+        <promise>BLOCKED:Need mutex implementation guidance</promise>
+        """
+        result = crew_parse_agent_output("skeptic", output)
+        assert result["extracted"]["blocked_reason"] == "Need mutex implementation guidance"
+        assert len(result["extracted"]["concerns"]) == 1
+        assert result["has_blocking_issues"] is True
+
+
+# ============================================================================
+# process_output action tests
+# ============================================================================
+
+class TestProcessOutputAction:
+    """Tests for process_output action including output_file/agent fields."""
+
+    def test_process_output_has_required_fields(self, clean_tasks_dir):
+        """process_output action should include output_file, agent, and instructions."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_PO_001", description="Test process_output")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_PO_001")
+        workflow_transition("planner", task_id="TASK_ORCH_PO_001")
+
+        # Create output file so the phase appears to have output
+        from agentic_workflow_server.state_tools import find_task_dir
+        task_dir = find_task_dir("TASK_ORCH_PO_001")
+        (task_dir / "planner.md").write_text("# Planner output\nSome analysis.")
+
+        mock_config = {
+            "checkpoints": {"planning": {"after_planner": False}},
+            "models": {"default": "opus"},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_PO_001")
+
+        assert result["action"] == "process_output"
+        assert result["agent"] == "planner"
+        assert result["phase"] == "planner"
+        assert "output_file" in result
+        assert "planner.md" in result["output_file"]
+        assert "instructions" in result
+        assert "agent-done" in result["instructions"]
+        assert "TASK_ORCH_PO_001" in result["instructions"]
+
+
+# ============================================================================
+# BLOCKED/ESCALATE routing in cmd_agent_done tests
+# ============================================================================
+
+class TestAgentDoneBlockedEscalate:
+    """Tests for BLOCKED/ESCALATE routing in cmd_agent_done."""
+
+    def test_blocked_returns_agent_blocked_action(self, clean_tasks_dir):
+        """When agent output contains BLOCKED, cmd_agent_done should return agent_blocked."""
+        import argparse
+
+        workflow_initialize(task_id="TASK_ORCH_BLK_001", description="Test blocked routing")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_BLK_001")
+        workflow_transition("planner", task_id="TASK_ORCH_BLK_001")
+
+        # Write blocked output
+        from agentic_workflow_server.state_tools import find_task_dir as _find
+        task_dir = _find("TASK_ORCH_BLK_001")
+        output_file = task_dir / "planner.md"
+        output_file.write_text("# Analysis\n<promise>BLOCKED:Missing config file</promise>\n")
+
+        # Capture stdout
+        import io
+        from unittest.mock import patch
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            args = argparse.Namespace(
+                task_id="TASK_ORCH_BLK_001",
+                agent="planner",
+                output_file=str(output_file),
+                input_tokens=None,
+                output_tokens=None,
+                model="opus",
+                duration=None,
+            )
+            from scripts.crew_orchestrator import cmd_agent_done
+            cmd_agent_done(args)
+
+        output = json.loads(captured.getvalue())
+        assert output["action"] == "agent_blocked"
+        assert output["reason"] == "Missing config file"
+        assert output["has_blocking_issues"] is True
+        assert output["agent"] == "planner"
+
+    def test_escalated_returns_agent_escalated_action(self, clean_tasks_dir):
+        """When agent output contains ESCALATE, cmd_agent_done should return agent_escalated."""
+        import argparse
+
+        workflow_initialize(task_id="TASK_ORCH_ESC_001", description="Test escalation routing")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_ESC_001")
+        workflow_transition("reviewer", task_id="TASK_ORCH_ESC_001")
+
+        from agentic_workflow_server.state_tools import find_task_dir as _find
+        task_dir = _find("TASK_ORCH_ESC_001")
+        output_file = task_dir / "reviewer.md"
+        output_file.write_text("# Review\n<promise>ESCALATE:Security concern needs human review</promise>\n")
+
+        import io
+        from unittest.mock import patch
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            args = argparse.Namespace(
+                task_id="TASK_ORCH_ESC_001",
+                agent="reviewer",
+                output_file=str(output_file),
+                input_tokens=None,
+                output_tokens=None,
+                model="opus",
+                duration=None,
+            )
+            from scripts.crew_orchestrator import cmd_agent_done
+            cmd_agent_done(args)
+
+        output = json.loads(captured.getvalue())
+        assert output["action"] == "agent_escalated"
+        assert output["reason"] == "Security concern needs human review"
+        assert output["has_blocking_issues"] is True
+
+    def test_blocked_does_not_complete_phase(self, clean_tasks_dir):
+        """BLOCKED should NOT mark the phase as completed."""
+        import argparse
+
+        workflow_initialize(task_id="TASK_ORCH_BLK_002", description="Test blocked no complete")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_BLK_002")
+        workflow_transition("planner", task_id="TASK_ORCH_BLK_002")
+
+        from agentic_workflow_server.state_tools import find_task_dir as _find, _load_state
+        task_dir = _find("TASK_ORCH_BLK_002")
+        output_file = task_dir / "planner.md"
+        output_file.write_text("<promise>BLOCKED:Need help</promise>")
+
+        import io
+        from unittest.mock import patch
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            args = argparse.Namespace(
+                task_id="TASK_ORCH_BLK_002",
+                agent="planner",
+                output_file=str(output_file),
+                input_tokens=None,
+                output_tokens=None,
+                model="opus",
+                duration=None,
+            )
+            from scripts.crew_orchestrator import cmd_agent_done
+            cmd_agent_done(args)
+
+        # Check that phases_completed does NOT include planner
+        state = _load_state(task_dir)
+        phases_completed = [p.lower().replace("-", "_") for p in state.get("phases_completed", [])]
+        assert "planner" not in phases_completed
+
+    def test_revise_alongside_blocked_cleans_state(self, clean_tasks_dir):
+        """When both REVISE and BLOCKED are detected, REVISE cleanup should apply but BLOCKED returned."""
+        import argparse
+
+        workflow_initialize(task_id="TASK_ORCH_BRV_001", description="Test blocked + revise")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_BRV_001")
+        workflow_transition("reviewer", task_id="TASK_ORCH_BRV_001")
+
+        # Manually add reviewer to phases_completed
+        from agentic_workflow_server.state_tools import find_task_dir as _find, _load_state, _save_state
+        task_dir = _find("TASK_ORCH_BRV_001")
+        state = _load_state(task_dir)
+        state["phases_completed"] = ["planner", "reviewer"]
+        _save_state(task_dir, state)
+
+        output_file = task_dir / "reviewer.md"
+        output_file.write_text(
+            "<recommendation>REVISE</recommendation>\n"
+            "<promise>BLOCKED:Cannot verify without test suite</promise>\n"
+        )
+
+        import io
+        from unittest.mock import patch
+        captured = io.StringIO()
+        with patch("sys.stdout", captured):
+            args = argparse.Namespace(
+                task_id="TASK_ORCH_BRV_001",
+                agent="reviewer",
+                output_file=str(output_file),
+                input_tokens=None,
+                output_tokens=None,
+                model="opus",
+                duration=None,
+            )
+            from scripts.crew_orchestrator import cmd_agent_done
+            cmd_agent_done(args)
+
+        output = json.loads(captured.getvalue())
+        assert output["action"] == "agent_blocked"
+        assert output["revise_also_detected"] is True
+
+        # REVISE cleanup: reviewer should be removed from phases_completed
+        state = _load_state(task_dir)
+        phases_completed = [p.lower().replace("-", "_") for p in state.get("phases_completed", [])]
+        assert "reviewer" not in phases_completed
+
+
+# ============================================================================
+# Agent timeout in spawn instructions tests
+# ============================================================================
+
+class TestAgentTimeoutInSpawnInstructions:
+    """Tests for timeout_seconds surfacing in _build_phase_action."""
+
+    def test_timeout_from_config(self, clean_tasks_dir):
+        """When subagent_limits.agent_timeout is set, result should include timeout_seconds."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_TO_001", description="Test timeout")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_TO_001")
+
+        mock_config = {
+            "models": {"default": "opus", "standard": {}},
+            "subagent_limits": {"max_turns": {}, "agent_timeout": 300},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "parallelization": {},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_TO_001")
+
+        assert result.get("action") == "spawn_agent"
+        assert result.get("timeout_seconds") == 300
+        # Instructions should mention timeout
+        if "instructions" in result:
+            assert "300s timeout" in result["instructions"]
+
+    def test_no_timeout_when_not_configured(self, clean_tasks_dir):
+        """When no agent_timeout is set, timeout_seconds should not be in result."""
+        from unittest.mock import patch as mock_patch
+        import agentic_workflow_server.orchestration_tools as _orch
+
+        workflow_initialize(task_id="TASK_ORCH_TO_002", description="Test no timeout")
+        workflow_set_mode(mode="standard", task_id="TASK_ORCH_TO_002")
+
+        mock_config = {
+            "models": {"default": "opus", "standard": {}},
+            "subagent_limits": {"max_turns": {}},
+            "knowledge_base": "docs/ai-context/",
+            "task_directory": ".tasks/",
+            "beads": {"enabled": False},
+            "checkpoints": {"planning": {}},
+            "parallelization": {},
+            "custom_phases": {},
+        }
+        with mock_patch.object(_orch, "config_get_effective", return_value={"config": mock_config}):
+            result = crew_get_next_phase(task_id="TASK_ORCH_TO_002")
+
+        assert result.get("action") == "spawn_agent"
+        assert "timeout_seconds" not in result

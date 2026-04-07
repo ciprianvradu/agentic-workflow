@@ -52,6 +52,33 @@ Loop on `result.next` from the orchestrator. **If `next.instructions` exists, fo
 4. If failed and blocking → ask user: Retry / Skip / Abort
 5. Continue with `result.next`
 
+#### process_output
+
+**If `next.instructions` exists**: follow it exactly (call agent-done → continue).
+
+**Otherwise**:
+1. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <next.agent> --output-file <next.output_file>`
+2. Continue with `result.next`
+
+#### agent_blocked
+
+The agent reported it cannot proceed. The phase is NOT completed.
+
+1. Show the blocking reason: `result.reason`
+2. Ask user (AskUserQuestion): **Provide guidance** / **Skip this phase** / **Abort workflow**
+   - **Provide guidance**: Log the user's response via `python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<guidance>" --type guidance --phase <result.agent>`, then re-run the agent phase with the guidance appended.
+   - **Skip**: Run `python3 {__scripts_dir__}/crew_orchestrator.py checkpoint-done --task-id <id> --decision skip --notes "Blocked: <result.reason>"`; continue with `result.next`.
+   - **Abort**: Stop the workflow. Show the reason and exit.
+
+#### agent_escalated
+
+The agent escalated to a human decision-maker. The phase is NOT completed. **You MUST pause and ask the user** — do not auto-skip.
+
+1. Show the escalation reason: `result.reason`
+2. Use AskUserQuestion to pause and get the user's decision. Do NOT proceed without human input.
+3. Log the user's response via `python3 {__scripts_dir__}/crew_orchestrator.py log-interaction --task-id <id> --role human --content "<response>" --type escalation_response --phase <result.agent>`
+4. Based on user response, either re-run the agent phase with new instructions or skip via `python3 {__scripts_dir__}/crew_orchestrator.py checkpoint-done --task-id <id> --decision skip --notes "Escalation resolved: <summary>"`.
+
 #### checkpoint
 
 1. Show `result.question.text` and any unaddressed concerns

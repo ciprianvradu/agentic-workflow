@@ -144,7 +144,7 @@ Mode is selected by two signals — highest wins (thorough > standard > quick). 
 
 The detection logic is in `workflow_detect_mode()` — pure Python, no LLM involved. Override with `--mode <name>` to skip auto-detection.
 
-**Model Routing:** `_build_phase_action()` returns a `model` field resolved from config:
+**Model Routing:** `_build_phase_action()` returns a `model` field resolved from config and also includes a `timeout_seconds` field sourced from the agent's config entry:
 - Fallback chain: `models.<mode>.<agent>` → `models.<agent>` → `models.default`
 - Quick mode defaults to Sonnet, standard/thorough use Opus for planning agents
 - Override with `models.default: opus` in project config to use Opus everywhere
@@ -249,7 +249,7 @@ High-level functions called by the `/crew` command and `scripts/crew_orchestrato
 - `crew_parse_args(raw_args)` — Parse command arguments (action, task description, options). Supports `--no-resume` flag to skip auto-detection of active tasks and always start fresh.
 - `crew_init_task(description, options)` — Full task initialization (config, state, mode, KB inventory)
 - `crew_get_next_phase(task_id)` — Returns next action: spawn_agent, checkpoint (with structured question/options), complete
-- `crew_parse_agent_output(agent, output_text)` — Extract issues and recommendations
+- `crew_parse_agent_output(agent, output_text)` — Extract issues and recommendations. Also parses `<promise>BLOCKED:reason</promise>` and `<promise>ESCALATE:reason</promise>` tags; ESCALATE takes priority when both are present.
 - `crew_get_implementation_action(task_id, verification_passed?, error_output?)` — Implementation loop logic
 - `crew_format_completion(task_id, files_changed)` — Final summary, commit message, cleanup
 - `crew_jira_transition(task_id, hook_name, issue_key)` — Resolve Jira lifecycle transition (skip/prompt/execute)
@@ -265,7 +265,7 @@ CLI script that batches multiple MCP tool calls into single instant JSON decisio
 
 - `init --args "..." [--no-resume]` — Parse args → init task → get first phase → transition state to first phase (replaces 3 LLM turns). `--no-resume` skips auto-detection of existing active tasks.
 - `next --task-id X` — Get next phase/action
-- `agent-done --task-id X --agent A` — Parse output → complete phase → record cost → get next → transition to next phase (replaces 4 LLM turns)
+- `agent-done --task-id X --agent A` — Parse output → check for BLOCKED/ESCALATE signals (before REVISE logic; phase is NOT completed when either is detected) → complete phase → record cost → get next → transition to next phase (replaces 4 LLM turns). Returns `agent_blocked` or `agent_escalated` action when the corresponding signal is found; ESCALATE takes priority.
 - `checkpoint-done --task-id X --decision D` — Record decision → complete phase (approve/skip) → get next → transition to next phase
 - `impl-action --task-id X` — Implementation loop step
 - `complete --task-id X` — Format completion + resolve Jira transitions + mark state as completed

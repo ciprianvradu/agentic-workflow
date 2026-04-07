@@ -1381,10 +1381,19 @@ def crew_get_next_phase(
                 )
             # Threshold not met — auto-proceed (skip checkpoint)
         # Phase output not yet processed - orchestrator should process it
+        output_file = str(task_dir / f"{current_phase}.md")
         return {
             "action": "process_output",
             "phase": current_phase,
-            "task_id": state.get("task_id")
+            "agent": current_phase,
+            "output_file": output_file,
+            "task_id": state.get("task_id"),
+            "instructions": (
+                f"1. Run: python3 {{__scripts_dir__}}/crew_orchestrator.py agent-done "
+                f"--task-id {state.get('task_id')} --agent {current_phase} "
+                f"--output-file {output_file}\n"
+                f"2. Continue with result.next"
+            ),
         }
 
     # Current phase is complete - find next
@@ -1680,6 +1689,12 @@ def _build_phase_action(
     if beads_config.get("enabled") and beads_config.get("add_comments"):
         beads_comment = f"Phase '{agent}' starting for task {task_id}"
 
+    # Read agent_timeout from config
+    agent_timeout = config.get("subagent_limits", {}).get("agent_timeout")
+    # Also check for per-agent timeout overrides
+    if agent_timeout is None:
+        agent_timeout = config.get("subagent_limits", {}).get("agent_timeout_seconds")
+
     result: dict[str, Any] = {
         "action": "spawn_agent",
         "agent": agent,
@@ -1692,6 +1707,9 @@ def _build_phase_action(
         "variables": variables,
         "task_id": task_id,
     }
+
+    if agent_timeout is not None:
+        result["timeout_seconds"] = int(agent_timeout)
 
     # Inject convention files for implementer, quality_guard, and security_auditor
     if agent in ("implementer", "quality_guard", "security_auditor"):
@@ -1716,13 +1734,16 @@ def _build_phase_action(
         result["output_file"] = str(task_dir / f"{agent}.md")
         # Build exact instructions for the LLM — no interpretation needed
         output_file = str(task_dir / f"{agent}.md")
+        timeout_note = ""
+        if agent_timeout is not None:
+            timeout_note = f"\n   NOTE: Agent has a {agent_timeout}s timeout. If the agent does not complete in time, treat as a stall."
         result["instructions"] = (
             f"1. Spawn: Task(subagent_type=\"general-purpose\", model=\"{model}\", "
             f"max_turns={max_turns}, prompt=next.assembled_prompt)\n"
             f"2. Save agent output to: {output_file}\n"
             f"3. Run: python3 {{__scripts_dir__}}/crew_orchestrator.py agent-done "
             f"--task-id {task_id} --agent {agent} --output-file {output_file}\n"
-            f"4. Continue with result.next"
+            f"4. Continue with result.next{timeout_note}"
         )
         # Save for debugging
         try:
@@ -2291,6 +2312,42 @@ def crew_parse_agent_output(
                     )
         except json.JSONDecodeError:
             extracted["concerns_parse_error"] = concerns_match.group(1)
+
+    # Parse <promise> tags for BLOCKED, ESCALATE, and *_COMPLETE signals
+    # Scan ALL <promise> tags; ESCALATE takes priority over BLOCKED
+    promise_matches = re.findall(r'<promise>\s*(.*?)\s*</promise>', output_text, re.DOTALL)
+    blocked_reason = None
+    escalation_reason = None
+    completion_signal = None
+
+    for promise_text in promise_matches:
+        promise_text = promise_text.strip()
+        # Check for ESCALATE (highest priority)
+        escalate_match = re.match(r'ESCALATE(?::(.*))?', promise_text, re.DOTALL)
+        if escalate_match:
+            reason = (escalate_match.group(1) or "").strip()
+            escalation_reason = reason if reason else "Agent escalated without providing a reason"
+
+        # Check for BLOCKED
+        blocked_match = re.match(r'BLOCKED(?::(.*))?', promise_text, re.DOTALL)
+        if blocked_match:
+            reason = (blocked_match.group(1) or "").strip()
+            blocked_reason = reason if reason else "Agent blocked without providing a reason"
+
+        # Check for *_COMPLETE (diagnostic)
+        if promise_text.endswith("_COMPLETE") or promise_text == "COMPLETE":
+            completion_signal = promise_text
+
+    # ESCALATE takes priority over BLOCKED
+    if escalation_reason:
+        extracted["escalation_reason"] = escalation_reason
+        has_blocking_issues = True
+    elif blocked_reason:
+        extracted["blocked_reason"] = blocked_reason
+        has_blocking_issues = True
+
+    if completion_signal:
+        extracted["completion_signal"] = completion_signal
 
     # Include unaddressed concerns in the return for display at checkpoints
     unaddressed_concerns = []

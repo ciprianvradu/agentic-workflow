@@ -486,25 +486,7 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         task_id=task_id,
     )
 
-    # 2. Complete phase — ensure the agent that just finished is tracked
-    #    workflow_complete_phase() only completes state["phase"], which may differ
-    #    from the agent (e.g., custom/specialized agents like accessibility_reviewer
-    #    may run while state["phase"] still points to a different phase).
-    task_dir = find_task_dir(task_id)
-    if task_dir:
-        state = _load_state(task_dir)
-        phases_completed = state.get("phases_completed", [])
-        agent_normalized = agent.lower().replace("-", "_")
-        if agent_normalized not in [p.lower().replace("-", "_") for p in phases_completed]:
-            phases_completed.append(agent)
-            state["phases_completed"] = phases_completed
-            _save_state(task_dir, state)
-    complete_result = workflow_complete_phase(task_id=task_id)
-
-    # 2b. Auto-generate RESUME.md snapshot
-    _generate_resume_md(task_id)
-
-    # 3. Record cost if provided
+    # 2. Record cost if provided (do this early, before potential early returns)
     cost_recorded = False
     if args.input_tokens and args.output_tokens:
         workflow_record_cost(
@@ -517,18 +499,85 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         )
         cost_recorded = True
 
-    # 4. Handle REVISE loopback — if architect or reviewer recommends REVISE,
-    #    route back to planner instead of advancing
+    # 3. Check for BLOCKED/ESCALATE BEFORE completing the phase or handling REVISE.
+    #    If the agent signaled BLOCKED or ESCALATE, do NOT complete the phase.
     extracted = parse_result.get("extracted", {})
+    blocked_reason = extracted.get("blocked_reason")
+    escalation_reason = extracted.get("escalation_reason")
+
+    # Detect REVISE alongside BLOCKED/ESCALATE
     recommendation = extracted.get("recommendation", "")
     verdict = extracted.get("verdict", "")
-
     revise_agent = None
     if agent == "reviewer" and recommendation == "REVISE":
         revise_agent = "reviewer"
     elif agent == "architect" and verdict == "REVISE":
         revise_agent = "architect"
 
+    task_dir = find_task_dir(task_id)
+
+    if escalation_reason or blocked_reason:
+        # H1 mitigation: If REVISE was also detected alongside BLOCKED/ESCALATE,
+        # apply REVISE state cleanup (remove agent from phases_completed) so re-run works
+        if revise_agent and task_dir:
+            state = _load_state(task_dir)
+            phases_completed = state.get("phases_completed", [])
+            phases_completed = [
+                p for p in phases_completed
+                if p.lower().replace("-", "_") != revise_agent.lower().replace("-", "_")
+            ]
+            state["phases_completed"] = phases_completed
+            _save_state(task_dir, state)
+
+        # H4 mitigation: Do NOT call workflow_complete_phase — the phase is not done.
+        # Auto-generate RESUME.md snapshot for crash recovery
+        _generate_resume_md(task_id)
+
+        if escalation_reason:
+            _output({
+                "action": "agent_escalated",
+                "agent": agent,
+                "task_id": task_id,
+                "reason": escalation_reason,
+                "parse_result": parse_result,
+                "cost_recorded": cost_recorded,
+                "has_blocking_issues": True,
+                "revise_also_detected": revise_agent is not None,
+            })
+            return
+
+        # BLOCKED
+        _output({
+            "action": "agent_blocked",
+            "agent": agent,
+            "task_id": task_id,
+            "reason": blocked_reason,
+            "parse_result": parse_result,
+            "cost_recorded": cost_recorded,
+            "has_blocking_issues": True,
+            "revise_also_detected": revise_agent is not None,
+        })
+        return
+
+    # 4. Complete phase — ensure the agent that just finished is tracked
+    #    workflow_complete_phase() only completes state["phase"], which may differ
+    #    from the agent (e.g., custom/specialized agents like accessibility_reviewer
+    #    may run while state["phase"] still points to a different phase).
+    if task_dir:
+        state = _load_state(task_dir)
+        phases_completed = state.get("phases_completed", [])
+        agent_normalized = agent.lower().replace("-", "_")
+        if agent_normalized not in [p.lower().replace("-", "_") for p in phases_completed]:
+            phases_completed.append(agent)
+            state["phases_completed"] = phases_completed
+            _save_state(task_dir, state)
+    complete_result = workflow_complete_phase(task_id=task_id)
+
+    # 4b. Auto-generate RESUME.md snapshot
+    _generate_resume_md(task_id)
+
+    # 5. Handle REVISE loopback — if architect or reviewer recommends REVISE,
+    #    route back to planner instead of advancing
     if revise_agent:
         # Remove the revising agent from phases_completed so it runs again after planner
         if task_dir:
@@ -546,10 +595,10 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         workflow_transition(to_phase=revise_target, task_id=task_id)
         next_action = crew_get_next_phase(task_id=task_id)
     else:
-        # 4b. Normal forward progression
+        # 5b. Normal forward progression
         next_action = crew_get_next_phase(task_id=task_id)
 
-    # 5. Pre-transition to next phase
+    # 6. Pre-transition to next phase
     transition_result = None
     next_phase = next_action.get("agent") or next_action.get("phase")
     if next_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
