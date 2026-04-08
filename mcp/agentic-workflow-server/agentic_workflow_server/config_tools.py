@@ -472,7 +472,7 @@ def _load_yaml(path: Path) -> Optional[dict]:
         return None
 
 
-PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin"]
+PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin", ".factory"]
 
 
 def _get_global_config_path() -> Path:

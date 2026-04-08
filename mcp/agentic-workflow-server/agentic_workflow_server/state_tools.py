@@ -4418,6 +4418,7 @@ _AI_HOST_CLI = {
     "copilot": "copilot",
     "opencode": "opencode",
     "devin": "devin",
+    "droid": "droid",
 }
 
 # Host-specific settings files to copy into worktrees
@@ -4427,6 +4428,7 @@ _HOST_SETTINGS = {
     "copilot": [],
     "opencode": [],
     "devin": [],
+    "droid": [],
 }
 
 # Python script to add worktree to Gemini trustedFolders.json
@@ -4479,7 +4481,7 @@ def _build_resume_prompt(task_id: str, main_tasks_path: str, ai_host: str = "cla
     """Build the resume prompt string for a worktree session."""
     if ai_host in ("gemini", "copilot"):
         resume_cmd = f"@crew-resume {task_id}"
-    elif ai_host in ("opencode", "devin"):
+    elif ai_host in ("opencode", "devin", "droid"):
         resume_cmd = f"/crew-resume {task_id}"
     else:
         resume_cmd = f"/crew resume {task_id}"

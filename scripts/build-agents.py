@@ -183,6 +183,7 @@ PLATFORM_DIRS = {
     "gemini": ".gemini",
     "opencode": ".opencode",  # project-level; global uses .config/opencode/
     "devin": ".devin",
+    "droid": ".factory",
 }
 
 SCRIPTS_DIRS = {
@@ -191,6 +192,7 @@ SCRIPTS_DIRS = {
     "gemini": str(REPO_ROOT / "scripts"),
     "opencode": str(REPO_ROOT / "scripts"),
     "devin": str(REPO_ROOT / "scripts"),
+    "droid": str(REPO_ROOT / "scripts"),
 }
 
 # Scripts that need to be bundled alongside agents for platforms that don't
@@ -949,6 +951,160 @@ DEVIN_AGENT_TOOLS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Droid (Factory.ai CLI) adapter
+# ---------------------------------------------------------------------------
+
+# Droid sub-agent tool restrictions per agent role.
+# Droid uses either a category string or an array of specific tool IDs.
+# Categories: read-only, edit, execute, web, mcp
+# Tool IDs: Read, LS, Grep, Glob, Create, Edit, ApplyPatch, Execute, WebSearch, FetchUrl
+DROID_AGENT_TOOLS = {
+    "architect":              "read-only",
+    "developer":              "read-only",
+    "reviewer":               "read-only",
+    "skeptic":                "read-only",
+    "planner":                "read-only",
+    "implementer":            ["Read", "LS", "Grep", "Glob", "Create", "Edit", "ApplyPatch", "Execute"],
+    "feedback":               ["Read", "LS", "Grep", "Glob", "Execute"],
+    "quality-guard":          ["Read", "LS", "Grep", "Glob", "Create", "Edit", "ApplyPatch", "Execute"],
+    "technical-writer":       ["Read", "LS", "Grep", "Glob", "Create", "Edit"],
+    "security-auditor":       "read-only",
+    "performance-analyst":    ["Read", "LS", "Grep", "Glob", "Execute"],
+    "api-guardian":           "read-only",
+    "accessibility-reviewer": "read-only",
+    "axiom-miner":            "read-only",
+    "design-challenger":      "read-only",
+    "crew-worktree":          ["Read", "LS", "Grep", "Glob", "Create", "Edit", "Execute"],
+    "crew-status":            ["Read", "LS", "Grep", "Glob", "Execute"],
+}
+
+
+def _droid_base(output_dir: Path) -> Path:
+    """Return the Droid config base directory.
+
+    Factory.ai/Droid stores config under ~/.factory/ (global) and .factory/
+    (project-level).  We always use .factory/ for project installs and
+    ~/.factory/ for global (home-dir) installs.
+    """
+    if output_dir == Path.home():
+        return output_dir / ".factory"
+    return output_dir / ".factory"
+
+
+def _droid_frontmatter(name: str, description: str, tools) -> str:
+    """Generate YAML frontmatter for a Droid custom droid .md file.
+
+    Args:
+        tools: Either a category string (e.g. "read-only") or a list of
+               tool IDs (e.g. ["Read", "Edit", "Execute"]).
+    """
+    lines = [
+        "---",
+        f"name: {name}",
+        f'description: "{description}"',
+        "model: inherit",
+    ]
+    if tools:
+        if isinstance(tools, str):
+            # Category string
+            lines.append(f"tools: {tools}")
+        elif isinstance(tools, list):
+            lines.append("tools:")
+            for tool in tools:
+                lines.append(f"  - {tool}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
+
+
+def build_droid(output_dir: Path):
+    """Build agents in Factory.ai/Droid format: .factory/droids/<name>.md with YAML frontmatter.
+
+    Project install: .factory/droids/
+    Global install (output == $HOME): ~/.factory/droids/
+    """
+    droid_base = _droid_base(output_dir)
+    droids_out = droid_base / "droids"
+    droids_out.mkdir(parents=True, exist_ok=True)
+
+    preamble_path = PREAMBLES_DIR / "droid.md"
+    preamble = read_file(preamble_path) if preamble_path.exists() else ""
+    shared_preamble = _load_shared_preamble()
+
+    written_files: list[Path] = []
+
+    # Build orchestrator from platform-specific template
+    orchestrator_path = ORCHESTRATORS_DIR / "droid.md"
+    if orchestrator_path.exists():
+        orch_body = read_file(orchestrator_path)
+        desc = AGENT_DESCRIPTIONS.get("orchestrator", "Workflow Orchestrator")
+        orch_fm = _droid_frontmatter("crew", desc, ["Read", "LS", "Grep", "Glob", "Create", "Edit", "ApplyPatch", "Execute"])
+        dest = droids_out / "crew.md"
+        dest.write_text(
+            _substitute_platform(orch_fm + "\n" + orch_body, "droid"),
+            encoding="utf-8"
+        )
+        written_files.append(dest)
+        print(f"  + droids/crew.md (orchestrator)")
+    else:
+        print(f"  ! No orchestrator template at {orchestrator_path}")
+
+    count = 0
+    cmd_count = 0
+    for agent_path in list_agents():
+        name = agent_path.stem
+        body = _apply_shared_preamble(read_file(agent_path), name, shared_preamble)
+
+        if name == "orchestrator":
+            # Handled above via platform-specific orchestrator template
+            continue
+
+        desc = AGENT_DESCRIPTIONS.get(name, f"Crew agent: {name}")
+        out_name = _agent_output_name(name)
+
+        if name in COMMAND_AGENTS:
+            # Command agents: treat like regular droids but with $ARGUMENTS suffix
+            tools = ["Read", "LS", "Grep", "Glob", "Create", "Edit", "Execute"]
+            suffix = COMMAND_SUFFIXES.get(name, "\n\nArguments: $ARGUMENTS\n")
+            frontmatter = _droid_frontmatter(out_name, desc, tools)
+            content = _substitute_platform(
+                frontmatter + "\n" + preamble + "\n" + body.rstrip() + "\n" + suffix.replace("$ARGS", "$ARGUMENTS"),
+                "droid"
+            )
+            dest = droids_out / f"{out_name}.md"
+            dest.write_text(content, encoding="utf-8")
+            written_files.append(dest)
+            print(f"  + droids/{out_name}.md (command)")
+            cmd_count += 1
+        else:
+            tools = DROID_AGENT_TOOLS.get(name, "read-only")
+            frontmatter = _droid_frontmatter(out_name, desc, tools)
+            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "droid")
+            dest = droids_out / f"{out_name}.md"
+            dest.write_text(content, encoding="utf-8")
+            written_files.append(dest)
+            print(f"  + droids/{out_name}.md")
+            count += 1
+
+    # Copy main commands from commands/ directory (crew.md, crew-config.md, crew-resume.md, etc.)
+    commands_src = REPO_ROOT / "commands"
+    if commands_src.exists():
+        for cmd_path in sorted(commands_src.glob("*.md")):
+            cmd_name = cmd_path.stem  # e.g. "crew", "crew-resume"
+            if cmd_name == "crew":
+                continue  # orchestrator already written above
+            body = read_file(cmd_path)
+            content = _substitute_platform(body, "droid")
+            dest = droids_out / f"{cmd_name}.md"
+            dest.write_text(content, encoding="utf-8")
+            written_files.append(dest)
+            print(f"  + droids/{cmd_name}.md (command)")
+            cmd_count += 1
+
+    _assert_no_raw_placeholders(droid_base, "droid", written_files=written_files)
+    print(f"\n  {count} agents + {cmd_count} commands + orchestrator written to {droids_out}")
+
+
 def _devin_base(output_dir: Path) -> Path:
     """Return the Devin config base directory.
 
@@ -1122,6 +1278,11 @@ PLATFORMS = {
         "build": build_devin,
         "default_output": lambda: Path.home(),
         "description": "Devin for Terminal — skill .md files in ~/.config/devin/skills/",
+    },
+    "droid": {
+        "build": build_droid,
+        "default_output": lambda: Path.home(),
+        "description": "Factory.ai Droid — droid .md files in ~/.factory/droids/",
     },
 }
 

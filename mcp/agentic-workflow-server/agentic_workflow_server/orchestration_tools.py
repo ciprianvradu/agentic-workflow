@@ -1599,8 +1599,15 @@ def _build_phase_action(
     else:
         # Platform-specific default (check multiple platform dirs)
         agents_dir = None
-        for platform_dir in (".claude", ".copilot", ".gemini", ".opencode"):
-            candidate = Path.home() / platform_dir / "agents"
+        for platform_dir, subdir in (
+            (".claude", "agents"),
+            (".copilot", "agents"),
+            (".gemini", "agents"),
+            (".opencode", "agents"),
+            (".devin", "skills"),
+            (".factory", "droids"),
+        ):
+            candidate = Path.home() / platform_dir / subdir
             if candidate.exists():
                 agents_dir = candidate
                 break

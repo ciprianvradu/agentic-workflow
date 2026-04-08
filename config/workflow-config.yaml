@@ -271,6 +271,7 @@ host_aware:
     copilot: false                 # Copilot does not pre-explore
     gemini: false                  # Gemini does not pre-explore
     opencode: true                 # OpenCode explores before /crew
+    droid: false                   # Factory.ai Droid does not pre-explore
   planner_mode: auto               # auto | plan_only | full
 
 

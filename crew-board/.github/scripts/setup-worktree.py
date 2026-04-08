@@ -79,6 +79,7 @@ AI_HOST_CLI = {
     "copilot": "copilot",
     "opencode": "opencode",
     "devin": "devin",
+    "droid": "droid",
 }
 
 HOST_SETTINGS = {
@@ -87,6 +88,7 @@ HOST_SETTINGS = {
     "copilot": [],
     "opencode": [],
     "devin": [],
+    "droid": [],
 }
 # NOTE: AI_HOST_CLI and HOST_SETTINGS are inlined from state_tools.py
 # (see _AI_HOST_CLI and _HOST_SETTINGS in that module) to keep this script standalone. Keep in sync.
@@ -278,7 +280,7 @@ def extract_jira_key(text: str) -> Optional[str]:
 # Config loading (inlined from config_tools.py)
 # ---------------------------------------------------------------------------
 
-PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin"]
+PLATFORM_DIRS = [".claude", ".copilot", ".gemini", ".config/opencode", ".opencode", ".devin", ".config/devin", ".factory"]
 # NOTE: PLATFORM_DIRS is inlined from config_tools.py to keep this script standalone. Keep in sync.
 
 # Full default config — only worktree section needed but we merge the whole thing
@@ -470,7 +472,7 @@ def build_resume_prompt(task_id: str, main_tasks_path: str, ai_host: str = "clau
     """Build the resume prompt string for a worktree session."""
     if ai_host in ("gemini", "copilot"):
         resume_cmd = f"@crew-resume {task_id}"
-    elif ai_host in ("opencode", "devin"):
+    elif ai_host in ("opencode", "devin", "droid"):
         resume_cmd = f"/crew-resume {task_id}"
     else:
         resume_cmd = f"/crew resume {task_id}"
@@ -686,7 +688,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("description", help="Task description (free text or Jira key)")
 
-    parser.add_argument("--ai-host", default=None, choices=["claude", "copilot", "gemini", "opencode", "devin"],
+    parser.add_argument("--ai-host", default=None, choices=["claude", "copilot", "gemini", "opencode", "devin", "droid"],
                         help="AI host platform (default: auto-detect from config)")
     parser.add_argument("--base-branch", default=None,
                         help="Base branch (default: current branch)")
@@ -1010,7 +1012,7 @@ def main():
     main_tasks_path = os.path.join(main_repo_abs, ".tasks", task_id)
     if ai_host in ("gemini", "copilot"):
         resume_cmd_line = f"@crew-resume {task_id}"
-    elif ai_host == "opencode":
+    elif ai_host in ("opencode", "devin", "droid"):
         resume_cmd_line = f"/crew-resume {task_id}"
     else:
         resume_cmd_line = f"/crew resume {task_id}"
@@ -1084,6 +1086,7 @@ def main():
         ".opencode/workflow-config.yaml",
         ".devin/workflow-config.yaml",
         ".config/devin/workflow-config.yaml",
+        ".factory/workflow-config.yaml",
     ]
     configs_copied = 0
     for wf_config in WORKFLOW_CONFIG_PATHS:
