@@ -100,7 +100,7 @@ OpenCode is the outlier -- it uses different key names, transport types, and dat
 | Platform | File Extension | Naming Convention | Frontmatter Format |
 |---|---|---|---|
 | Claude | `.md` | `architect.md` | None (plain markdown) |
-| Copilot | **`.agent.md`** | `crew-architect.agent.md` | YAML with `name`, `description`, `tools` |
+| Copilot | **`.agent.md`** | `crew-architect.agent.md` | YAML with `name`, `description`, `model`, `tools` |
 | Gemini | `.md` | `crew-architect.md` | YAML with `name`, `description`, `kind`, `tools`, `max_turns`, `timeout_mins` |
 | OpenCode | `.md` | `crew-architect.md` | YAML with `description`, `mode`, `tools` |
 | Devin | `.md` | `SKILL.md` in a named directory | YAML with `name`, `description`, `triggers`, `allowed-tools` |
@@ -117,12 +117,13 @@ OpenCode is the outlier -- it uses different key names, transport types, and dat
 ---
 name: crew-architect           # Optional (filename used if omitted)
 description: "..."             # REQUIRED
+model: sonnet                  # Optional: generic alias (sonnet, haiku). Omit to use provider default.
 tools:
   - "*"                        # Only on orchestrator
 ---
 ```
 
-No model selection (GitHub assigns the model).
+Model selection is optional. Use generic aliases (`sonnet`, `haiku`). Omit to let GitHub assign the default model.
 
 **Gemini CLI** (`geminicli.com`):
 
@@ -290,7 +291,9 @@ Platforms that support per-agent model selection use dicts in `build-agents.py` 
 
 **OpenCode** (`OPENCODE_AGENT_MODELS`): All agents default to empty string (inherit from `opencode.json` default model). Users can override per-agent in their agent `.md` files or by editing the dict.
 
-**Claude / Copilot**: No per-agent model selection in frontmatter. Claude uses the `models` section in `workflow-config.yaml`. Copilot uses the provider's default model.
+**Claude**: No per-agent model selection in frontmatter. Uses the `models` section in `workflow-config.yaml`.
+
+**Copilot** (`COPILOT_AGENT_MODELS`): Supports optional `model:` field in frontmatter with generic aliases (e.g., `sonnet`, `haiku`). Omit to use the provider's default model. The `_copilot_frontmatter()` function in `build-agents.py` emits the model when a mapping is defined in `COPILOT_AGENT_MODELS`.
 
 ### OpenCode Granular Permissions
 
@@ -363,7 +366,7 @@ The `effort_levels` section in `workflow-config.yaml` defines reasoning depth pe
 | Claude Code | `output_config.effort` (`low` / `medium` / `high` / `max`), combined with `thinking: {"type": "adaptive"}` |
 | Gemini CLI | `thinkingConfig.thinkingBudget` in settings.json overrides (see table above) |
 | OpenCode | Temperature (lower = more deterministic) |
-| Copilot | Informational only (Copilot assigns its own model) |
+| Copilot | `--reasoning-effort` flag on `task` tool (low / medium / high / max) |
 | Devin | Informational only (Devin assigns its own model) |
 
 ## Template Placeholder System

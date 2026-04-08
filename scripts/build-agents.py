@@ -441,7 +441,31 @@ def _agent_output_name(name: str) -> str:
     return name if name.startswith("crew-") else f"crew-{name}"
 
 
-def _copilot_frontmatter(name: str, description: str, *, is_orchestrator: bool = False) -> str:
+# Per-agent model selection for Copilot.  Use generic aliases (sonnet, haiku).
+# Empty string = omit model field (provider assigns default).
+COPILOT_AGENT_MODELS: dict[str, str] = {
+    "architect":              "sonnet",
+    "developer":              "sonnet",
+    "reviewer":               "sonnet",
+    "skeptic":                "sonnet",
+    "planner":                "sonnet",
+    "implementer":            "sonnet",
+    "feedback":               "sonnet",
+    "quality-guard":          "sonnet",
+    "technical-writer":       "haiku",
+    "security-auditor":       "sonnet",
+    "performance-analyst":    "sonnet",
+    "api-guardian":           "sonnet",
+    "accessibility-reviewer": "haiku",
+    "axiom-miner":            "sonnet",
+    "design-challenger":      "sonnet",
+    "orchestrator":           "sonnet",
+    "crew-worktree":          "haiku",
+    "crew-status":            "haiku",
+}
+
+
+def _copilot_frontmatter(name: str, description: str, *, is_orchestrator: bool = False, model: str = "") -> str:
     """Generate YAML frontmatter for a .agent.md file."""
     out_name = _agent_output_name(name)
     lines = [
@@ -449,6 +473,8 @@ def _copilot_frontmatter(name: str, description: str, *, is_orchestrator: bool =
         f"name: {out_name}",
         f'description: "{description}"',
     ]
+    if model:
+        lines.append(f"model: {model}")
     if is_orchestrator:
         lines.append("tools:")
         lines.append('  - "*"')
@@ -554,7 +580,8 @@ def build_copilot(output_dir: Path):
     if orchestrator_path.exists():
         orch_body = read_file(orchestrator_path)
         desc = AGENT_DESCRIPTIONS.get("orchestrator", "Workflow Orchestrator")
-        orch_content = _copilot_frontmatter("orchestrator", desc, is_orchestrator=True) + "\n" + orch_body
+        orch_model = COPILOT_AGENT_MODELS.get("orchestrator", "")
+        orch_content = _copilot_frontmatter("orchestrator", desc, is_orchestrator=True, model=orch_model) + "\n" + orch_body
         orch_content = _substitute_platform(orch_content, "copilot", scripts_dir=scripts_dir)
         dest = agents_out / "crew.agent.md"
         dest.write_text(orch_content, encoding="utf-8")
@@ -574,7 +601,8 @@ def build_copilot(output_dir: Path):
 
         desc = AGENT_DESCRIPTIONS.get(name, f"Crew agent: {name}")
         is_command = name in COMMAND_AGENTS
-        frontmatter = _copilot_frontmatter(name, desc, is_orchestrator=is_command)
+        model = COPILOT_AGENT_MODELS.get(name, "")
+        frontmatter = _copilot_frontmatter(name, desc, is_orchestrator=is_command, model=model)
 
         out_name = _agent_output_name(name)
         content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "copilot",

@@ -706,7 +706,7 @@ After building, `_assert_no_raw_placeholders()` scans all generated `.md` files 
 
 Each platform limits what tools sub-agents can use:
 
-- **Copilot**: No per-tool restrictions; orchestrator gets `tools: ["*"]`
+- **Copilot**: No per-tool restrictions; orchestrator gets `tools: ["*"]`. Supports `task(mode: "background")` for parallel sub-agent execution and `read_agent`/`list_agents` for status polling.
 - **Gemini**: Explicit tool allowlists per agent (`GEMINI_AGENT_TOOLS` dict), plus `max_turns` limits (`GEMINI_MAX_TURNS`)
 - **OpenCode**: Tool deny-maps per agent (`OPENCODE_AGENT_TOOLS` dict), e.g., `{"write": false, "edit": false}` to restrict read-only agents. Additionally, `OPENCODE_AGENT_PERMISSIONS` provides granular bash command permissions via glob patterns (see [cross-platform.md](./cross-platform.md#opencode-granular-permissions) for details)
 - **Devin**: Explicit allowlists of tool names per agent (`DEVIN_AGENT_TOOLS` dict). Available tools: `read`, `edit`, `grep`, `glob`, `exec`.
@@ -714,10 +714,11 @@ Each platform limits what tools sub-agents can use:
 
 #### Per-Agent Model Selection
 
-Two platforms support per-agent model selection via frontmatter emitted by `build-agents.py`:
+Three platforms support per-agent model selection via frontmatter emitted by `build-agents.py`:
 
 - **Gemini**: `GEMINI_AGENT_MODELS` dict maps agents to `gemini-2.5-pro` (complex reasoning) or `gemini-2.0-flash` (utility). Emitted as `model:` in frontmatter.
 - **OpenCode**: `OPENCODE_AGENT_MODELS` dict (all empty strings by default = inherit from global config). Emitted as `model:` in frontmatter when non-empty.
+- **Copilot**: `COPILOT_AGENT_MODELS` dict maps agents to generic aliases (`sonnet`, `haiku`). Emitted as `model:` in frontmatter when non-empty. Default is empty (provider assigns model).
 
 #### OpenCode-Specific Patterns
 

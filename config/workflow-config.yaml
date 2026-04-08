@@ -221,6 +221,7 @@ documentation:
 # Gemini CLI: maps to thinkingConfig.thinkingBudget in settings.json overrides
 #   architect/skeptic=24576, developer/reviewer=16384, utility=4096-8192
 # OpenCode: maps to temperature (lower = more deterministic)
+# Copilot: maps to --reasoning-effort flag on task tool
 # Values: low | medium | high | max (max is Opus 4.6 only)
 effort_levels:
   quick:

@@ -4,8 +4,11 @@ You orchestrate the @crew workflow by running the orchestrator script for routin
 
 ## Platform Notes
 
+- **Two sub-agent mechanisms**: Copilot supports `runSubagent` (sequential, blocking) and the `task` tool with `mode: "background"` (parallel, non-blocking). Use `runSubagent` for single-agent sequential phases. Use `task(mode: "background")` for parallel phases.
 - Copilot does not expose a `max_turns` parameter for `runSubagent`. Monitor output length and terminate long-running agents manually.
-- Copilot does not share context between `runSubagent` calls. You must explicitly pass relevant information (summaries of prior phases, file paths) in each agent prompt.
+- Copilot does not share context between sub-agent calls. You must explicitly pass relevant information (summaries of prior phases, file paths) in each agent prompt.
+- **Per-agent model selection**: Use the `model:` frontmatter field in `.agent.md` files to assign models. The orchestrator can also pass `model:` when spawning via the `task` tool.
+- **Reasoning effort**: Use the `--reasoning-effort` flag (maps to `effort_levels` in config) when spawning agents via the `task` tool.
 
 ## Command: @crew
 
@@ -39,9 +42,26 @@ Loop on the returned JSON action from the orchestrator:
 3. If `next.beads_comment`, run: `bd comments add <issue> "<comment>"`
 4. If `next.parallel_agents` is set (list of agent dicts):
    - Call `workflow_start_parallel_phase` MCP tool with all phase names (primary + all parallel agents)
-   - Invoke primary sub-agent: `runSubagent("crew-<agent_name>", { prompt: "<composed prompt>" })`
-   - Save output, call `agent-done`, call `workflow_complete_parallel_phase` for primary
-   - For each parallel agent in the list: compose prompt, invoke `runSubagent("crew-<par_agent>", ...)`, save output, call `agent-done`, call `workflow_complete_parallel_phase`
+   - **Launch all agents in parallel** using `task(mode: "background")`:
+     ```
+     // Launch primary agent
+     primary_agent = task(
+       agent_type: "crew-<agent_name>",
+       prompt: "<composed prompt>",
+       mode: "background",
+       name: "crew-<agent_name>"
+     )
+     // Launch each parallel agent
+     parallel_agent_1 = task(
+       agent_type: "crew-<par_agent_1>",
+       prompt: "<composed prompt>",
+       mode: "background",
+       name: "crew-<par_agent_1>"
+     )
+     // ... for each parallel agent
+     ```
+   - **Wait for all agents** using `read_agent(agent_id, wait: true)` for each
+   - For each completed agent: save output to `.tasks/<task_id>/<agent>.md`, call `agent-done`, call `workflow_complete_parallel_phase`
    - Call `workflow_merge_parallel_results` MCP tool to combine concerns
    - Continue loop with `result.next`
    Alternatively, if only `next.parallel_with` is set (single string, backwards compat):

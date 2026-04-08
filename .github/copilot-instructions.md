@@ -252,23 +252,25 @@ Claude Code has a `/crew` slash command that automatically chains agents through
 3. Call `workflow_transition` between phases
 4. Call `workflow_complete_phase` when done
 
-### No Automatic Agent Chaining
+### Agent Chaining via Task Tool
 
-Claude Code's Task tool spawns sub-agents that run in parallel. Copilot doesn't have an equivalent — each agent invocation is a separate conversation turn. This means:
-- You invoke one agent at a time
-- You're responsible for passing context between agents
-- The MCP tools still track state, so progress persists
+Copilot now supports the `task` tool with `mode: "background"` for parallel sub-agent execution, similar to Claude Code's Task tool. For parallel phases (e.g., reviewer + skeptic in thorough mode):
+- Launch agents with `task(mode: "background")` for true parallel execution
+- Poll status with `read_agent` or `list_agents`
+- For sequential phases, `runSubagent` is still the simpler option
+
+Context is NOT shared between sub-agent calls — you must explicitly pass relevant information (summaries of prior phases, file paths) in each agent prompt. The MCP tools track state, so progress persists across agents.
 
 ### No Hook Enforcement
 
 Claude Code uses hooks to enforce workflow rules (e.g., blocking transitions without checkpoint approval). In Copilot, the workflow tools still track state but don't block invalid operations — discipline is on the user.
 
-### No-Op Features
+### Partially Supported Features
 
-These config sections exist but have no effect on Copilot (they don't cause errors):
-- `effort_levels` — Controls Claude's extended thinking depth
-- `compaction` — Controls Claude's context window management
-- `agent_teams` — Controls parallel agent spawning
+These config sections have varying support on Copilot:
+- `effort_levels` — Maps to `--reasoning-effort` flag when spawning agents via the `task` tool. Supported values: low, medium, high, max.
+- `agent_teams` — Parallel agent spawning is now available via `task(mode: "background")`. The `agent_teams.parallel_review` config controls whether review phases run in parallel.
+- `compaction` — Controls Claude's context window management. No equivalent on Copilot (no-op).
 
 ## Getting Help
 
