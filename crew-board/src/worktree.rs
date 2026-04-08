@@ -420,7 +420,7 @@ pub fn create_worktree(
     let tasks_abs = tasks_canonical.join(&task_id);
     let resume_cmd = match ai_host {
         AiHost::Copilot | AiHost::Gemini => format!("@crew-resume {}", task_id),
-        AiHost::OpenCode => format!("/crew-resume {}", task_id),
+        AiHost::OpenCode | AiHost::Devin | AiHost::Droid => format!("/crew-resume {}", task_id),
         AiHost::Claude => format!("/crew resume {}", task_id),
         AiHost::Shell => String::new(),
     };

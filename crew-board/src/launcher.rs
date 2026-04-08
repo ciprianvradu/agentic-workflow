@@ -19,6 +19,8 @@ pub enum AiHost {
     Copilot,
     Gemini,
     OpenCode,
+    Devin,
+    Droid,
     Shell,
 }
 
@@ -53,6 +55,8 @@ impl AiHost {
             AiHost::Copilot => "GitHub Copilot",
             AiHost::Gemini => "Gemini CLI",
             AiHost::OpenCode => "OpenCode",
+            AiHost::Devin => "Devin",
+            AiHost::Droid => "Droid (Factory.ai)",
             AiHost::Shell => if cfg!(target_os = "windows") { "Shell (pwsh)" } else { "Shell (bash)" },
         }
     }
@@ -63,6 +67,8 @@ impl AiHost {
             AiHost::Copilot => "copilot",
             AiHost::Gemini => "gemini",
             AiHost::OpenCode => "opencode",
+            AiHost::Devin => "devin",
+            AiHost::Droid => "droid",
             AiHost::Shell => if cfg!(target_os = "windows") { "pwsh" } else { "bash" },
         }
     }
@@ -130,11 +136,17 @@ pub fn detect_ai_hosts() -> Vec<AiHost> {
     if command_exists("opencode") {
         hosts.push(AiHost::OpenCode);
     }
+    if command_exists("devin") {
+        hosts.push(AiHost::Devin);
+    }
+    if command_exists("droid") {
+        hosts.push(AiHost::Droid);
+    }
 
     // Always show all options even if not detected,
     // since they might be available in the launched shell
     if hosts.is_empty() {
-        hosts = vec![AiHost::Claude, AiHost::Copilot, AiHost::Gemini, AiHost::OpenCode];
+        hosts = vec![AiHost::Claude, AiHost::Copilot, AiHost::Gemini, AiHost::OpenCode, AiHost::Devin, AiHost::Droid];
     }
 
     // Shell is always available as fallback
@@ -155,9 +167,9 @@ pub fn launch(
     let dir = work_dir.to_string_lossy();
     let resume_prompt = format!("/crew resume {}", task_id);
 
-    // Copilot (`gh cs`) and OpenCode don't accept a prompt argument.
+    // Copilot and OpenCode don't accept a prompt argument.
     // The .crew-resume file in the worktree provides context instead.
-    // Claude and Gemini accept prompt as CLI argument.
+    // Claude, Gemini, Devin, and Droid accept prompt as CLI argument.
     let shell_cmd_for_host = |dir: &str| -> String {
         match host {
             AiHost::Copilot | AiHost::OpenCode => format!(
@@ -359,6 +371,8 @@ pub fn embed_cmd_args(host: AiHost, _task_id: &str) -> (String, Vec<String>) {
                 let cmd = match host {
                     AiHost::Copilot => "copilot".to_string(),
                     AiHost::OpenCode => "opencode".to_string(),
+                    AiHost::Devin => "devin".to_string(),
+                    AiHost::Droid => "droid".to_string(),
                     _ => host.command().to_string(),
                 };
                 (cmd, vec![])
@@ -390,6 +404,8 @@ fn resolve_windows_command(host: AiHost) -> (String, Vec<String>) {
         AiHost::OpenCode => "opencode",
         AiHost::Claude => "claude",
         AiHost::Gemini => "gemini",
+        AiHost::Devin => "devin",
+        AiHost::Droid => "droid",
         AiHost::Shell => return (platform_shell(), vec![]),
     };
 

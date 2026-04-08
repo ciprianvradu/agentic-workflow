@@ -13,6 +13,8 @@ pub enum AiHostType {
     Gemini,
     Copilot,
     OpenCode,
+    Devin,
+    Droid,
     Shell,
 }
 
@@ -51,6 +53,23 @@ impl AiHostType {
                 "post_tool" | "PostTool" => Some("PostToolUse"),
                 "session_start" => Some("SessionStart"),
                 "session_end" => Some("SessionEnd"),
+                _ => None,
+            },
+            AiHostType::Devin => match event {
+                "PreToolUse" => Some("PreToolUse"),
+                "PostToolUse" => Some("PostToolUse"),
+                "SessionStart" => Some("SessionStart"),
+                "SessionEnd" => Some("SessionEnd"),
+                "Stop" => Some("Stop"),
+                _ => None,
+            },
+            AiHostType::Droid => match event {
+                "PreToolUse" => Some("PreToolUse"),
+                "PostToolUse" => Some("PostToolUse"),
+                "SessionStart" => Some("SessionStart"),
+                "SessionEnd" => Some("SessionEnd"),
+                "Stop" => Some("Stop"),
+                "SubagentStop" => Some("Stop"),
                 _ => None,
             },
             AiHostType::Shell => None,
@@ -113,6 +132,8 @@ pub fn generate_hook_config(
     match host {
         AiHostType::Claude => None, // Claude uses settings.local.json (handled elsewhere)
         AiHostType::Shell => None,  // Shell has no hook system
+        AiHostType::Devin => None,  // Devin hook integration deferred
+        AiHostType::Droid => None,  // Droid hook integration deferred (Droid supports hooks similar to Claude)
         AiHostType::Gemini => Some(generate_gemini_config(port, terminal_id, token, cwd)),
         AiHostType::Copilot => Some(generate_copilot_config(port, terminal_id, token, cwd)),
         AiHostType::OpenCode => Some(generate_opencode_config(port, terminal_id, token, cwd)),
@@ -251,7 +272,7 @@ pub fn format_response(host: AiHostType, allow: bool, reason: &str) -> String {
                 }).to_string()
             }
         }
-        AiHostType::Gemini | AiHostType::Copilot | AiHostType::OpenCode => {
+        AiHostType::Gemini | AiHostType::Copilot | AiHostType::OpenCode | AiHostType::Devin | AiHostType::Droid => {
             if allow {
                 serde_json::json!({"action": "allow"}).to_string()
             } else {

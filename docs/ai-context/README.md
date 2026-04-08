@@ -21,7 +21,7 @@ This directory helps AI agents understand and work with this codebase. Read this
 
 The **Agentic Development Workflow** is a multi-agent orchestration system. It coordinates specialized AI agents through a structured pipeline that plans, reviews, builds, verifies, and documents work. While the built-in default crew targets software development (planner, design-challenger, reviewer, skeptic, implementer, quality-guard, and technical-writer), the system is **domain-agnostic** — custom crew definitions can configure entirely different roles and pipelines for content creation, research, legal review, or any other domain.
 
-It runs on **five platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, OpenCode, and Devin — using the same agent definitions and workflow configuration across all of them.
+It runs on **six platforms**: Claude Code (Anthropic), GitHub Copilot CLI, Gemini CLI, OpenCode, Devin, and Droid (Factory.ai) — using the same agent definitions and workflow configuration across all of them.
 
 The core infrastructure is an **MCP server** (Model Context Protocol) written in Python that manages workflow state, configuration, and orchestration logic.
 
