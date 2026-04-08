@@ -218,11 +218,21 @@ BUNDLED_SCRIPTS = [
 ]
 
 
-def _substitute_platform(content: str, platform: str, *, scripts_dir: str | None = None) -> str:
-    """Replace {__platform__}, {__platform_dir__}, and {__scripts_dir__} placeholders."""
+def _substitute_platform(content: str, platform: str, *, scripts_dir: str | None = None,
+                         output_dir: Path | None = None) -> str:
+    """Replace {__platform__}, {__platform_dir__}, and {__scripts_dir__} placeholders.
+
+    When output_dir is under a Windows mount path (/mnt/c/...) on WSL, absolute
+    scripts paths are converted to Windows format (C:/...) so commands work in
+    PowerShell/cmd.  When output_dir is a WSL path, paths stay as-is.
+    """
     content = content.replace("{__platform__}", platform)
     content = content.replace("{__platform_dir__}", PLATFORM_DIRS.get(platform, f".{platform}"))
-    content = content.replace("{__scripts_dir__}", scripts_dir or SCRIPTS_DIRS.get(platform, "scripts"))
+    sd = scripts_dir or SCRIPTS_DIRS.get(platform, "scripts")
+    # Convert absolute WSL paths to Windows paths when installing to a Windows location
+    if output_dir and _is_wsl() and str(output_dir).startswith("/mnt/"):
+        sd = _wsl_to_windows_path(sd)
+    content = content.replace("{__scripts_dir__}", sd)
     return content
 
 
@@ -516,6 +526,21 @@ def _user_home() -> Path:
     return _windows_home() or Path.home()
 
 
+def _wsl_to_windows_path(wsl_path: str) -> str:
+    """Convert a WSL /mnt/c/... path to C:/... Windows format.
+
+    Returns the original path unchanged if it's not a WSL mount path.
+    Uses forward slashes which work in both PowerShell and cmd.exe.
+    """
+    import re
+    m = re.match(r"^/mnt/([a-z])/(.*)$", wsl_path)
+    if m:
+        drive = m.group(1).upper()
+        rest = m.group(2)
+        return f"{drive}:/{rest}"
+    return wsl_path
+
+
 def _is_home_dir(output_dir: Path) -> bool:
     """Check if output_dir is a user home directory (WSL or Windows).
 
@@ -742,7 +767,7 @@ def build_gemini(output_dir: Path):
         frontmatter = _gemini_frontmatter(name, desc, tools)
 
         out_name = _agent_output_name(name)
-        content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "gemini")
+        content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "gemini", output_dir=output_dir)
         dest = agents_out / f"{out_name}.md"
         dest.write_text(content, encoding="utf-8")
         print(f"  + {out_name}.md")
@@ -925,7 +950,7 @@ def build_opencode(output_dir: Path):
             frontmatter = _opencode_frontmatter(name, desc, tools, model=model, permission=perm)
 
             out_name = _agent_output_name(name)
-            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "opencode")
+            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "opencode", output_dir=output_dir)
             dest = agents_out / f"{out_name}.md"
             dest.write_text(content, encoding="utf-8")
             written_files.append(dest)
@@ -941,7 +966,7 @@ def build_opencode(output_dir: Path):
             body = read_file(cmd_path)
             # Substitute $ARGS → $ARGUMENTS for OpenCode's variable syntax
             content = body.replace("$ARGS", "$ARGUMENTS")
-            content = _substitute_platform(content, "opencode")
+            content = _substitute_platform(content, "opencode", output_dir=output_dir)
             dest = commands_out / cmd_path.name
             dest.write_text(content, encoding="utf-8")
             written_files.append(dest)
@@ -1007,15 +1032,47 @@ DROID_AGENT_TOOLS = {
     "crew-status":            ["Read", "LS", "Grep", "Glob", "Execute"],
 }
 
+# Droid slash command metadata: (description, argument-hint).
+# Commands in commands/*.md and COMMAND_AGENTS get entries in .factory/commands/.
+DROID_COMMAND_META = {
+    "crew":            ("Agentic Development Workflow", "<task description or Jira key>"),
+    "crew-resume":     ("Resume an in-progress workflow", "<task-id>"),
+    "crew-config":     ("View or update workflow configuration", ""),
+    "crew-cost-report": ("Show workflow cost summary", ""),
+    "crew-permissions": ("Manage crew permissions", ""),
+    "crew-learn":      ("Learn from recent changes", ""),
+    "crew-docs-report": ("Documentation health report", ""),
+    "crew-docs-export": ("Export doc templates", ""),
+    "crew-docs-import": ("Import doc templates", ""),
+    "crew-quick":      ("Quick workflow start", "<task description>"),
+    "crew-checkpoint": ("Create workflow checkpoint", ""),
+    "crew-worktree":   ("Create worktree for crew task", "<task-id>"),
+    "crew-status":     ("Show workflow status", ""),
+    "crew-stats":      ("Show project statistics", ""),
+}
+
+
+def _droid_command_frontmatter(name: str, description: str, argument_hint: str = "") -> str:
+    """Generate YAML frontmatter for a Droid slash command .md file."""
+    lines = [
+        "---",
+        f'description: "{description}"',
+    ]
+    if argument_hint:
+        lines.append(f'argument-hint: "{argument_hint}"')
+    lines.append("---")
+    return "\n".join(lines) + "\n"
+
 
 def _droid_base(output_dir: Path) -> Path:
     """Return the Droid config base directory.
 
     Factory.ai/Droid stores config under ~/.factory/ (global) and .factory/
-    (project-level).  We always use .factory/ for project installs and
-    ~/.factory/ for global (home-dir) installs.
+    (project-level).  When output_dir is a home directory (WSL or Windows),
+    install globally under ~/.factory/.  Otherwise use .factory/ for
+    project-level installs.
     """
-    if output_dir == Path.home():
+    if _is_home_dir(output_dir):
         return output_dir / ".factory"
     return output_dir / ".factory"
 
@@ -1046,14 +1103,20 @@ def _droid_frontmatter(name: str, description: str, tools) -> str:
 
 
 def build_droid(output_dir: Path):
-    """Build agents in Factory.ai/Droid format: .factory/droids/<name>.md with YAML frontmatter.
+    """Build agents in Factory.ai/Droid format.
 
-    Project install: .factory/droids/
-    Global install (output == $HOME): ~/.factory/droids/
+    Outputs:
+      .factory/droids/<name>.md  — custom droids (sub-agents) with droid frontmatter
+      .factory/commands/<name>.md — slash commands with command frontmatter
+
+    Project install: .factory/
+    Global install (output == $HOME): ~/.factory/
     """
     droid_base = _droid_base(output_dir)
     droids_out = droid_base / "droids"
     droids_out.mkdir(parents=True, exist_ok=True)
+    commands_out = droid_base / "commands"
+    commands_out.mkdir(parents=True, exist_ok=True)
 
     preamble_path = PREAMBLES_DIR / "droid.md"
     preamble = read_file(preamble_path) if preamble_path.exists() else ""
@@ -1069,7 +1132,7 @@ def build_droid(output_dir: Path):
         orch_fm = _droid_frontmatter("crew", desc, ["Read", "LS", "Grep", "Glob", "Create", "Edit", "ApplyPatch", "Execute"])
         dest = droids_out / "crew.md"
         dest.write_text(
-            _substitute_platform(orch_fm + "\n" + orch_body, "droid"),
+            _substitute_platform(orch_fm + "\n" + orch_body, "droid", output_dir=output_dir),
             encoding="utf-8"
         )
         written_files.append(dest)
@@ -1091,46 +1154,73 @@ def build_droid(output_dir: Path):
         out_name = _agent_output_name(name)
 
         if name in COMMAND_AGENTS:
-            # Command agents: treat like regular droids but with $ARGUMENTS suffix
+            # Command agents: output as droids (for droid exec) AND as slash commands
             tools = ["Read", "LS", "Grep", "Glob", "Create", "Edit", "Execute"]
             suffix = COMMAND_SUFFIXES.get(name, "\n\nArguments: $ARGUMENTS\n")
             frontmatter = _droid_frontmatter(out_name, desc, tools)
             content = _substitute_platform(
                 frontmatter + "\n" + preamble + "\n" + body.rstrip() + "\n" + suffix.replace("$ARGS", "$ARGUMENTS"),
-                "droid"
+                "droid", output_dir=output_dir
             )
             dest = droids_out / f"{out_name}.md"
             dest.write_text(content, encoding="utf-8")
             written_files.append(dest)
             print(f"  + droids/{out_name}.md (command)")
+
+            # Also write slash command version to commands/
+            cmd_desc, cmd_hint = DROID_COMMAND_META.get(out_name, (desc, ""))
+            cmd_fm = _droid_command_frontmatter(out_name, cmd_desc, cmd_hint)
+            cmd_body = _substitute_platform(
+                body.rstrip() + "\n" + suffix.replace("$ARGS", "$ARGUMENTS"),
+                "droid", output_dir=output_dir
+            )
+            cmd_dest = commands_out / f"{out_name}.md"
+            cmd_dest.write_text(cmd_fm + "\n" + cmd_body, encoding="utf-8")
+            written_files.append(cmd_dest)
+            print(f"  + commands/{out_name}.md (slash command)")
+
             cmd_count += 1
         else:
             tools = DROID_AGENT_TOOLS.get(name, "read-only")
             frontmatter = _droid_frontmatter(out_name, desc, tools)
-            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "droid")
+            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "droid", output_dir=output_dir)
             dest = droids_out / f"{out_name}.md"
             dest.write_text(content, encoding="utf-8")
             written_files.append(dest)
             print(f"  + droids/{out_name}.md")
             count += 1
 
-    # Copy main commands from commands/ directory (crew.md, crew-config.md, crew-resume.md, etc.)
+    # Copy main commands from commands/ directory to BOTH droids/ and commands/
     commands_src = REPO_ROOT / "commands"
     if commands_src.exists():
         for cmd_path in sorted(commands_src.glob("*.md")):
             cmd_name = cmd_path.stem  # e.g. "crew", "crew-resume"
-            if cmd_name == "crew":
-                continue  # orchestrator already written above
             body = read_file(cmd_path)
-            content = _substitute_platform(body, "droid")
-            dest = droids_out / f"{cmd_name}.md"
-            dest.write_text(content, encoding="utf-8")
-            written_files.append(dest)
-            print(f"  + droids/{cmd_name}.md (command)")
+            content = _substitute_platform(body, "droid", output_dir=output_dir)
+
+            # Write to droids/ (skip crew.md — orchestrator already written above)
+            if cmd_name != "crew":
+                dest = droids_out / f"{cmd_name}.md"
+                dest.write_text(content, encoding="utf-8")
+                written_files.append(dest)
+                print(f"  + droids/{cmd_name}.md (command)")
+
+            # Write to commands/ with Droid slash command frontmatter
+            cmd_desc, cmd_hint = DROID_COMMAND_META.get(
+                cmd_name, (f"Crew command: {cmd_name}", "")
+            )
+            cmd_fm = _droid_command_frontmatter(cmd_name, cmd_desc, cmd_hint)
+            cmd_content = content.replace("$ARGS", "$ARGUMENTS")
+            cmd_dest = commands_out / f"{cmd_name}.md"
+            cmd_dest.write_text(cmd_fm + "\n" + cmd_content, encoding="utf-8")
+            written_files.append(cmd_dest)
+            print(f"  + commands/{cmd_name}.md (slash command)")
+
             cmd_count += 1
 
     _assert_no_raw_placeholders(droid_base, "droid", written_files=written_files)
     print(f"\n  {count} agents + {cmd_count} commands + orchestrator written to {droids_out}")
+    print(f"  Slash commands written to {commands_out}")
 
 
 def _devin_base(output_dir: Path) -> Path:
@@ -1197,7 +1287,7 @@ def build_devin(output_dir: Path):
         skill_dir.mkdir(parents=True, exist_ok=True)
         dest = skill_dir / "SKILL.md"
         dest.write_text(
-            _substitute_platform(orch_fm + "\n" + orch_body, "devin"),
+            _substitute_platform(orch_fm + "\n" + orch_body, "devin", output_dir=output_dir),
             encoding="utf-8"
         )
         written_files.append(dest)
@@ -1247,7 +1337,7 @@ def build_devin(output_dir: Path):
             tools = DEVIN_AGENT_TOOLS.get(name, ["read", "grep", "glob"])
             frontmatter = _devin_skill_frontmatter(out_name, desc, tools)
             body = body.replace("$ARGS", "$ARGUMENTS")  # defensive: match opencode pattern
-            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "devin")
+            content = _substitute_platform(frontmatter + "\n" + preamble + "\n" + body, "devin", output_dir=output_dir)
             skill_dir = skills_out / out_name
             skill_dir.mkdir(parents=True, exist_ok=True)
             dest = skill_dir / "SKILL.md"
@@ -1264,7 +1354,7 @@ def build_devin(output_dir: Path):
             if cmd_name == "crew":
                 continue  # orchestrator already written above
             body = read_file(cmd_path)
-            content = _substitute_platform(body, "devin")
+            content = _substitute_platform(body, "devin", output_dir=output_dir)
             skill_dir = skills_out / cmd_name
             skill_dir.mkdir(parents=True, exist_ok=True)
             dest = skill_dir / "SKILL.md"
@@ -1309,7 +1399,7 @@ PLATFORMS = {
     },
     "droid": {
         "build": build_droid,
-        "default_output": lambda: Path.home(),
+        "default_output": lambda: _user_home(),
         "description": "Factory.ai Droid — droid .md files in ~/.factory/droids/",
     },
 }
