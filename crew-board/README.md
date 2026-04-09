@@ -25,7 +25,7 @@ Tasks  Issues  Config  Cost  [Terms]  Activity    ↑↓ crew  ! 1 attn  5 repos
 
 ## Features
 
-**Embedded Terminal Multiplexer** — Run AI agents (Claude Code, Gemini CLI, GitHub Copilot, OpenCode) inside crew-board. Each crew gets a full PTY terminal with ANSI color, cursor positioning, and alternate screen support.
+**Embedded Terminal Multiplexer** — Run AI agents (Claude Code, Gemini CLI, GitHub Copilot, OpenCode, Devin, Droid) inside crew-board. Each crew gets a full PTY terminal with ANSI color, cursor positioning, and alternate screen support. Windows ConPTY is supported for native Windows builds.
 
 **Permission Prompt Detection** — Automatically detects when an AI agent is waiting for approval. Yellow attention badges appear in the crew list, and F7 jumps straight to the next blocked crew.
 
@@ -65,7 +65,13 @@ Tasks  Issues  Config  Cost  [Terms]  Activity    ↑↓ crew  ! 1 attn  5 repos
 
 **Auto-Orchestration** — Task scheduling with dependency resolution, circuit breaker, cost ceiling, and concurrent terminal limits. Modes: Manual, SemiAuto, FullAuto.
 
-**Cross-Platform Hook Bridge** — Bridge scripts for Gemini CLI, GitHub Copilot, and OpenCode with event name normalization.
+**Cross-Platform Hook Bridge** — Bridge scripts for Gemini CLI, GitHub Copilot, OpenCode, Devin, and Droid with event name normalization.
+
+**Per-Terminal Auto-Accept (Ctrl+F7)** — Toggle auto-accept on individual terminals, overriding the global permission profile. Shows a lightning bolt icon in the crew list.
+
+**Splash Screen** — Displays a branded splash screen on startup while repos are loading.
+
+**Task Filtering** — Filter the task list by status, phase, or other criteria.
 
 **Worktree Management** — Create (F4) and cleanup (F6) git worktrees with color-themed terminal tabs. Each crew gets its own isolated workspace.
 
@@ -149,7 +155,7 @@ The bottom bar shows context-sensitive F-key actions. Holding Shift reveals a se
 
 | View | Ctrl+F4 | Ctrl+F5 | Ctrl+F6 | Ctrl+F7 | Ctrl+F8 |
 |------|---------|---------|---------|---------|---------|
-| Terminals | Dismiss All | Live view | Statistics | — | ScrollBack |
+| Terminals | Dismiss All | Live view | Statistics | Auto Accept | ScrollBack |
 | Activity | Crew filter | Event filter | Tool filter | Auto-scroll | Gantt |
 
 **Adaptive labels:** On wide terminals (>=130 cols), the F-key bar shows descriptive labels (e.g. "F6 Documents"). On narrow terminals, compact labels are used (e.g. "F6Docs").
@@ -264,7 +270,7 @@ View 5 is a full terminal multiplexer with three input modes:
 
 Opens a multi-step wizard (on repo rows only):
 1. **Task description** — free text input
-2. **AI host** — Claude Code, GitHub Copilot, Gemini CLI, or OpenCode
+2. **AI host** — Claude Code, GitHub Copilot, Gemini CLI, OpenCode, Devin, or Droid
 3. **Settings** — toggle pull latest / launch terminal after creation
 4. **Execution** — background thread runs git operations with spinner
 5. **Result** — shows task ID, branch, directory, color scheme
@@ -337,6 +343,9 @@ permission_profile = "interactive"
 
 # Regex patterns for auto-approval in trusted profile
 # auto_approve_patterns = ["(?i)read file", "(?i)list directory"]
+
+# Default auto-accept state for new terminals (default: false)
+# auto_accept_default = false
 
 # Send desktop notification on attention events (default: false)
 desktop_notifications = false

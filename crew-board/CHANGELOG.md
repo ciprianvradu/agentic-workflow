@@ -3,6 +3,26 @@
 All notable changes to crew-board are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-04-09
+
+### Added
+- **Droid (Factory.ai) host support** — Launch and manage Droid CLI terminals alongside other AI hosts
+- **Devin for Terminal host support** — Full integration with Devin CLI as a supported AI host
+- **Windows ConPTY support** — Native Windows PTY implementation (`ConPtySystem`, `WinChild`) for running embedded terminals on Windows without WSL
+- **Splash screen** — Branded splash screen displays during startup while repos are loading
+- **Task filtering** — Filter the task list by status, phase, or other criteria
+- **Per-terminal auto-accept (Ctrl+F7)** — Toggle auto-accept on individual terminals, overriding the global permission profile. Shows lightning bolt icon in crew list
+- **Lightweight interaction logging** — Enhanced cost tracking with new interaction logging hooks
+- **RESUME.md generation** — Crash recovery context files generated for workflow phases
+
+### Changed
+- **Cleanup selection** — Allow single worktree selection (previously required multi-select) with improved UI hints
+- **Configurable pane widths** — Resize panes on the fly with Ctrl+Left/Right; persist defaults via `pane_width_tasks`, `pane_width_issues`, `pane_width_terminals` settings
+- **Workflow phases updated** — Reflects new Design Challenger agent and updated pipeline ordering
+
+### Fixed
+- Devin `workflow-config.yaml` paths in worktree setup script
+
 ## [0.6.2] - 2026-03-12
 
 ### Added
