@@ -6,7 +6,7 @@
 
 A multi-agent development workflow that orchestrates specialized AI agents through planning, implementation, and documentation phases. Supports custom crew definitions for any domain — software development, content creation, research, and more.
 
-**Supports Claude Code, GitHub Copilot CLI, Gemini CLI, OpenCode, and Devin for Terminal.**
+**Supports Claude Code, GitHub Copilot CLI, Gemini CLI, OpenCode, Devin for Terminal, and Droid (Factory.ai).**
 
 > **New here?** Check out the [Visual Overview](docs/overview.md) -- a jargon-free guide with diagrams, perfect for managers, team leads, and anyone curious about how it works.
 
@@ -54,6 +54,7 @@ Complex development tasks require multiple perspectives: architecture considerat
 | Gemini CLI | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
 | OpenCode | [github.com/sst/opencode](https://github.com/sst/opencode) |
 | Devin for Terminal | [cli.devin.ai](https://cli.devin.ai/) |
+| Droid (Factory.ai) | [factory.ai](https://www.factory.ai/) |
 
 ### Optional
 - [Repomix](https://github.com/yamadashy/repomix) for intelligent file aggregation
@@ -118,6 +119,19 @@ Installs to:
 - Config → `~/.config/devin/workflow-config.yaml`
 - MCP server → Python package + `~/.config/devin/config.json`
 
+### Droid (Factory.ai)
+
+```bash
+git clone https://github.com/Spiris-Innovation-Tech-Dev/agentic-workflow.git
+cd agentic-workflow
+./install-droid.sh
+```
+
+Installs to:
+- Agents → `.factory/agents/` (project-level)
+- Config → `.factory/workflow-config.yaml`
+- MCP server → Python package
+
 ### Build Script (Advanced)
 
 The `scripts/build-agents.py` script transforms shared agent sources (`agents/*.md`) and command sources (`commands/*.md`) into platform-specific formats. It substitutes template placeholders (`{__platform__}`, `{__platform_dir__}`, `{__scripts_dir__}`) so that built files reference the correct paths for each platform. Some agents are "command agents" (like `crew-worktree`) -- on Claude/OpenCode these become slash commands (`commands/`), on Copilot/Gemini they become regular agents with full tool access.
@@ -128,6 +142,7 @@ python3 scripts/build-agents.py copilot                   # Build .github/agents
 python3 scripts/build-agents.py gemini                    # Build ~/.gemini/agents/
 python3 scripts/build-agents.py opencode                  # Build ~/.opencode/agents/ + commands/
 python3 scripts/build-agents.py devin                     # Build ~/.config/devin/skills/
+python3 scripts/build-agents.py droid                     # Build .factory/agents/
 python3 scripts/build-agents.py copilot --output /path    # Custom output directory
 python3 scripts/build-agents.py --list-platforms           # Show available platforms
 ```
@@ -510,7 +525,7 @@ Configuration uses a cascade system where each level overrides the previous:
 Command-line args                                                            ← Highest priority
 ```
 
-Platform directories are checked in order: `.claude` → `.copilot` → `.gemini` → `.opencode`, using whichever exists first.
+Platform directories are checked in order: `.claude` → `.copilot` → `.gemini` → `.opencode` → `.devin` → `.factory`, using whichever exists first.
 
 The default configuration lives in a single file:
 - `config/workflow-config.yaml` — All settings (checkpoints, models, modes, worktree, and advanced options). Essential settings are at the top; advanced/power-user settings are below a separator line. Copy and customize this for your projects.
@@ -631,8 +646,8 @@ workflow_modes:
 | Mode | Agents | Use Case | Est. Cost |
 |------|--------|----------|-----------|
 | **quick** | Implementer only | Typos, one-line fixes, trivial changes | $0.03 |
-| **standard** | Planner → Implementer → Technical Writer | Routine features, fixes, refactors | $0.10 |
-| **thorough** | Planner → Reviewer → Implementer → Quality Guard + Security Auditor (parallel) → Technical Writer | Security, migrations, breaking changes | $0.30+ |
+| **standard** | Planner → Skeptic → Implementer → Technical Writer | Routine features, fixes, refactors | $0.10 |
+| **thorough** | Planner → Design Challenger + Reviewer + Skeptic (parallel) → Implementer → Quality Guard + Security Auditor (parallel) → Technical Writer | Security, migrations, breaking changes | $0.30+ |
 | **auto** | Auto-detect based on task description | Default | varies |
 
 Legacy aliases (backward-compatible): `micro`/`minimal`/`turbo` map to standard, `fast`/`reviewed` map to standard, `full` maps to thorough.
@@ -729,7 +744,7 @@ When `--worktree` is passed, the orchestrator creates an isolated git worktree f
 | `auto` | Detect terminal and launch immediately without asking |
 | `never` | Print manual instructions only (original behavior) |
 
-The agent auto-detects the terminal environment (`$TMUX`, `wt.exe`, macOS Terminal) and generates the appropriate launch command. The `ai_host` setting controls which CLI is started in the new terminal — set to `auto` to use the platform default (`claude`), or explicitly set `claude`, `gemini`, or `copilot`.
+The agent auto-detects the terminal environment (`$TMUX`, `wt.exe`, macOS Terminal) and generates the appropriate launch command. The `ai_host` setting controls which CLI is started in the new terminal — set to `auto` to use the platform default (`claude`), or explicitly set `claude`, `gemini`, `copilot`, `opencode`, `devin`, or `droid`.
 
 **Host CLI differences:**
 
@@ -1069,28 +1084,33 @@ to see all resumable tasks.
 ./uninstall-devin.sh
 ```
 
+### Droid (Factory.ai)
+```bash
+./uninstall-droid.sh
+```
+
 All uninstallers preserve task state in `.tasks/`.
 
 ## Platform Support
 
 ### Feature Comparison
 
-| Feature | Claude Code | Copilot CLI | Gemini CLI | OpenCode | Devin |
-|---------|:-----------:|:-----------:|:----------:|:--------:|:-----:|
-| **Agents** | All 16 | All 16 | All 16 | All 16 | All 16 |
-| **MCP Tools** | 69 tools | 69 tools | 69 tools | 69 tools | 69 tools |
-| **State Management** | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` |
-| **Config Cascade** | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task |
-| **Workflow Modes** | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto |
-| **Cost Tracking** | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown |
-| **Memory/Discoveries** | Persistent | Persistent | Persistent | Persistent | Persistent |
-| **Orchestration** | `/crew` command (automated) | `/agent crew-orchestrator` (sub-agent chaining) | Autonomous routing (description-based) | `@crew` agent (@mention delegation) | `/crew` skill (slash command) |
-| **Worktree Support** | `/crew-worktree` (command) | `@crew-worktree` (agent) | `@crew-worktree` (agent) | `/crew-worktree` (command) | `/crew-worktree` (skill) |
-| **Slash Commands** | `/crew`, `/crew-ask`, etc. | `/agent` only | Custom commands (`.toml`) | `/crew`, custom commands | `/crew`, `/crew-*` skills |
-| **Hook Enforcement** | PreToolUse, Stop hooks | Not available | Not available | Not available | Not available |
-| **Agent Teams** | Experimental parallel agents | Not available | Not available | Not available | Not available |
-| **Effort Levels** | API parameter (`output_config`) | Informational only | Informational only | Informational only | Informational only |
-| **Compaction** | Server-side auto-compaction | Not available | Not available | Not available | Not available |
+| Feature | Claude Code | Copilot CLI | Gemini CLI | OpenCode | Devin | Droid |
+|---------|:-----------:|:-----------:|:----------:|:--------:|:-----:|:-----:|
+| **Agents** | All 16 | All 16 | All 16 | All 16 | All 16 | All 16 |
+| **MCP Tools** | 69 tools | 69 tools | 69 tools | 69 tools | 69 tools | 69 tools |
+| **State Management** | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` | `.tasks/` |
+| **Config Cascade** | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task | Global → Project → Task |
+| **Workflow Modes** | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto | quick/standard/thorough/auto |
+| **Cost Tracking** | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown | Per-agent breakdown |
+| **Memory/Discoveries** | Persistent | Persistent | Persistent | Persistent | Persistent | Persistent |
+| **Orchestration** | `/crew` command (automated) | `/agent crew-orchestrator` (sub-agent chaining) | Autonomous routing (description-based) | `@crew` agent (@mention delegation) | `/crew` skill (slash command) | Droid orchestrator (command-based) |
+| **Worktree Support** | `/crew-worktree` (command) | `@crew-worktree` (agent) | `@crew-worktree` (agent) | `/crew-worktree` (command) | `/crew-worktree` (skill) | `/crew-worktree` (command) |
+| **Slash Commands** | `/crew`, `/crew-ask`, etc. | `/agent` only | Custom commands (`.toml`) | `/crew`, custom commands | `/crew`, `/crew-*` skills | `/crew`, `/crew-*` commands |
+| **Hook Enforcement** | PreToolUse, Stop hooks | Not available | Not available | Not available | Not available | Not available |
+| **Agent Teams** | Experimental parallel agents | Not available | Not available | Not available | Not available | Not available |
+| **Effort Levels** | API parameter (`output_config`) | Informational only | Informational only | Informational only | Informational only | Informational only |
+| **Compaction** | Server-side auto-compaction | Not available | Not available | Not available | Not available | Not available |
 
 ### Platform Details
 
@@ -1139,6 +1159,13 @@ All uninstallers preserve task state in `.tasks/`.
 - Reads `AGENTS.md` natively as an always-on rule
 - Worktrees: `/crew-worktree "task description"` (skill)
 - MCP server registered in `~/.config/devin/config.json` (with `"transport": "stdio"`)
+- No hook enforcement
+
+#### Droid (Factory.ai)
+- Agents installed to `.factory/agents/` as `.md` files
+- Orchestrator uses Droid's command-based delegation for agent chaining
+- Worktrees: `/crew-worktree "task description"` (command)
+- MCP server registered in `.factory/` config
 - No hook enforcement
 
 ### What's Shared Across All Platforms

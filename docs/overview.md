@@ -63,7 +63,9 @@ Think of it like an automotive assembly line, but for software. Each station has
 graph TB
     subgraph planning ["Phase 1: Planning"]
         direction LR
-        PL[Planner] --> REV[Reviewer]
+        PL[Planner] --> DC[Design Challenger]
+        PL --> REV[Reviewer]
+        PL --> SK[Skeptic]
     end
 
     subgraph building ["Phase 2: Building"]
@@ -90,14 +92,16 @@ graph TB
     style quality fill:#FFECB3,stroke:#FFA726,color:#333
     style documenting fill:#FFF3E0,stroke:#F5A623,color:#333
     style PL fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    style DC fill:#FF7043,stroke:#D84315,color:#fff
     style REV fill:#26A69A,stroke:#1B7A72,color:#fff
+    style SK fill:#78909C,stroke:#546E7A,color:#fff
     style IMP fill:#66BB6A,stroke:#388E3C,color:#fff
     style QG fill:#FFA726,stroke:#E65100,color:#fff
     style SA fill:#EF5350,stroke:#C62828,color:#fff
     style TW fill:#AB47BC,stroke:#7B1FA2,color:#fff
 ```
 
-The Skeptic runs in both **standard** and **thorough** mode, stress-testing plans before implementation begins. In thorough mode, the Reviewer and Skeptic run in parallel, and Quality Guard + Security Auditor run in parallel post-implementation. The phases ensure that **no code is written until the plan has been challenged from multiple perspectives**, and no code is committed until it matches the approved plan.
+In **standard** mode, only the Skeptic runs after the Planner, stress-testing the plan for failure modes. In **thorough** mode, the Design Challenger, Reviewer, and Skeptic all run in parallel after the Planner, challenging the plan from multiple angles before implementation begins. Quality Guard + Security Auditor run in parallel post-implementation. The phases ensure that **no code is written until the plan has been challenged from multiple perspectives**, and no code is committed until it matches the approved plan.
 
 ---
 
@@ -110,7 +114,8 @@ Each AI agent has a distinct personality, focus area, and set of permissions. He
 | Agent | Role Analogy | What They Do | Permissions |
 |-------|-------------|--------------|-------------|
 | **Planner** | Chief Engineer + Senior Architect | Analyzes how the task fits into the overall system, identifies risks and dependencies, then creates a detailed step-by-step implementation plan. Combines the big-picture thinking with the detailed spec writing in one pass. | Read-only |
-| **Reviewer** | Experienced PR Reviewer | Checks the plan for completeness, correctness, and gaps. Verifies code examples, import paths, and pattern compliance against the knowledge base. (Thorough only) | Read-only |
+| **Design Challenger** | The "are we solving the right problem?" voice | Validates that the fundamental approach is sound before details are locked in. Questions whether the right abstractions, boundaries, and trade-offs were chosen. (Thorough only, runs in parallel with Reviewer + Skeptic) | Read-only |
+| **Reviewer** | Experienced PR Reviewer | Checks the plan for completeness, correctness, and gaps. Verifies code examples, import paths, and pattern compliance against the knowledge base. (Thorough only, runs in parallel with Design Challenger + Skeptic) | Read-only |
 | **Skeptic** | Devil's Advocate + Chaos Engineer | Stress-tests the plan for real-world failure modes -- 3 AM outages, edge cases, race conditions, hostile external dependencies. Provides a fundamentally different perspective from the Planner. (Standard + Thorough) | Read-only |
 | **Implementer** | Developer writing the code | Executes the approved plan step by step, running tests after each step. The only agent that actually writes code. Convention files from the project's `ai-context/` folder are injected directly into its prompt. | Read & Write |
 | **Quality Guard** | QA Lead at a checkpoint | Reviews the built code against the approved plan. Checks code quality, plan adherence, and test coverage. Recommends whether to continue, adjust, or restart. Runs in parallel with Security Auditor. Convention files are also injected into its prompt. (Thorough only) | Read-only |
@@ -123,7 +128,9 @@ Each AI agent has a distinct personality, focus area, and set of permissions. He
 graph TD
     subgraph readonly ["Read-Only Agents (Cannot Change Code)"]
         PL["Planner\n\nSees the forest\nAND writes the recipe"]
-        REV["Reviewer\n\nThe thorough proofreader\n+ devil's advocate"]
+        DC["Design Challenger\n\nQuestions the\nfundamental approach"]
+        REV["Reviewer\n\nThe thorough proofreader"]
+        SK["Skeptic\n\nDevil's advocate\n+ chaos engineer"]
         QG["Quality Guard\n\nThe quality\ngatekeeper"]
         SA["Security Auditor\n\nThe penetration\ntester"]
     end
@@ -136,14 +143,16 @@ graph TD
     style readonly fill:#F3E5F5,stroke:#AB47BC,color:#333
     style readwrite fill:#E8F5E9,stroke:#66BB6A,color:#333
     style PL fill:#4A90D9,stroke:#2C5F8A,color:#fff
+    style DC fill:#FF7043,stroke:#D84315,color:#fff
     style REV fill:#26A69A,stroke:#1B7A72,color:#fff
+    style SK fill:#78909C,stroke:#546E7A,color:#fff
     style QG fill:#FFA726,stroke:#E65100,color:#fff
     style SA fill:#EF5350,stroke:#C62828,color:#fff
     style IMP fill:#66BB6A,stroke:#388E3C,color:#fff
     style TW fill:#AB47BC,stroke:#7B1FA2,color:#fff
 ```
 
-**Notice:** Four of the six core agents are **read-only** -- they can look at the code and analyze it, but they cannot change anything. This separation of concerns is a deliberate safety measure. Only the Implementer and Technical Writer can modify files, and both follow plans that have been reviewed and approved.
+**Notice:** Six of the eight core agents are **read-only** -- they can look at the code and analyze it, but they cannot change anything. This separation of concerns is a deliberate safety measure. Only the Implementer and Technical Writer can modify files, and both follow plans that have been reviewed and approved.
 
 ---
 
@@ -289,7 +298,7 @@ Beyond scheduled checkpoints, the system will **automatically escalate** to you 
 
 ## Workflow Modes: Right-Sizing the Process
 
-Not every task needs the full six-agent treatment. A simple typo fix does not require a Planner's review. The workflow supports three modes that match the process to the task's complexity.
+Not every task needs the full eight-agent treatment. A simple typo fix does not require a Planner's review. The workflow supports three modes that match the process to the task's complexity.
 
 ```mermaid
 graph TB
@@ -301,12 +310,12 @@ graph TB
 
     subgraph THOROUGH ["Thorough Mode"]
         direction LR
-        TH1["Planner"] --> TH2["Reviewer"] --> TH3["Implementer"] --> TH4["Quality Guard\n+ Security Auditor\n(parallel)"] --> TH5["Tech Writer"]
+        TH1["Planner"] --> TH2["Design Challenger\n+ Reviewer + Skeptic\n(parallel)"] --> TH3["Implementer"] --> TH4["Quality Guard\n+ Security Auditor\n(parallel)"] --> TH5["Tech Writer"]
     end
 
     subgraph STANDARD ["Standard Mode"]
         direction LR
-        S1["Planner"] --> S2["Implementer"] --> S3["Tech Writer"]
+        S1["Planner"] --> S2["Skeptic"] --> S3["Implementer"] --> S4["Tech Writer"]
     end
 
     subgraph QUICK ["Quick Mode"]
@@ -325,8 +334,8 @@ graph TB
 
 | Mode | Agents Used | Best For | Estimated Cost |
 |------|------------|----------|---------------|
-| **Thorough** | All 6 agents (Planner, Reviewer, Implementer, Quality Guard + Security Auditor in parallel, Writer) | Security changes, database migrations, breaking API changes, critical systems | $0.50+ |
-| **Standard** | 3 agents (Planner, Implementer, Technical Writer) | Standard features, refactoring, routine to non-trivial changes | ~$0.15 |
+| **Thorough** | All 8 agents (Planner, Design Challenger + Reviewer + Skeptic in parallel, Implementer, Quality Guard + Security Auditor in parallel, Writer) | Security changes, database migrations, breaking API changes, critical systems | $0.50+ |
+| **Standard** | 4 agents (Planner, Skeptic, Implementer, Technical Writer) | Standard features, refactoring, routine to non-trivial changes | ~$0.15 |
 | **Quick** | 1 agent (Implementer only) | Trivial fixes -- typos, renames, comment updates | ~$0.05 |
 
 ### Auto Mode
@@ -344,7 +353,7 @@ You can always override this by specifying the mode explicitly.
 
 ## Specialist Agents: Called When Needed
 
-In addition to the six core agents, there are **specialist agents** that activate automatically when the task involves their area of expertise.
+In addition to the eight core agents, there are **specialist agents** that activate automatically when the task involves their area of expertise.
 
 ```mermaid
 flowchart TD
@@ -380,18 +389,24 @@ These specialists are **automatically detected** based on the task description a
 
 ## Cross-Platform Support
 
-The Agentic Development Workflow works across three major AI coding platforms:
+The Agentic Development Workflow works across six major AI coding platforms:
 
 ```mermaid
 graph LR
     AW["Agentic\nDevelopment\nWorkflow"] --> CLAUDE["Claude Code\n(Anthropic)"]
     AW --> COPILOT["GitHub Copilot\nCLI"]
     AW --> GEMINI["Gemini CLI\n(Google)"]
+    AW --> OPENCODE["OpenCode\n(SST)"]
+    AW --> DEVIN["Devin for\nTerminal"]
+    AW --> DROID["Droid\n(Factory.ai)"]
 
     style AW fill:#7B68EE,stroke:#5A4FBF,color:#fff
     style CLAUDE fill:#D4A574,stroke:#A67B4B,color:#fff
     style COPILOT fill:#333,stroke:#555,color:#fff
     style GEMINI fill:#4285F4,stroke:#2C5F8A,color:#fff
+    style OPENCODE fill:#2E7D32,stroke:#1B5E20,color:#fff
+    style DEVIN fill:#6A1B9A,stroke:#4A148C,color:#fff
+    style DROID fill:#D84315,stroke:#BF360C,color:#fff
 ```
 
 The same agent definitions and workflow configuration work regardless of which platform you use. This means:
@@ -576,7 +591,9 @@ mindmap
   root((Agentic\nWorkflow))
     Planning
       Planner analyzes and plans
-      Reviewer checks gaps + failure modes
+      Design Challenger questions approach
+      Reviewer checks gaps
+      Skeptic tests failure modes
     Building
       Implementer executes steps
       Tests run automatically
@@ -590,6 +607,7 @@ mindmap
       Automatic escalation
     Flexibility
       Three workflow modes
+      Six platform support
       Auto-detection
       Specialist agents
       Cross-platform support
