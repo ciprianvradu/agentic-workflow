@@ -11,6 +11,8 @@ from pathlib import Path
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add repo root so `from scripts.crew_orchestrator import ...` works
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from agentic_workflow_server.orchestration_tools import (
     crew_parse_args,
