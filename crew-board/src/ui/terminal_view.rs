@@ -195,9 +195,15 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             Span::raw("")
         };
+        let headless_badge = if term.is_headless() {
+            Span::styled("[H]", Style::default().fg(Color::DarkGray))
+        } else {
+            Span::raw("")
+        };
         lines.push(Line::from(vec![
             icon,
             auto_badge,
+            headless_badge,
             Span::styled(label, style),
             Span::styled(format!(" {}", elapsed_str), time_style),
         ]));
@@ -328,6 +334,10 @@ fn draw_crew_summary_line(frame: &mut Frame, mgr: &TerminalManager, area: Rect) 
             spans.push(Span::styled("\u{26a1}", Style::default().fg(Color::Yellow))); // ⚡
         } else {
             spans.push(Span::styled(icon.to_string(), Style::default().fg(icon_color)));
+        }
+        // Show [H] indicator for headless terminals
+        if term.is_headless() {
+            spans.push(Span::styled("[H]", Style::default().fg(Color::DarkGray)));
         }
         spans.push(Span::styled(short_id, label_style));
         spans.push(Span::styled(" ", Style::default()));
@@ -643,20 +653,85 @@ fn draw_single_terminal(
             sel_range.as_ref(),
         );
     } else {
-        // Headless terminal — render a status placeholder
+        // Headless terminal — render a status panel with hook activity info
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from(""));
+
         let status_text = match &term.status {
-            terminal::TerminalStatus::Running => "Headless terminal — running (no interactive output)",
+            terminal::TerminalStatus::Running => "Headless terminal \u{2014} running (no interactive output)",
             terminal::TerminalStatus::Exited(code) => {
                 if *code == 0 {
-                    "Headless terminal — exited successfully"
+                    "Headless terminal \u{2014} exited successfully"
                 } else {
-                    "Headless terminal — exited with error"
+                    "Headless terminal \u{2014} exited with error"
                 }
             }
-            terminal::TerminalStatus::NeedsAttention(_) => "Headless terminal — needs attention",
+            terminal::TerminalStatus::NeedsAttention(_) => "Headless terminal \u{2014} needs attention",
         };
-        let msg = Paragraph::new(status_text)
-            .style(Style::default().fg(Color::DarkGray));
+        lines.push(Line::from(Span::styled(
+            status_text,
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(""));
+
+        // Show hook activity details if available
+        if let Some(hook_state) = &term.hook_state {
+            if !hook_state.activity_label.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("  Activity: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&hook_state.activity_label, Style::default().fg(Color::White)),
+                ]));
+            }
+
+            if !hook_state.tool_counts.is_empty() {
+                let mut counts: Vec<(&String, &u32)> = hook_state.tool_counts.iter().collect();
+                counts.sort_by(|a, b| b.1.cmp(a.1));
+                let summary: String = counts
+                    .iter()
+                    .take(5)
+                    .map(|(name, count)| format!("{}: {}", name, count))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                lines.push(Line::from(vec![
+                    Span::styled("  Tools:    ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(summary, Style::default().fg(Color::White)),
+                ]));
+            }
+
+            if hook_state.total_cost_usd > 0.0 {
+                lines.push(Line::from(vec![
+                    Span::styled("  Cost:     ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("${:.4}", hook_state.total_cost_usd),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+            }
+
+            if hook_state.total_input_tokens > 0 || hook_state.total_output_tokens > 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("  Tokens:   ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}in / {}out", hook_state.total_input_tokens, hook_state.total_output_tokens),
+                        Style::default().fg(Color::White),
+                    ),
+                ]));
+            }
+
+            if hook_state.tool_counts.is_empty() && hook_state.activity_label.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "  Waiting for activity...",
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "  Waiting for activity...",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+
+        let msg = Paragraph::new(lines);
         frame.render_widget(msg, inner);
     }
 

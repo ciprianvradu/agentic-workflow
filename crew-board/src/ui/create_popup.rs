@@ -163,6 +163,7 @@ fn draw_settings(
     let settings = [
         (popup.pull, "Pull latest before creating"),
         (popup.launch_after, "Launch terminal after creation"),
+        (popup.headless, "Headless (no PTY)"),
     ];
 
     let items: Vec<ListItem> = settings
@@ -204,6 +205,7 @@ fn draw_confirm(
     let host_label = popup.hosts[popup.host_cursor].label();
     let pull_str = if popup.pull { "Yes" } else { "No" };
     let launch_str = if popup.launch_after { "Yes" } else { "No" };
+    let headless_str = if popup.headless { "Yes" } else { "No" };
 
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
@@ -250,6 +252,10 @@ fn draw_confirm(
         Line::from(vec![
             Span::styled("  Launch:     ", label_style),
             Span::styled(launch_str, value_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  Headless:   ", label_style),
+            Span::styled(headless_str, value_style),
         ]),
         Line::from(""),
         Line::from(Span::styled(

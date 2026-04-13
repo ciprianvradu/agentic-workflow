@@ -42,6 +42,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 popup.terminal_cursor,
             );
         }
+        LaunchStep::SelectMode => {
+            let mode_cursor = if popup.headless { 1 } else { 0 };
+            draw_selection(
+                frame,
+                inner,
+                "Terminal Mode:",
+                &["Embedded (PTY)", "Headless (no PTY)"],
+                mode_cursor,
+            );
+        }
         LaunchStep::SelectHost => {
             draw_selection(
                 frame,

@@ -213,11 +213,16 @@ pub struct LaunchPopup {
     pub task_desc: String,
     pub color_scheme_index: Option<usize>,
     pub result_msg: Option<String>,
+    /// Whether to spawn in headless mode (no PTY). Resets each time popup opens.
+    pub headless: bool,
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum LaunchStep {
     SelectTerminal,
+    /// Choose between Embedded (PTY) and Headless (no PTY) mode.
+    /// Only shown when Embedded terminal is selected.
+    SelectMode,
     SelectHost,
     Done,
 }
@@ -241,6 +246,8 @@ pub struct CreateWorktreePopup {
     pub host_cursor: usize,
     pub pull: bool,
     pub launch_after: bool,
+    /// Whether to launch in headless mode (no PTY) after creation.
+    pub headless: bool,
     pub settings_cursor: usize,
     pub repo_path: PathBuf,
     pub repo_name: String,
@@ -1796,6 +1803,7 @@ impl App {
             task_desc,
             color_scheme_index: color_idx,
             result_msg: None,
+            headless: false,
         });
     }
 
@@ -1807,6 +1815,10 @@ impl App {
                     if popup.terminal_cursor > 0 {
                         popup.terminal_cursor -= 1;
                     }
+                }
+                LaunchStep::SelectMode => {
+                    // Toggle headless (only two options: Embedded / Headless)
+                    popup.headless = !popup.headless;
                 }
                 LaunchStep::SelectHost => {
                     if popup.host_cursor > 0 {
@@ -1826,6 +1838,10 @@ impl App {
                     if popup.terminal_cursor + 1 < popup.terminals.len() {
                         popup.terminal_cursor += 1;
                     }
+                }
+                LaunchStep::SelectMode => {
+                    // Toggle headless (only two options: Embedded / Headless)
+                    popup.headless = !popup.headless;
                 }
                 LaunchStep::SelectHost => {
                     if popup.host_cursor + 1 < popup.hosts.len() {
@@ -1852,6 +1868,12 @@ impl App {
                 work_dir: PathBuf,
                 color_idx: Option<usize>,
             },
+            SpawnHeadless {
+                task_id: String,
+                host: launcher::AiHost,
+                work_dir: PathBuf,
+                color_idx: Option<usize>,
+            },
         }
 
         let outcome = {
@@ -1861,6 +1883,18 @@ impl App {
             };
             match popup.step {
                 LaunchStep::SelectTerminal => {
+                    let terminal = popup.terminals[popup.terminal_cursor];
+                    if terminal == launcher::TerminalEnv::Embedded {
+                        // Embedded terminal selected — show mode selection (Embedded/Headless)
+                        popup.step = LaunchStep::SelectMode;
+                    } else {
+                        // External terminal — skip mode selection, go to host selection
+                        popup.step = LaunchStep::SelectHost;
+                    }
+                    Outcome::None
+                }
+                LaunchStep::SelectMode => {
+                    // Mode selected (Embedded or Headless), proceed to host selection
                     popup.step = LaunchStep::SelectHost;
                     Outcome::None
                 }
@@ -1868,7 +1902,18 @@ impl App {
                     let terminal = popup.terminals[popup.terminal_cursor];
                     let host = popup.hosts[popup.host_cursor];
 
-                    if terminal == launcher::TerminalEnv::Embedded {
+                    if terminal == launcher::TerminalEnv::Embedded && popup.headless {
+                        // Headless mode selected
+                        let task_id = popup.task_id.clone();
+                        let work_dir = popup.work_dir.clone();
+                        let color_idx = popup.color_scheme_index;
+                        Outcome::SpawnHeadless {
+                            task_id,
+                            host,
+                            work_dir,
+                            color_idx,
+                        }
+                    } else if terminal == launcher::TerminalEnv::Embedded {
                         let task_id = popup.task_id.clone();
                         let work_dir = popup.work_dir.clone();
                         let color_idx = popup.color_scheme_index;
@@ -1920,6 +1965,19 @@ impl App {
             } => {
                 self.spawn_terminal(
                     &task_id, &host_label, &command, &args, &work_dir, color_idx,
+                );
+                self.launch_popup = None;
+                self.active_view = ActiveView::Terminals;
+            }
+            Outcome::SpawnHeadless {
+                task_id,
+                host,
+                work_dir,
+                color_idx,
+            } => {
+                let label = format!("{} (headless)", host.label());
+                self.spawn_headless_terminal(
+                    &task_id, &label, host, &work_dir, color_idx, None,
                 );
                 self.launch_popup = None;
                 self.active_view = ActiveView::Terminals;
@@ -2023,6 +2081,7 @@ impl App {
             host_cursor: 0,
             pull: true,
             launch_after: true,
+            headless: false,
             settings_cursor: 0,
             repo_path,
             repo_name,
@@ -2059,6 +2118,7 @@ impl App {
             host_cursor: 0,
             pull: true,
             launch_after: true,
+            headless: false,
             settings_cursor: 0,
             repo_path,
             repo_name,
@@ -2132,7 +2192,7 @@ impl App {
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if let Some(p) = &mut self.create_popup {
-                        if p.settings_cursor < 1 {
+                        if p.settings_cursor < 2 {
                             p.settings_cursor += 1;
                         }
                     }
@@ -2142,6 +2202,7 @@ impl App {
                         match p.settings_cursor {
                             0 => p.pull = !p.pull,
                             1 => p.launch_after = !p.launch_after,
+                            2 => p.headless = !p.headless,
                             _ => {}
                         }
                     }
@@ -2243,22 +2304,58 @@ impl App {
 
     /// On Enter in Done step: launch terminal if configured, then close.
     fn create_popup_launch_and_close(&mut self) {
-        let popup = match &self.create_popup {
-            Some(p) => p,
-            None => return,
+        // Extract data needed for spawning before dropping the borrow on self
+        let launch_info = {
+            let popup = match &self.create_popup {
+                Some(p) => p,
+                None => return,
+            };
+
+            if popup.launch_after {
+                if let Some(Ok(ref result)) = popup.result {
+                    let host = popup.hosts[popup.host_cursor];
+                    let headless = popup.headless;
+                    Some((
+                        result.task_id.clone(),
+                        result.worktree_abs.clone(),
+                        result.color_scheme_index,
+                        host,
+                        headless,
+                    ))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         };
 
-        if popup.launch_after {
-            if let Some(Ok(ref result)) = popup.result {
+        if let Some((task_id, worktree_abs, color_idx, host, headless)) = launch_info {
+            if headless {
+                // Spawn headless terminal for the new worktree
+                let label = format!("{} (headless)", host.label());
+                self.spawn_headless_terminal(
+                    &task_id,
+                    &label,
+                    host,
+                    &worktree_abs,
+                    Some(color_idx),
+                    None,
+                );
+                self.create_popup = None;
+                self.active_view = ActiveView::Terminals;
+                self.refresh();
+                return;
+            } else {
+                // Launch in external terminal (original behavior)
                 let terminals = launcher::detect_terminals();
                 if let Some(&terminal) = terminals.first() {
-                    let host = popup.hosts[popup.host_cursor];
-                    let cs = launcher::get_hex_scheme(result.color_scheme_index);
+                    let cs = launcher::get_hex_scheme(color_idx);
                     let _ = launcher::launch(
                         terminal,
                         host,
-                        &result.worktree_abs,
-                        &result.task_id,
+                        &worktree_abs,
+                        &task_id,
                         "",
                         Some(cs),
                     );
@@ -3265,7 +3362,6 @@ impl App {
     ///
     /// If the command is not found, logs the error and does not add a terminal.
     /// If hook config generation fails, still spawns the process ("dark mode").
-    #[allow(dead_code)]
     pub fn spawn_headless_terminal(
         &mut self,
         task_id: &str,
@@ -4220,15 +4316,22 @@ impl App {
                 if let Some(mgr) = &mut self.terminal_manager {
                     mgr.focused = term_idx;
                 }
-                if up {
-                    self.terminal_scroll_up(3);
-                    if self.terminal_input_mode == TerminalInputMode::Normal
-                        || self.terminal_input_mode == TerminalInputMode::TerminalFocused
-                    {
-                        self.terminal_input_mode = TerminalInputMode::ScrollBack;
+                // Only enable scroll-back for embedded terminals (headless has no PTY output)
+                let is_embedded = self.terminal_manager
+                    .as_ref()
+                    .and_then(|m| m.focused_terminal())
+                    .is_some_and(|t| t.is_embedded());
+                if is_embedded {
+                    if up {
+                        self.terminal_scroll_up(3);
+                        if self.terminal_input_mode == TerminalInputMode::Normal
+                            || self.terminal_input_mode == TerminalInputMode::TerminalFocused
+                        {
+                            self.terminal_input_mode = TerminalInputMode::ScrollBack;
+                        }
+                    } else {
+                        self.terminal_scroll_down(3);
                     }
-                } else {
-                    self.terminal_scroll_down(3);
                 }
                 return;
             }
@@ -4749,5 +4852,204 @@ mod tests {
         if let Some(ref server) = app.hook_server {
             server.shutdown();
         }
+    }
+
+    // ── Headless UI integration tests ─────────────────────────────────
+
+    #[test]
+    fn test_launch_popup_headless_defaults_to_false() {
+        // LaunchPopup should default headless to false (Embedded mode)
+        let popup = LaunchPopup {
+            terminals: vec![launcher::TerminalEnv::Embedded],
+            hosts: vec![launcher::AiHost::Claude],
+            step: LaunchStep::SelectTerminal,
+            terminal_cursor: 0,
+            host_cursor: 0,
+            work_dir: PathBuf::from("/tmp"),
+            task_id: "TASK_T1".to_string(),
+            task_desc: String::new(),
+            color_scheme_index: None,
+            result_msg: None,
+            headless: false,
+        };
+        assert!(!popup.headless, "Default should be Embedded (headless=false)");
+    }
+
+    #[test]
+    fn test_launch_popup_headless_not_sticky() {
+        // Each time the popup opens, headless should reset to false
+        let mut app = create_test_app();
+
+        // First open — headless starts false
+        app.launch_popup = Some(LaunchPopup {
+            terminals: vec![launcher::TerminalEnv::Embedded],
+            hosts: vec![launcher::AiHost::Claude],
+            step: LaunchStep::SelectMode,
+            terminal_cursor: 0,
+            host_cursor: 0,
+            work_dir: PathBuf::from("/tmp"),
+            task_id: "TASK_T2".to_string(),
+            task_desc: String::new(),
+            color_scheme_index: None,
+            result_msg: None,
+            headless: false,
+        });
+        assert!(!app.launch_popup.as_ref().unwrap().headless);
+
+        // Toggle headless on
+        app.launch_popup.as_mut().unwrap().headless = true;
+        assert!(app.launch_popup.as_ref().unwrap().headless);
+
+        // Close popup
+        app.launch_popup = None;
+
+        // Re-open — should start false again
+        app.launch_popup = Some(LaunchPopup {
+            terminals: vec![launcher::TerminalEnv::Embedded],
+            hosts: vec![launcher::AiHost::Claude],
+            step: LaunchStep::SelectMode,
+            terminal_cursor: 0,
+            host_cursor: 0,
+            work_dir: PathBuf::from("/tmp"),
+            task_id: "TASK_T3".to_string(),
+            task_desc: String::new(),
+            color_scheme_index: None,
+            result_msg: None,
+            headless: false,
+        });
+        assert!(!app.launch_popup.as_ref().unwrap().headless, "Should reset to false on re-open");
+    }
+
+    #[test]
+    fn test_launch_popup_select_mode_step_exists() {
+        // Verify SelectMode step is reachable
+        let step = LaunchStep::SelectMode;
+        assert_eq!(step, LaunchStep::SelectMode);
+    }
+
+    #[test]
+    fn test_create_popup_headless_defaults_to_false() {
+        let popup = CreateWorktreePopup {
+            step: CreateStep::InputDescription,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: false,
+            settings_cursor: 0,
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+        assert!(!popup.headless, "F4 popup headless should default to false");
+    }
+
+    #[test]
+    fn test_create_popup_headless_toggle() {
+        let mut popup = CreateWorktreePopup {
+            step: CreateStep::ToggleSettings,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: false,
+            settings_cursor: 2, // Position on headless toggle
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+
+        // Toggle headless on
+        popup.headless = !popup.headless;
+        assert!(popup.headless);
+
+        // Toggle headless off
+        popup.headless = !popup.headless;
+        assert!(!popup.headless);
+    }
+
+    #[test]
+    fn test_headless_terminal_is_headless_flag() {
+        let mut mgr = TerminalManager::new();
+        mgr.spawn_headless(
+            "TASK_HF".to_string(),
+            "Headless Flag".to_string(),
+            "true",
+            &[],
+            std::path::Path::new("/tmp"),
+            None,
+            vec![],
+        ).unwrap();
+
+        let term = &mgr.terminals[0];
+        assert!(term.is_headless(), "Headless terminal should report is_headless=true");
+        assert!(!term.is_embedded(), "Headless terminal should report is_embedded=false");
+        assert!(term.parser().is_none(), "Headless terminal should have no parser");
+        assert!(term.master().is_none(), "Headless terminal should have no master");
+    }
+
+    #[test]
+    fn test_headless_relaunch_stays_headless() {
+        let mut mgr = TerminalManager::new();
+        mgr.spawn_headless(
+            "TASK_RL".to_string(),
+            "Relaunch Test".to_string(),
+            "true",
+            &[],
+            std::path::Path::new("/tmp"),
+            None,
+            vec![],
+        ).unwrap();
+
+        // Wait for exit
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        mgr.poll_status();
+        assert!(matches!(mgr.terminals[0].status, TerminalStatus::Exited(0)));
+
+        // Relaunch
+        let ok = mgr.relaunch("TASK_RL", 24, 80).unwrap();
+        assert!(ok, "Relaunch should succeed");
+        assert!(mgr.terminals[0].is_headless(), "Relaunched terminal should still be headless");
+    }
+
+    #[test]
+    fn test_popup_mode_toggle_up_down() {
+        let mut app = create_test_app();
+        app.launch_popup = Some(LaunchPopup {
+            terminals: vec![launcher::TerminalEnv::Embedded],
+            hosts: vec![launcher::AiHost::Claude],
+            step: LaunchStep::SelectMode,
+            terminal_cursor: 0,
+            host_cursor: 0,
+            work_dir: PathBuf::from("/tmp"),
+            task_id: "TASK_MT".to_string(),
+            task_desc: String::new(),
+            color_scheme_index: None,
+            result_msg: None,
+            headless: false,
+        });
+
+        // Initially Embedded (headless=false)
+        assert!(!app.launch_popup.as_ref().unwrap().headless);
+
+        // popup_down toggles to Headless
+        app.popup_down();
+        assert!(app.launch_popup.as_ref().unwrap().headless);
+
+        // popup_up toggles back to Embedded
+        app.popup_up();
+        assert!(!app.launch_popup.as_ref().unwrap().headless);
+
+        // popup_down again
+        app.popup_down();
+        assert!(app.launch_popup.as_ref().unwrap().headless);
     }
 }

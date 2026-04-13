@@ -627,7 +627,7 @@ fn popup_hints(app: &App) -> Option<String> {
     }
     if let Some(popup) = &app.launch_popup {
         return Some(match popup.step {
-            LaunchStep::SelectTerminal | LaunchStep::SelectHost => {
+            LaunchStep::SelectTerminal | LaunchStep::SelectHost | LaunchStep::SelectMode => {
                 " \u{2191}\u{2193} select  Enter confirm  Esc cancel".to_string()
             }
             LaunchStep::Done => " Enter close  Esc close".to_string(),

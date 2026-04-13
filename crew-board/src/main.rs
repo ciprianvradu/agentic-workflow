@@ -1164,32 +1164,35 @@ fn run_app(
                                 && app
                                     .terminal_manager
                                     .as_ref()
-                                    .is_some_and(|m| !m.terminals.is_empty())
+                                    .and_then(|m| m.focused_terminal())
+                                    .is_some_and(|t| t.is_embedded())
                             {
                                 app.terminal_input_mode = TerminalInputMode::TerminalFocused;
                             } else {
                                 app.toggle_focus();
                             }
                         }
-                        // F12: enter terminal focus (Terminals view only)
+                        // F12: enter terminal focus (Terminals view only, embedded terminals only)
                         (_, KeyCode::F(12)) => {
                             if app.active_view == ActiveView::Terminals
                                 && app
                                     .terminal_manager
                                     .as_ref()
-                                    .is_some_and(|m| !m.terminals.is_empty())
+                                    .and_then(|m| m.focused_terminal())
+                                    .is_some_and(|t| t.is_embedded())
                             {
                                 app.terminal_input_mode = TerminalInputMode::TerminalFocused;
                             }
                         }
 
-                        // Scroll-back mode ([ in Terminals view Normal mode)
+                        // Scroll-back mode ([ in Terminals view Normal mode, embedded only)
                         (_, KeyCode::Char('[')) => {
                             if app.active_view == ActiveView::Terminals
                                 && app
                                     .terminal_manager
                                     .as_ref()
-                                    .is_some_and(|m| !m.terminals.is_empty())
+                                    .and_then(|m| m.focused_terminal())
+                                    .is_some_and(|t| t.is_embedded())
                             {
                                 app.terminal_input_mode = TerminalInputMode::ScrollBack;
                             }
