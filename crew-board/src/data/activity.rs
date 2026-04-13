@@ -411,4 +411,244 @@ mod tests {
         });
         assert!(log.completed_spans.is_empty());
     }
+
+    // ── Headless parity tests (VAL-HP-004, VAL-HP-005, VAL-HP-010) ──────
+
+    /// VAL-HP-004: PreToolUse/PostToolUse from headless terminals appear in
+    /// the activity feed identically to embedded terminals.
+    #[test]
+    fn test_headless_tool_calls_appear_in_activity_feed() {
+        let mut log = ActivityLog::new();
+
+        // Simulate events from a headless terminal (H1) and embedded terminal (E1).
+        // The ActivityLog is terminal-kind-agnostic — it uses terminal_id strings.
+        log.push(make_event("H1", "SessionStart", None));
+        log.push(make_event("E1", "SessionStart", None));
+
+        log.push(make_event("H1", "PreToolUse", Some("Edit")));
+        log.push(make_event("E1", "PreToolUse", Some("Read")));
+
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "H1".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Edit".to_string()),
+            tool_input_summary: Some("src/lib.rs".to_string()),
+            success: Some(true),
+        });
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "E1".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Read".to_string()),
+            tool_input_summary: Some("README.md".to_string()),
+            success: Some(true),
+        });
+
+        // Both terminals should have events in the log
+        assert_eq!(log.len(), 6);
+
+        // Filter by headless terminal — should see its events
+        let h1_events = log.filter(Some("H1"), None, None);
+        assert_eq!(h1_events.len(), 3); // SessionStart + PreToolUse + PostToolUse
+
+        // Filter by embedded terminal — should see its events
+        let e1_events = log.filter(Some("E1"), None, None);
+        assert_eq!(e1_events.len(), 3);
+
+        // Per-terminal stats should be identical in structure
+        let h1_stats = log.stats_for_terminal("H1").unwrap();
+        let e1_stats = log.stats_for_terminal("E1").unwrap();
+        assert_eq!(h1_stats.total_tools, 1);
+        assert_eq!(e1_stats.total_tools, 1);
+    }
+
+    /// VAL-HP-005: PostToolUse file summaries tracked in
+    /// TerminalHookStats.files_touched for headless terminals.
+    #[test]
+    fn test_headless_file_touches_tracked() {
+        let mut log = ActivityLog::new();
+
+        // Simulate file-editing tool calls from a headless terminal
+        log.push(make_event("HEADLESS_1", "PreToolUse", Some("Edit")));
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "HEADLESS_1".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Edit".to_string()),
+            tool_input_summary: Some("src/main.rs".to_string()),
+            success: Some(true),
+        });
+        log.push(make_event("HEADLESS_1", "PreToolUse", Some("Edit")));
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "HEADLESS_1".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Edit".to_string()),
+            tool_input_summary: Some("src/app.rs".to_string()),
+            success: Some(true),
+        });
+        log.push(make_event("HEADLESS_1", "PreToolUse", Some("Read")));
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "HEADLESS_1".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Read".to_string()),
+            tool_input_summary: Some("Cargo.toml".to_string()),
+            success: Some(true),
+        });
+
+        let stats = log.stats_for_terminal("HEADLESS_1").unwrap();
+        assert_eq!(stats.total_tools, 3);
+        assert_eq!(stats.files_touched.len(), 3);
+        assert!(stats.files_touched.contains(&"src/main.rs".to_string()));
+        assert!(stats.files_touched.contains(&"src/app.rs".to_string()));
+        assert!(stats.files_touched.contains(&"Cargo.toml".to_string()));
+    }
+
+    /// VAL-HP-007: Global stats and per-terminal breakdown include headless terminals.
+    #[test]
+    fn test_headless_in_global_stats() {
+        let mut log = ActivityLog::new();
+
+        // Two headless and one embedded terminal contributing to global stats
+        log.push(make_event("HEADLESS_A", "PreToolUse", Some("Bash")));
+        log.push(make_event("HEADLESS_B", "PreToolUse", Some("Edit")));
+        log.push(make_event("EMBEDDED_1", "PreToolUse", Some("Read")));
+
+        let global = log.global_stats();
+        // All three terminals have an active tool
+        assert_eq!(global.active_terminals, 3);
+
+        // Complete all tools
+        for tid in &["HEADLESS_A", "HEADLESS_B", "EMBEDDED_1"] {
+            log.push(ActivityEvent {
+                timestamp: Instant::now(),
+                terminal_id: tid.to_string(),
+                event_type: "PostToolUse".to_string(),
+                tool_name: Some("tool".to_string()),
+                tool_input_summary: None,
+                success: Some(true),
+            });
+        }
+
+        let global = log.global_stats();
+        assert_eq!(global.total_tool_calls, 3);
+        assert_eq!(global.active_terminals, 0); // All tools completed
+    }
+
+    /// VAL-HP-009: Fresh headless terminal with no hook events — stats lookup
+    /// returns None, which should not panic.
+    #[test]
+    fn test_headless_no_events_stats_returns_none() {
+        let log = ActivityLog::new();
+
+        // No events pushed for this terminal — stats_for_terminal returns None
+        let stats = log.stats_for_terminal("HEADLESS_FRESH");
+        assert!(stats.is_none());
+    }
+
+    /// VAL-HP-010: Multiple headless terminals — events interleaved correctly,
+    /// filter by terminal works, timeline shows separate lanes.
+    #[test]
+    fn test_multiple_headless_interleaved_events() {
+        let mut log = ActivityLog::new();
+
+        // Interleave events from 3 headless terminals
+        log.push(make_event("H1", "SessionStart", None));
+        log.push(make_event("H2", "SessionStart", None));
+        log.push(make_event("H3", "SessionStart", None));
+
+        log.push(make_event("H1", "PreToolUse", Some("Edit")));
+        log.push(make_event("H2", "PreToolUse", Some("Bash")));
+        log.push(make_event("H3", "PreToolUse", Some("Read")));
+
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "H1".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Edit".to_string()),
+            tool_input_summary: Some("file1.rs".to_string()),
+            success: Some(true),
+        });
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "H3".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Read".to_string()),
+            tool_input_summary: Some("file3.rs".to_string()),
+            success: Some(true),
+        });
+        log.push(ActivityEvent {
+            timestamp: Instant::now(),
+            terminal_id: "H2".to_string(),
+            event_type: "PostToolUse".to_string(),
+            tool_name: Some("Bash".to_string()),
+            tool_input_summary: Some("ls".to_string()),
+            success: Some(false),
+        });
+
+        // Total events: 3 SessionStart + 3 PreToolUse + 3 PostToolUse = 9
+        assert_eq!(log.len(), 9);
+
+        // Filter isolates each terminal correctly
+        assert_eq!(log.filter(Some("H1"), None, None).len(), 3);
+        assert_eq!(log.filter(Some("H2"), None, None).len(), 3);
+        assert_eq!(log.filter(Some("H3"), None, None).len(), 3);
+
+        // Per-terminal stats are independent
+        let h1_stats = log.stats_for_terminal("H1").unwrap();
+        assert_eq!(h1_stats.total_tools, 1);
+        assert_eq!(h1_stats.errors, 0);
+        assert_eq!(h1_stats.files_touched, vec!["file1.rs"]);
+
+        let h2_stats = log.stats_for_terminal("H2").unwrap();
+        assert_eq!(h2_stats.total_tools, 1);
+        assert_eq!(h2_stats.errors, 1); // Bash failed
+        assert_eq!(h2_stats.files_touched, vec!["ls"]);
+
+        let h3_stats = log.stats_for_terminal("H3").unwrap();
+        assert_eq!(h3_stats.total_tools, 1);
+        assert_eq!(h3_stats.errors, 0);
+
+        // Global stats sum all terminals
+        let global = log.global_stats();
+        assert_eq!(global.total_tool_calls, 3);
+        assert_eq!(global.total_errors, 1);
+    }
+
+    /// VAL-HP-010: Timeline lanes — completed spans from multiple headless
+    /// terminals appear on separate lanes.
+    #[test]
+    fn test_multiple_headless_timeline_separate_lanes() {
+        let mut log = ActivityLog::new();
+
+        // Each headless terminal does a tool call (Pre + Post = one span)
+        for tid in &["H1", "H2", "H3"] {
+            log.push(make_event(tid, "PreToolUse", Some("Edit")));
+            log.push(ActivityEvent {
+                timestamp: Instant::now(),
+                terminal_id: tid.to_string(),
+                event_type: "PostToolUse".to_string(),
+                tool_name: Some("Edit".to_string()),
+                tool_input_summary: None,
+                success: Some(true),
+            });
+        }
+
+        // Should have 3 completed spans, one per terminal
+        assert_eq!(log.completed_spans.len(), 3);
+
+        // Each span belongs to a different terminal
+        let span_terminals: Vec<&str> = log.completed_spans.iter().map(|s| s.terminal_id.as_str()).collect();
+        assert!(span_terminals.contains(&"H1"));
+        assert!(span_terminals.contains(&"H2"));
+        assert!(span_terminals.contains(&"H3"));
+
+        // Verify separate lane assignment would work: unique terminal IDs
+        let mut unique_ids: Vec<String> = log.completed_spans.iter().map(|s| s.terminal_id.clone()).collect();
+        unique_ids.sort();
+        unique_ids.dedup();
+        assert_eq!(unique_ids.len(), 3, "Timeline should have 3 separate lanes");
+    }
 }
