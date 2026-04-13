@@ -109,7 +109,9 @@ class TestInitCommand:
 
     def test_init_empty_args(self):
         result = run_orchestrator("init", "--args", "")
-        assert result.get("error") is True
+        # With smart resume, empty args may find an incomplete task and resume it.
+        # Either an error (no tasks) or a resume action is valid.
+        assert result.get("error") is True or result.get("action") == "resume"
 
     def test_init_ask(self):
         result = run_orchestrator("init", "--args", 'ask architect "Should we use Redis?"')
@@ -605,3 +607,287 @@ class TestClassifyError:
         result = mod._classify_error(RuntimeError("something weird"))
         assert "Unexpected error" in result["errors"][0]
         assert "RuntimeError" in result["errors"][0]
+
+
+# ============================================================================
+# crew_init full context return tests (AW-6q3)
+# ============================================================================
+
+class TestInitFullContextReturn:
+    """Tests for cmd_init() returning full context: assembled_prompt, resume_command, worktree_info."""
+
+    # --- VAL-CI-001: Init start returns assembled_prompt ---
+    def test_init_start_returns_assembled_prompt(self, clean_tasks_dir):
+        """Start path includes next.assembled_prompt with agent instructions and task context."""
+        result = run_orchestrator(
+            "init", "--args", '"Implement auth flow" --mode quick --no-resume',
+            "--host", "claude",
+        )
+        assert result["action"] == "start"
+        assert "next" in result
+        next_action = result["next"]
+        assert "assembled_prompt" in next_action, "next should contain assembled_prompt"
+        prompt = next_action["assembled_prompt"]
+        assert isinstance(prompt, str)
+        assert len(prompt) > 0, "assembled_prompt should be non-empty"
+        # Should contain the task description somewhere in the context
+        assert "Implement auth flow" in prompt or "auth" in prompt.lower()
+
+        # Clean up
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
+    # --- VAL-CI-002: Init resume returns assembled_prompt with inlined content ---
+    def test_init_resume_returns_assembled_prompt(self, clean_tasks_dir):
+        """Resume path includes next.assembled_prompt with full inlined content."""
+        # Create a task with completed planner phase, so resume advances to implementer
+        workflow_initialize(task_id="TASK_CO_RESUME_PROMPT", description="Test resume prompt")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_RESUME_PROMPT")
+        workflow_transition(to_phase="planner", task_id="TASK_CO_RESUME_PROMPT")
+
+        # Write planner output and mark planner phase complete
+        task_dir = clean_tasks_dir / "TASK_CO_RESUME_PROMPT"
+        planner_output = task_dir / "planner.md"
+        planner_output.write_text("# Plan\n## Implementation Plan\nStep 1: Do the thing\n")
+        workflow_complete_phase(task_id="TASK_CO_RESUME_PROMPT")
+
+        result = run_orchestrator(
+            "init", "--args", "resume TASK_CO_RESUME_PROMPT",
+            "--host", "claude",
+        )
+        assert result["action"] == "resume"
+        assert "next" in result
+        next_action = result["next"]
+        # When the next action is spawn_agent, it should contain assembled_prompt
+        if next_action.get("action") == "spawn_agent":
+            assert "assembled_prompt" in next_action, "Resume next should contain assembled_prompt"
+            prompt = next_action["assembled_prompt"]
+            assert isinstance(prompt, str)
+            assert len(prompt) > 0
+        else:
+            # Even for non-spawn actions (checkpoint, process_output), verify the action is valid
+            assert next_action.get("action") in ("spawn_agent", "checkpoint", "process_output", "complete")
+
+    # --- VAL-CI-003: Init returns worktree_info ---
+    def test_init_start_returns_worktree_info(self, clean_tasks_dir):
+        """Init result includes worktree_info with in_worktree, detected_task_id, worktree_path."""
+        result = run_orchestrator(
+            "init", "--args", '"Test worktree info" --mode quick --no-resume',
+            "--host", "claude",
+        )
+        assert result["action"] == "start"
+        assert "worktree_info" in result, "Start result should include worktree_info"
+        wt_info = result["worktree_info"]
+        assert "in_worktree" in wt_info
+        assert "detected_task_id" in wt_info
+        assert "worktree_path" in wt_info
+        # When not in a worktree, in_worktree should be False
+        assert wt_info["in_worktree"] is False
+
+        # Clean up
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
+    def test_init_resume_returns_worktree_info(self, clean_tasks_dir):
+        """Resume result includes worktree_info."""
+        workflow_initialize(task_id="TASK_CO_WT_INFO", description="Test worktree info resume")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_WT_INFO")
+
+        result = run_orchestrator(
+            "init", "--args", "resume TASK_CO_WT_INFO",
+            "--host", "claude",
+        )
+        assert result["action"] == "resume"
+        assert "worktree_info" in result, "Resume result should include worktree_info"
+        wt_info = result["worktree_info"]
+        assert "in_worktree" in wt_info
+
+    # --- VAL-CI-004 through VAL-CI-009: Host-specific resume commands ---
+    @pytest.mark.parametrize("host,expected_pattern", [
+        ("claude", "/crew resume"),       # VAL-CI-004
+        ("gemini", "@crew-resume"),       # VAL-CI-005
+        ("copilot", "@crew-resume"),      # VAL-CI-006
+        ("opencode", "/crew-resume"),     # VAL-CI-007
+        ("devin", "/crew-resume"),        # VAL-CI-008
+        ("droid", "/crew-resume"),        # VAL-CI-009
+    ])
+    def test_init_start_returns_host_specific_resume_command(
+        self, clean_tasks_dir, host, expected_pattern
+    ):
+        """Init returns resume_command with correct host-specific syntax."""
+        result = run_orchestrator(
+            "init", "--args", f'"Test resume cmd for {host}" --mode quick --no-resume',
+            "--host", host,
+        )
+        assert result["action"] == "start"
+        assert "resume_command" in result, f"Start should include resume_command for {host}"
+        assert expected_pattern in result["resume_command"], (
+            f"resume_command for {host} should contain '{expected_pattern}', "
+            f"got: {result['resume_command']}"
+        )
+
+        # Clean up
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
+    @pytest.mark.parametrize("host,expected_pattern", [
+        ("claude", "/crew resume"),
+        ("gemini", "@crew-resume"),
+        ("copilot", "@crew-resume"),
+        ("opencode", "/crew-resume"),
+        ("devin", "/crew-resume"),
+        ("droid", "/crew-resume"),
+    ])
+    def test_init_resume_returns_host_specific_resume_command(
+        self, clean_tasks_dir, host, expected_pattern
+    ):
+        """Resume returns resume_command with correct host-specific syntax."""
+        workflow_initialize(task_id=f"TASK_CO_RC_{host.upper()}", description=f"Resume cmd {host}")
+        workflow_set_mode(mode="standard", task_id=f"TASK_CO_RC_{host.upper()}")
+
+        result = run_orchestrator(
+            "init", "--args", f"resume TASK_CO_RC_{host.upper()}",
+            "--host", host,
+        )
+        assert result["action"] == "resume"
+        assert "resume_command" in result, f"Resume should include resume_command for {host}"
+        assert expected_pattern in result["resume_command"]
+
+    # --- VAL-CI-013: Fresh start with no prior task ---
+    def test_fresh_start_no_prior_task(self, clean_tasks_dir):
+        """New task: action=start, task_id present, mode set, assembled_prompt non-empty."""
+        result = run_orchestrator(
+            "init", "--args", '"Brand new task from scratch" --mode quick --no-resume',
+            "--host", "claude",
+        )
+        assert result["action"] == "start"
+        assert result["task_id"].startswith("TASK_")
+        assert result["mode"] == "quick"
+        assert "next" in result
+        assert result["next"].get("assembled_prompt")
+        assert "resume_command" in result
+        assert "worktree_info" in result
+
+        # Clean up
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
+    # --- VAL-CI-014: Resume existing task ---
+    def test_resume_existing_task_full_context(self, clean_tasks_dir):
+        """Resume: action=resume, correct task_id, assembled_prompt present, resume_command present."""
+        workflow_initialize(task_id="TASK_CO_RESUME_FULL", description="Full resume context")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_RESUME_FULL")
+        workflow_transition(to_phase="planner", task_id="TASK_CO_RESUME_FULL")
+
+        result = run_orchestrator(
+            "init", "--args", "resume TASK_CO_RESUME_FULL",
+            "--host", "gemini",
+        )
+        assert result["action"] == "resume"
+        assert "resume_state" in result
+        assert "next" in result
+        assert "resume_command" in result
+        assert "worktree_info" in result
+        # Resume command should use gemini syntax
+        assert "@crew-resume" in result["resume_command"]
+
+    # --- VAL-CI-016: Invalid task_id returns structured error ---
+    def test_invalid_task_id_returns_structured_error(self):
+        """Resume INVALID_TASK returns error dict, no crash."""
+        result = run_orchestrator(
+            "init", "--args", "resume TASK_INVALID_DOES_NOT_EXIST",
+            "--host", "claude",
+        )
+        assert result.get("error") is True
+        assert "errors" in result
+        assert any("not found" in e.lower() or "error" in e.lower() for e in result["errors"])
+
+    # --- VAL-CI-017: assembled_prompt includes agent + task + human guidance ---
+    def test_assembled_prompt_includes_all_sections(self, clean_tasks_dir):
+        """Prompt contains agent instructions, task context, and human guidance trail."""
+        workflow_initialize(task_id="TASK_CO_PROMPT_SECTIONS", description="Test all prompt sections")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_PROMPT_SECTIONS")
+
+        # Write human guidance
+        task_dir = clean_tasks_dir / "TASK_CO_PROMPT_SECTIONS"
+        interactions_file = task_dir / "interactions.jsonl"
+        import json as _json
+        guidance_entry = _json.dumps({
+            "role": "human",
+            "type": "guidance",
+            "content": "Make sure to handle edge cases carefully",
+            "phase": "init",
+        })
+        interactions_file.write_text(guidance_entry + "\n")
+
+        # Write task.md
+        task_md = task_dir / "task.md"
+        task_md.write_text("# Task\n\nTest all prompt sections\n")
+
+        result = run_orchestrator(
+            "init", "--args", "resume TASK_CO_PROMPT_SECTIONS",
+            "--host", "claude",
+        )
+        assert result["action"] == "resume"
+        next_action = result["next"]
+        assert "assembled_prompt" in next_action
+        prompt = next_action["assembled_prompt"]
+        # Should contain human guidance
+        assert "Human Guidance" in prompt or "edge cases" in prompt
+
+    # --- VAL-CI-018: assembled_prompt includes platform context ---
+    def test_assembled_prompt_includes_platform_context(self, clean_tasks_dir):
+        """Prompt has Platform Context section with OS, shell, AI host."""
+        result = run_orchestrator(
+            "init", "--args", '"Test platform context" --mode quick --no-resume',
+            "--host", "gemini",
+        )
+        assert result["action"] == "start"
+        next_action = result["next"]
+        assert "assembled_prompt" in next_action
+        prompt = next_action["assembled_prompt"]
+        assert "Platform Context" in prompt
+        assert "gemini" in prompt.lower()
+
+        # Clean up
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)
+
+    # --- VAL-CI-019: Resume state includes worktree status ---
+    def test_resume_state_includes_worktree_status(self, clean_tasks_dir):
+        """has_worktree reflects actual worktree state."""
+        workflow_initialize(task_id="TASK_CO_WT_STATUS", description="Test worktree status")
+        workflow_set_mode(mode="standard", task_id="TASK_CO_WT_STATUS")
+
+        result = run_orchestrator(
+            "init", "--args", "resume TASK_CO_WT_STATUS",
+            "--host", "claude",
+        )
+        assert result["action"] == "resume"
+        resume_state = result["resume_state"]
+        # No worktree configured, so has_worktree should be False
+        assert resume_state["has_worktree"] is False
+
+    # --- VAL-CI-015: Worktree auto-detection triggers resume ---
+    def test_worktree_autodetection_resume(self, clean_tasks_dir):
+        """Worktree_info includes detection results from _detect_worktree_task_id."""
+        # Can't easily test actual worktree detection in unit tests,
+        # but we can verify the worktree_info structure includes the field
+        result = run_orchestrator(
+            "init", "--args", '"Test worktree autodetect" --mode quick --no-resume',
+            "--host", "claude",
+        )
+        assert result["action"] == "start"
+        wt_info = result["worktree_info"]
+        # detected_task_id should be None when not in worktree
+        assert wt_info["detected_task_id"] is None
+
+        # Clean up
+        task_dir = clean_tasks_dir / result["task_id"]
+        if task_dir.exists():
+            shutil.rmtree(task_dir)

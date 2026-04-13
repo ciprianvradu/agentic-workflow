@@ -67,6 +67,70 @@ except ImportError as e:
 ACTIVE_TASK_FILE = ".active_task"
 
 
+def _build_resume_command(task_id: str, ai_host: str = "claude") -> str:
+    """Build host-specific resume command string.
+
+    Uses the same host mapping as _build_resume_prompt in state_tools.py.
+
+    Args:
+        task_id: Task identifier
+        ai_host: AI host platform identifier
+
+    Returns:
+        Resume command string (e.g., '/crew resume TASK_001')
+    """
+    if ai_host in ("gemini", "copilot"):
+        return f"@crew-resume {task_id}"
+    elif ai_host in ("opencode", "devin", "droid"):
+        return f"/crew-resume {task_id}"
+    else:
+        # claude and unknown hosts
+        return f"/crew resume {task_id}"
+
+
+def _build_worktree_info() -> dict:
+    """Build worktree detection info dict.
+
+    Returns:
+        Dict with in_worktree, detected_task_id, worktree_path
+    """
+    detected_task_id = _detect_worktree_task_id()
+    cwd = str(Path.cwd())
+
+    # Determine if we're in a worktree by checking git
+    in_worktree = False
+    worktree_path = None
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            git_common = result.stdout.strip()
+            # If git-common-dir is absolute and different from git-dir,
+            # we're in a worktree
+            git_dir_result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                capture_output=True, text=True, timeout=5
+            )
+            if git_dir_result.returncode == 0:
+                git_dir = git_dir_result.stdout.strip()
+                # In a worktree, git-dir is something like
+                # /path/to/.git/worktrees/TASK_XXX
+                if "worktrees" in git_dir:
+                    in_worktree = True
+                    worktree_path = cwd
+    except (FileNotFoundError, OSError):
+        pass
+
+    return {
+        "in_worktree": in_worktree,
+        "detected_task_id": detected_task_id,
+        "worktree_path": worktree_path,
+    }
+
+
 def _write_active_task(task_id: str) -> None:
     """Write the active task ID to .tasks/.active_task for session isolation.
 
@@ -163,6 +227,41 @@ def _read_active_task() -> str | None:
         return task_id
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _find_resumable_task() -> str | None:
+    """Scan .tasks/TASK_*/state.json for the most recent incomplete task.
+
+    Unlike _read_active_task() which only checks the last-written .active_task
+    file, this scans ALL task directories. This prevents orphaned tasks from
+    being invisible to the resume mechanism.
+
+    Returns the most-recently-updated incomplete task_id, or None.
+    """
+    tasks_dir = get_tasks_dir()
+    if not tasks_dir.exists():
+        return None
+    candidates = []
+    for state_file in tasks_dir.glob("TASK_*/state.json"):
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+            if state.get("status") == "completed":
+                continue
+            # Check if all expected phases are completed
+            mode_phases = state.get("workflow_mode", {}).get("phases", [])
+            completed = state.get("phases_completed", [])
+            if mode_phases and set(mode_phases) <= {p.lower().replace("-", "_") for p in completed}:
+                continue  # all phases done, status just not flipped
+            updated = state.get("updated_at", "")
+            candidates.append((updated, state_file.parent.name))
+        except (OSError, json.JSONDecodeError):
+            continue
+    if not candidates:
+        return None
+    # Most recently updated first
+    candidates.sort(reverse=True)
+    return candidates[0][1]
 
 
 def _output(data: dict) -> None:
@@ -278,9 +377,30 @@ def cmd_init(args: argparse.Namespace) -> None:
     Batches: crew_parse_args → crew_init_task → crew_get_next_phase
     """
     parsed = crew_parse_args(args.args)
+    action = parsed["action"]
+
+    # Non-start actions bypass resume detection entirely.
+    # ask/status/config/proceed/learn are not workflow starts — they should
+    # never be hijacked by stale resume detection (fixes AW-i0a).
+    if action in ("status", "config", "proceed"):
+        _output({"action": action})
+        return
+
+    if action == "ask":
+        # Route ask immediately, even if there are parse errors (e.g., unknown agent)
+        if parsed.get("errors"):
+            _output({"error": True, "errors": parsed["errors"], "action": "ask"})
+        else:
+            _output({
+                "action": "ask",
+                "agent": parsed.get("agent"),
+                "question": parsed.get("task_description", ""),
+                "options": parsed.get("options", {}),
+            })
+        return
 
     if parsed.get("errors"):
-        # No args provided — try to auto-resume from context
+        # No valid start args — try to auto-resume from context
         # 1. Worktree detection: match cwd against task worktree metadata
         task_id = _detect_worktree_task_id()
         # 2. .crew-resume file: directory-specific (written when worktree created)
@@ -294,22 +414,19 @@ def cmd_init(args: argparse.Namespace) -> None:
                             break
                 except OSError:
                     pass
-        # 3. .active_task file: global fallback (last session to write wins)
+        # 3. Scan all task dirs: find most recent incomplete task
+        if not task_id:
+            task_id = _find_resumable_task()
+        # 4. .active_task file: legacy fallback
         if not task_id:
             task_id = _read_active_task()
         if task_id:
             # Auto-resume the found task
             parsed = {"action": "resume", "task_id": task_id, "options": {}, "errors": []}
+            action = "resume"
         else:
             _output({"error": True, "errors": parsed["errors"], "action": parsed["action"]})
             return
-
-    action = parsed["action"]
-
-    # Non-start actions: return immediately with routing info
-    if action in ("status", "config", "proceed"):
-        _output({"action": action})
-        return
 
     if action == "resume":
         task_id = parsed.get("task_id")
@@ -357,15 +474,8 @@ def cmd_init(args: argparse.Namespace) -> None:
             "resume_state": resume,
             "next": next_action,
             "instructions": instructions,
-        })
-        return
-
-    if action == "ask":
-        _output({
-            "action": "ask",
-            "agent": parsed.get("agent"),
-            "question": parsed.get("task_description", ""),
-            "options": parsed.get("options", {}),
+            "resume_command": _build_resume_command(task_id, args.host),
+            "worktree_info": _build_worktree_info(),
         })
         return
 
@@ -403,6 +513,31 @@ def cmd_init(args: argparse.Namespace) -> None:
     )
 
     if not init_result.get("success"):
+        # Duplicate detection: offer to resume existing task
+        if init_result.get("duplicate"):
+            dup_id = init_result["duplicate_task_id"]
+            _output({
+                "action": "duplicate_found",
+                "duplicate_task_id": dup_id,
+                "match_reason": init_result["match_reason"],
+                "match_value": init_result.get("match_value", ""),
+                "duplicate_phase": init_result.get("duplicate_phase"),
+                "duplicate_description": init_result.get("duplicate_description", ""),
+                "original_description": task_description,
+                "instructions": (
+                    f"Found existing incomplete task {dup_id} "
+                    f"(matched on {init_result['match_reason']}).\n"
+                    f"Ask the user:\n"
+                    f"  [R] Resume {dup_id}\n"
+                    f"  [N] Start new task (--no-resume)\n"
+                    f"  [C] Cancel\n"
+                    f"If Resume: run `python3 {{__scripts_dir__}}/crew_orchestrator.py init "
+                    f"--host {args.host} --args \"resume {dup_id}\"`\n"
+                    f"If New: run `python3 {{__scripts_dir__}}/crew_orchestrator.py init "
+                    f"--host {args.host} --args \"{task_description} --no-resume\"`"
+                ),
+            })
+            return
         _output({"error": True, "errors": [init_result.get("error", "Initialization failed")]})
         return
 
@@ -411,13 +546,13 @@ def cmd_init(args: argparse.Namespace) -> None:
     # Get first phase action
     next_action = crew_get_next_phase(task_id=task_id)
 
-    # Pre-transition to first phase if it differs from default
+    # Pre-transition to first phase (replaces __initializing__ sentinel)
     first_phase = next_action.get("agent") or next_action.get("phase")
     if first_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
         task_dir_path = find_task_dir(task_id)
         if task_dir_path:
             current_state = _load_state(task_dir_path)
-            if current_state.get("phase") != first_phase:
+            if current_state.get("phase") in (None, "__initializing__") or current_state.get("phase") != first_phase:
                 workflow_transition(to_phase=first_phase, task_id=task_id)
 
     _write_active_task(task_id)
@@ -433,6 +568,8 @@ def cmd_init(args: argparse.Namespace) -> None:
         "beads_issue": init_result.get("beads_issue"),
         "config": init_result.get("config", {}),
         "next": next_action,
+        "resume_command": _build_resume_command(task_id, args.host),
+        "worktree_info": _build_worktree_info(),
     })
 
 
@@ -570,7 +707,11 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         if agent_normalized not in [p.lower().replace("-", "_") for p in phases_completed]:
             phases_completed.append(agent)
             state["phases_completed"] = phases_completed
-            _save_state(task_dir, state)
+        spawn_attempts = state.get("phase_spawn_attempts", {})
+        if agent in spawn_attempts:
+            del spawn_attempts[agent]
+            state["phase_spawn_attempts"] = spawn_attempts
+        _save_state(task_dir, state)
     complete_result = workflow_complete_phase(task_id=task_id)
 
     # 4b. Auto-generate RESUME.md snapshot
@@ -773,6 +914,68 @@ def cmd_checkpoint_done(args: argparse.Namespace) -> None:
         "checkpoint": checkpoint_name,
         "next": next_action,
     })
+
+
+def cmd_phase_stuck_done(args: argparse.Namespace) -> None:
+    """Handle user decision when a phase is stuck (circuit breaker triggered).
+
+    On retry: reset phase_spawn_attempts and re-run crew_get_next_phase.
+    On skip: mark phase complete and advance.
+    On abort: stop the workflow.
+    """
+    task_id = args.task_id
+    decision = args.decision
+    phase = args.phase
+
+    task_dir = find_task_dir(task_id)
+
+    if decision == "retry":
+        if task_dir:
+            state = _load_state(task_dir)
+            spawn_attempts = state.get("phase_spawn_attempts", {})
+            if phase in spawn_attempts:
+                del spawn_attempts[phase]
+                state["phase_spawn_attempts"] = spawn_attempts
+                _save_state(task_dir, state)
+        next_action = crew_get_next_phase(task_id=task_id)
+        _output({
+            "action": "phase_stuck_done",
+            "decision": decision,
+            "phase": phase,
+            "task_id": task_id,
+            "next": next_action,
+        })
+
+    elif decision == "skip":
+        workflow_complete_phase(task_id=task_id)
+        next_action = crew_get_next_phase(task_id=task_id)
+        next_phase = next_action.get("agent") or next_action.get("phase")
+        if next_phase and next_action.get("action") in ("spawn_agent", "run_skill", "run_script"):
+            workflow_transition(to_phase=next_phase, task_id=task_id)
+        _output({
+            "action": "phase_stuck_done",
+            "decision": decision,
+            "phase": phase,
+            "task_id": task_id,
+            "next": next_action,
+        })
+
+    elif decision == "abort":
+        _output({
+            "action": "phase_stuck_done",
+            "decision": decision,
+            "phase": phase,
+            "task_id": task_id,
+            "message": f"Workflow aborted due to stuck phase '{phase}'.",
+        })
+
+    else:
+        _output({
+            "action": "phase_stuck_done",
+            "error": f"Unknown decision '{decision}'. Choose retry, skip, or abort.",
+            "phase": phase,
+            "task_id": task_id,
+        })
 
 
 def cmd_impl_action(args: argparse.Namespace) -> None:
@@ -1127,6 +1330,13 @@ def main():
     p_ckpt.add_argument("--notes", help="Optional decision notes")
     p_ckpt.add_argument("--question", help="Checkpoint question that was presented to user")
 
+    # phase-stuck-done
+    p_stuck = subparsers.add_parser("phase-stuck-done", help="Handle stuck phase decision (retry/skip/abort)")
+    p_stuck.add_argument("--task-id", required=True, help="Task identifier")
+    p_stuck.add_argument("--phase", required=True, help="Stuck phase name")
+    p_stuck.add_argument("--decision", required=True, choices=["retry", "skip", "abort"],
+                         type=str.lower)
+
     # impl-action
     p_impl = subparsers.add_parser("impl-action", help="Implementation loop step")
     p_impl.add_argument("--task-id", required=True, help="Task identifier")
@@ -1172,6 +1382,7 @@ def main():
         "agent-done": cmd_agent_done,
         "custom-phase-done": cmd_custom_phase_done,
         "checkpoint-done": cmd_checkpoint_done,
+        "phase-stuck-done": cmd_phase_stuck_done,
         "impl-action": cmd_impl_action,
         "complete": cmd_complete,
         "log-interaction": cmd_log_interaction,

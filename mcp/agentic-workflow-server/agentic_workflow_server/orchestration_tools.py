@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .state_tools import (
+    get_tasks_dir,
     find_task_dir,
     workflow_initialize,
     workflow_transition,
@@ -444,10 +445,15 @@ def _build_custom_phase_action(
     phase_type = phase_config["type"]
 
     # Common variable substitution for commands/paths
+    import platform as _platform
     variables = {
         "task_id": task_id,
         "task_dir": str(task_dir),
         "mode": state.get("workflow_mode", {}).get("effective", "standard"),
+        "platform_os": _platform.system(),
+        "platform_os_version": _platform.version(),
+        "platform_shell": os.environ.get("SHELL", os.environ.get("COMSPEC", "unknown")),
+        "platform_ai_host": state.get("ai_host", "unknown"),
     }
 
     if phase_type == "skill":
@@ -499,7 +505,7 @@ def _build_custom_phase_action(
         subagent_limits = config.get("subagent_limits", {}).get("max_turns", {})
         max_turns = subagent_limits.get("planning_agents", SUBAGENT_LIMITS.get("planning_agents", 30))
 
-        context_files = _get_context_files(phase_name, state, task_dir)
+        context_files = _get_context_files(phase_name, state, task_dir, config)
 
         result_action = {
             "action": "spawn_agent",
@@ -526,6 +532,7 @@ def _build_custom_phase_action(
                 convention_files=[],
                 variables=variables,
                 task_dir=task_dir,
+                config=config,
             )
             result_action["assembled_prompt"] = assembled
             # Remove context_files/agent_prompt_path to prevent LLM from re-reading them
@@ -687,6 +694,9 @@ def crew_parse_args(raw_args: str) -> dict[str, Any]:
                 valid_profiles = ", ".join(PERMISSION_PROFILES.keys())
                 errors.append(f"Invalid --profile '{profile_val}'. Must be: {valid_profiles}")
             i += 2
+        elif token == "--tdd":
+            options["tdd"] = True
+            i += 1
         elif token == "--no-resume":
             options["no_resume"] = True
             i += 1
@@ -882,6 +892,53 @@ def _tokenize(text: str) -> list[str]:
 # Tool 2: crew_init_task
 # ============================================================================
 
+
+def _find_duplicate_task(
+    description: str,
+    linked_issue: Optional[str],
+) -> Optional[dict]:
+    """Check for an existing incomplete task with same linked_issue or description.
+
+    Returns dict with task_id and match info if duplicate found, else None.
+    Only uses exact matching (no fuzzy scoring) per PM directive.
+    """
+    tasks_dir = get_tasks_dir()
+    if not tasks_dir.exists():
+        return None
+    for state_file in tasks_dir.glob("TASK_*/state.json"):
+        try:
+            with open(state_file) as f:
+                state = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if state.get("status") == "completed":
+            continue
+        # Check if all phases are done (status may not be flipped yet)
+        mode_phases = state.get("workflow_mode", {}).get("phases", [])
+        completed = state.get("phases_completed", [])
+        if mode_phases and set(mode_phases) <= {p.lower().replace("-", "_") for p in completed}:
+            continue
+        # Exact linked_issue match (highest priority)
+        if linked_issue and state.get("linked_issue") == linked_issue:
+            return {
+                "task_id": state.get("task_id", state_file.parent.name),
+                "match_reason": "linked_issue",
+                "match_value": linked_issue,
+                "phase": state.get("phase"),
+                "description": state.get("description", ""),
+            }
+        # Exact description match
+        if description and state.get("description") == description:
+            return {
+                "task_id": state.get("task_id", state_file.parent.name),
+                "match_reason": "description",
+                "match_value": description[:80],
+                "phase": state.get("phase"),
+                "description": state.get("description", ""),
+            }
+    return None
+
+
 def crew_init_task(
     task_description: str,
     options: Optional[dict] = None,
@@ -914,6 +971,26 @@ def crew_init_task(
     override_result = crew_apply_config_overrides(options)
     if override_result.get("overrides"):
         config = _deep_merge(config, override_result["overrides"])
+
+    # Step 2.5: Duplicate detection — check for existing incomplete task
+    if not options.get("no_resume"):
+        linked_issue = options.get("beads")
+        dup = _find_duplicate_task(task_description, linked_issue)
+        if dup:
+            return {
+                "success": False,
+                "duplicate": True,
+                "duplicate_task_id": dup["task_id"],
+                "match_reason": dup["match_reason"],
+                "match_value": dup["match_value"],
+                "duplicate_phase": dup.get("phase"),
+                "duplicate_description": dup.get("description", ""),
+                "error": (
+                    f"Found existing incomplete task {dup['task_id']} "
+                    f"(matched on {dup['match_reason']}: {dup['match_value']}). "
+                    f"Use --no-resume to force a new task."
+                ),
+            }
 
     # Step 3: Initialize workflow
     init_result = workflow_initialize(description=task_description)
@@ -950,12 +1027,17 @@ def crew_init_task(
         effective_mode = mode_result["workflow_mode"]["effective"]
         mode_confidence = mode_result["workflow_mode"].get("confidence", 0.5)
 
-    # Note: We do NOT pre-transition to the first phase here.
-    # workflow_initialize sets phase=None; crew_get_next_phase will detect
-    # the fresh start (phase=None) and return the correct first phase action.
-    # Pre-transitioning caused a bug where checkpoints fired before the first
-    # agent actually ran (phase was set but no output existed yet).
+    # Set sentinel phase to eliminate the phase=None zombie window.
+    # We use __initializing__ instead of the real first phase to avoid
+    # triggering checkpoint hooks (which expect agent output to exist).
+    # The orchestrator's pre-transition (crew_orchestrator.py ~line 414)
+    # sets the real phase via workflow_transition() after init returns.
     mode_phases = mode_result.get("workflow_mode", {}).get("phases", [])
+    task_dir_path = find_task_dir(task_id)
+    if task_dir_path:
+        init_state = _load_state(task_dir_path)
+        init_state["phase"] = "__initializing__"
+        _save_state(task_dir_path, init_state)
 
     # Step 5: Inventory knowledge base (with timeout to prevent stalling)
     # knowledge_base can be a string (single path) or list of paths/globs
@@ -1135,6 +1217,14 @@ def crew_apply_config_overrides(
         }
         applied.append("all checkpoints disabled")
 
+    if options.get("tdd"):
+        overrides.setdefault("loop_mode", {})["enabled"] = True
+        overrides.setdefault("loop_mode", {}).setdefault("verification", {})["method"] = "tests"
+        overrides["planning_strategy"] = "tdd"
+        applied.append("planning_strategy = tdd")
+        applied.append("loop_mode.enabled = true (implied by --tdd)")
+        applied.append("loop_mode.verification.method = tests (implied by --tdd)")
+
     if options.get("parallel"):
         overrides.setdefault("parallelization", {}).setdefault("design_challenger_reviewer_skeptic", {})["enabled"] = True
         overrides.setdefault("parallelization", {}).setdefault("optional_with_next", {})["enabled"] = True
@@ -1312,7 +1402,7 @@ def crew_get_next_phase(
     # OR if phase is the first mode phase with no completions AND there are
     # custom phases that go before it
     # (crew_init_task pre-transitions to mode_phases[0] before custom phases are evaluated)
-    is_fresh_start = current_phase is None and not phases_completed
+    is_fresh_start = (current_phase is None or current_phase == "__initializing__") and not phases_completed
     if not is_fresh_start and not phases_completed and mode_phases and current_phase == mode_phases[0]:
         # Check if there are custom phases with "after: init" that should run first
         custom_phases_check = _load_custom_phases(config)
@@ -1355,17 +1445,89 @@ def crew_get_next_phase(
 
         if not has_output:
             # Phase was started but never produced output (stale/crashed).
+            # Track spawn attempts and circuit-break if too many.
+            spawn_attempts = state.get("phase_spawn_attempts", {})
+            previous_attempts = spawn_attempts.get(current_phase, 0)
+            attempt_count = previous_attempts + 1
+            spawn_attempts[current_phase] = attempt_count
+            state["phase_spawn_attempts"] = spawn_attempts
+
+            # Record when this phase spawn was attempted for stale detection
+            phase_timestamps = state.get("phase_started_at", {})
+            if current_phase not in phase_timestamps:
+                from datetime import datetime as _dt, timezone as _tz
+                phase_timestamps[current_phase] = _dt.now(_tz.utc).isoformat()
+                state["phase_started_at"] = phase_timestamps
+
+            _save_state(task_dir, state)
+
+            max_attempts = config.get("max_iterations", {}).get("phase_spawn_attempts", 3)
+            if attempt_count > max_attempts:
+                return {
+                    "action": "phase_stuck",
+                    "phase": current_phase,
+                    "attempts": attempt_count,
+                    "max_attempts": max_attempts,
+                    "options": ["retry", "skip", "abort"],
+                    "message": f"Phase '{current_phase}' has failed to produce output after {attempt_count - 1} attempts.",
+                    "task_id": task_id,
+                }
+
+            # Build diagnostic info for first-phase recovery scenarios.
+            # When previous_attempts == 0, a prior session likely crashed before
+            # the circuit breaker could fire (e.g., rate limit, context overflow,
+            # or user killed the session).
+            recovery_diagnostic = None
+            if previous_attempts == 0 and attempt_count == 1:
+                # First retry — check if this looks like a crashed session
+                updated_at = state.get("updated_at")
+                minutes_since_update = 0
+                if updated_at:
+                    try:
+                        from datetime import datetime as _dt2, timezone as _tz2
+                        ts_str = updated_at.replace("Z", "+00:00")
+                        updated_dt = _dt2.fromisoformat(ts_str)
+                        if updated_dt.tzinfo is None:
+                            updated_dt = updated_dt.replace(tzinfo=_tz2.utc)
+                        minutes_since_update = int(
+                            (_dt2.now(_tz2.utc) - updated_dt).total_seconds() / 60
+                        )
+                    except (ValueError, AttributeError):
+                        pass
+
+                recovery_diagnostic = {
+                    "is_first_retry": True,
+                    "likely_cause": (
+                        "Previous session crashed or was interrupted before this "
+                        "phase produced output. The circuit breaker never fired "
+                        "because crew_get_next_phase was not called again."
+                    ),
+                    "minutes_since_last_activity": minutes_since_update,
+                    "suggestion": (
+                        f"Re-running '{current_phase}' phase (attempt {attempt_count}). "
+                        "If this phase keeps failing, it will escalate after "
+                        f"{max_attempts} attempts."
+                    ),
+                }
+
             # Skip checkpoint and re-spawn the agent directly.
             # Check if it's a custom phase
             custom_in_seq = state.get("custom_phases_in_sequence", [])
             if current_phase in custom_in_seq:
                 custom_phases = _load_custom_phases(config)
                 if current_phase in custom_phases:
-                    return _build_custom_phase_action(
+                    action_result = _build_custom_phase_action(
                         current_phase, custom_phases[current_phase],
                         state, config, task_dir
                     )
-            return _build_phase_action(current_phase, state, config, task_dir)
+                    if recovery_diagnostic:
+                        action_result["recovery_diagnostic"] = recovery_diagnostic
+                    return action_result
+
+            action_result = _build_phase_action(current_phase, state, config, task_dir)
+            if recovery_diagnostic:
+                action_result["recovery_diagnostic"] = recovery_diagnostic
+            return action_result
 
         # Phase has output — check for checkpoint
         checkpoint = _get_checkpoint_for_phase(current_phase, config)
@@ -1647,8 +1809,8 @@ def _build_phase_action(
         if category in subagent_limits:
             max_turns = subagent_limits[category]
 
-    # Get context files
-    context_files = _get_context_files(agent, state, task_dir)
+    # Get context files (with optional section filters)
+    context_files = _get_context_files(agent, state, task_dir, config)
 
     # Check for checkpoint after this phase
     checkpoint_after = _get_checkpoint_for_phase(agent, config) is not None
@@ -1687,8 +1849,20 @@ def _build_phase_action(
                 variables["planner_mode"] = configured_mode
         else:
             variables["planner_mode"] = "full"
+
+        # Inject planning_strategy (e.g., "tdd" from --tdd flag)
+        planning_strategy = config.get("planning_strategy", "default")
+        variables["planning_strategy"] = planning_strategy
     else:
         variables["planner_mode"] = "full"
+        variables["planning_strategy"] = "default"
+
+    # Inject platform context
+    import platform as _platform
+    variables["platform_os"] = _platform.system()
+    variables["platform_os_version"] = _platform.version()
+    variables["platform_shell"] = os.environ.get("SHELL", os.environ.get("COMSPEC", "unknown"))
+    variables["platform_ai_host"] = state.get("ai_host", "unknown")
 
     # Build beads comment if enabled
     beads_comment = None
@@ -1733,6 +1907,7 @@ def _build_phase_action(
             convention_files=result.get("convention_files", []),
             variables=variables,
             task_dir=task_dir,
+            config=config,
         )
         result["assembled_prompt"] = assembled
         # Remove context_files/agent_prompt_path to prevent LLM from re-reading them
@@ -1799,7 +1974,7 @@ def _build_phase_action(
             }
             # Assemble prompt for parallel agent too
             try:
-                par_context = _get_context_files(par_agent, state, task_dir)
+                par_context = _get_context_files(par_agent, state, task_dir, config)
                 par_conventions = _get_ai_context_convention_files(state) if par_agent in ("implementer", "quality_guard", "security_auditor") else []
                 par_assembled = _assemble_agent_prompt(
                     agent=par_agent,
@@ -1808,6 +1983,7 @@ def _build_phase_action(
                     convention_files=par_conventions,
                     variables=dict(variables),
                     task_dir=task_dir,
+                    config=config,
                 )
                 par_info["assembled_prompt"] = par_assembled
                 par_info["output_file"] = str(task_dir / f"{par_agent}.md")
@@ -1834,20 +2010,37 @@ def _build_phase_action(
     return result
 
 
-def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
-    """Determine which context files an agent needs.
+def _get_context_files(
+    agent: str, state: dict, task_dir: Path,
+    config: Optional[dict] = None,
+) -> list[tuple[str, Optional[list[str]]]]:
+    """Determine which context files an agent needs with optional section filters.
 
     Phase-aware: each agent gets only the artifacts it needs, not everything.
     Custom phases (ba_designer, product_manager) get prior custom phase outputs.
+
+    Returns:
+        List of (filepath, section_filter) tuples.
+        section_filter is None for full inclusion, or a list of ## heading names
+        to extract only those sections.
     """
-    files = []
+    files: list[tuple[str, Optional[list[str]]]] = []
+    seen: set[str] = set()
 
-    def _add(name: str) -> None:
+    # Section filters for planner.md depend on the downstream agent.
+    # Can be disabled via config context.section_filtering: false
+    effective_config = config or {}
+    filtering_enabled = effective_config.get("context", {}).get("section_filtering", True)
+    planner_sections = _PLANNER_SECTION_FILTERS.get(agent) if filtering_enabled else None
+
+    def _add(name: str, sections: Optional[list[str]] = None) -> None:
         f = task_dir / name
-        if f.exists() and str(f) not in files:
-            files.append(str(f))
+        fstr = str(f)
+        if f.exists() and fstr not in seen:
+            seen.add(fstr)
+            files.append((fstr, sections))
 
-    # Always include task description
+    # Always include task description (full)
     _add("task.md")
 
     # Custom phases: chain outputs from prior custom phases
@@ -1865,7 +2058,7 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
         for cp in custom_in_seq:
             _add(f"{cp}.md")
 
-    # Architect gets planner output
+    # Architect gets planner output (full — needs to review everything)
     if agent == "architect":
         _add("planner.md")
 
@@ -1881,7 +2074,7 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
 
     # Implementer: needs the plan, not the analysis artifacts
     if agent == "implementer":
-        _add("planner.md")
+        _add("planner.md", planner_sections)
         _add("plan.md")
         _add("reviewer.md")
         _add("skeptic.md")
@@ -1889,7 +2082,7 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
 
     # Quality guard: plan + implementation for plan-vs-reality validation
     if agent == "quality_guard":
-        _add("planner.md")
+        _add("planner.md", planner_sections)
         _add("plan.md")
         _add("implementer.md")
         _add("context-map.md")
@@ -1897,13 +2090,13 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
     # Technical writer: plan + implementation + review findings
     # Does NOT need ba_designer.md or product_manager.md (internal analysis)
     if agent == "technical_writer":
-        _add("planner.md")
+        _add("planner.md", planner_sections)
         _add("implementer.md")
         _add("reviewer.md")
         _add("context-map.md")
 
     if agent == "security_auditor":
-        _add("planner.md")
+        _add("planner.md", planner_sections)
         _add("implementer.md")
         _add("context-map.md")
 
@@ -1916,11 +2109,148 @@ def _get_context_files(agent: str, state: dict, task_dir: Path) -> list[str]:
 # Max total bytes for ai-context injection to avoid prompt bloat
 _AI_CONTEXT_MAX_BYTES = 50 * 1024  # 50KB
 
+# Max total bytes for resolved <excerpt> tags
+_EXCERPT_MAX_BYTES = 50 * 1024  # 50KB
+
+# Section filters: which ## sections of planner.md each agent needs.
+# None means "include full file" (no filtering).
+_PLANNER_SECTION_FILTERS: dict[str, Optional[list[str]]] = {
+    "architect": None,  # Needs full analysis to review
+    "implementer": [
+        "Implementation Plan", "Assertions", "Conventions to Follow",
+        "Rollback Plan", "Checkpoint Notes", "Prerequisites",
+        "Scope Estimate", "Referenced Convention Files",
+    ],
+    "quality_guard": [
+        "Implementation Plan", "Assertions", "Constraints",
+        "Risks", "Scope Estimate",
+    ],
+    "technical_writer": [
+        "Summary", "Documentation Notes", "Implementation Plan",
+        "Affected Systems",
+    ],
+    "security_auditor": [
+        "Implementation Plan", "Risks", "Constraints",
+        "Affected Systems",
+    ],
+}
+
+
+def _extract_sections(content: str, section_names: list[str]) -> str:
+    """Extract only specified ## sections from markdown content.
+
+    Matches section names case-insensitively against ## headings.
+    Includes everything from the matched heading to the next ## heading.
+    Also includes any content before the first ## heading (preamble).
+    """
+    lines = content.split("\n")
+    result_lines: list[str] = []
+    current_section: Optional[str] = None
+    include_current = False
+    preamble_lines: list[str] = []
+    found_first_heading = False
+
+    # Normalize filter names for case-insensitive matching
+    normalized_filters = {s.lower().strip() for s in section_names}
+
+    for line in lines:
+        # Detect ## headings (but not ### or deeper)
+        if line.startswith("## ") and not line.startswith("### "):
+            found_first_heading = True
+            heading_text = line[3:].strip()
+            current_section = heading_text
+            include_current = heading_text.lower().strip() in normalized_filters
+            if include_current:
+                result_lines.append(line)
+        elif not found_first_heading:
+            preamble_lines.append(line)
+        elif include_current:
+            result_lines.append(line)
+
+    # Always include preamble (title, etc.)
+    if preamble_lines:
+        return "\n".join(preamble_lines) + "\n\n" + "\n".join(result_lines)
+    return "\n".join(result_lines)
+
+
+def _resolve_excerpts(content: str, config: dict) -> str:
+    """Resolve <excerpt path="..." lines="N-M" /> tags to actual code.
+
+    Reads the specified file, extracts the line range, and replaces
+    the tag with a fenced code block. Budget-capped to prevent bloat.
+    """
+    import re as _re
+
+    max_bytes = config.get("context", {}).get("max_excerpt_bytes", _EXCERPT_MAX_BYTES)
+    total_bytes = 0
+
+    def _replace_excerpt(match: _re.Match) -> str:
+        nonlocal total_bytes
+        path_str = match.group("path")
+        lines_str = match.group("lines")
+
+        if total_bytes >= max_bytes:
+            return f"<!-- excerpt truncated: budget exhausted ({max_bytes} bytes) -->"
+
+        # Resolve path (relative to repo root)
+        p = Path(path_str)
+        if not p.is_absolute():
+            p = _REPO_ROOT / path_str
+        if not p.exists() or not p.is_file():
+            return f"<!-- excerpt: {path_str} not found -->"
+
+        try:
+            file_lines = p.read_text().splitlines()
+        except Exception as e:
+            return f"<!-- excerpt: error reading {path_str}: {e} -->"
+
+        # Parse line range
+        start, end = 1, len(file_lines)
+        if lines_str:
+            parts = lines_str.split("-")
+            try:
+                start = max(1, int(parts[0]))
+                end = int(parts[1]) if len(parts) > 1 else start
+            except (ValueError, IndexError):
+                pass
+
+        # Extract lines (1-indexed)
+        excerpt_lines = file_lines[start - 1:end]
+        excerpt_text = "\n".join(excerpt_lines)
+        excerpt_bytes = len(excerpt_text.encode("utf-8", errors="replace"))
+
+        if total_bytes + excerpt_bytes > max_bytes:
+            # Partial inclusion up to budget
+            remaining = max_bytes - total_bytes
+            excerpt_text = excerpt_text[:remaining] + "\n... (truncated)"
+
+        total_bytes += excerpt_bytes
+
+        # Detect language from extension
+        ext = p.suffix.lstrip(".")
+        lang_map = {
+            "py": "python", "ts": "typescript", "js": "javascript",
+            "rs": "rust", "go": "go", "java": "java", "cpp": "cpp",
+            "c": "c", "cs": "csharp", "rb": "ruby", "yaml": "yaml",
+            "yml": "yaml", "json": "json", "md": "markdown",
+            "sh": "bash", "ps1": "powershell", "sql": "sql",
+        }
+        lang = lang_map.get(ext, ext)
+
+        return f"```{lang}\n// {path_str}:{start}-{end}\n{excerpt_text}\n```"
+
+    # Match <excerpt path="..." lines="N-M" /> and <excerpt path="..." lines="N-M"></excerpt>
+    pattern = r'<excerpt\s+path="(?P<path>[^"]+)"\s+lines="(?P<lines>[^"]*)"(?:\s*/\s*>|>\s*</excerpt>)'
+    return _re.sub(pattern, _replace_excerpt, content)
+
 
 def _get_ai_context_convention_files(state: dict) -> list[str]:
     """Read ai_context_refs from state and return paths that exist.
 
     Caps total file size at ~50KB to avoid prompt bloat.
+    Supports #section anchors (e.g., "path/to/file.md#Section Name")
+    which are preserved in the returned paths for downstream section
+    extraction by _assemble_agent_prompt.
     """
     refs = state.get("ai_context_refs", [])
     if not refs:
@@ -1929,16 +2259,24 @@ def _get_ai_context_convention_files(state: dict) -> list[str]:
     result = []
     total_size = 0
     for ref in refs:
-        p = Path(ref)
+        # Separate optional #section anchor
+        section_anchor = None
+        path_part = ref
+        if "#" in ref:
+            path_part, section_anchor = ref.rsplit("#", 1)
+
+        p = Path(path_part)
         if not p.is_absolute():
-            p = _REPO_ROOT / ref
+            p = _REPO_ROOT / path_part
         if p.exists() and p.is_file():
             try:
                 size = p.stat().st_size
                 if total_size + size > _AI_CONTEXT_MAX_BYTES:
                     break
                 total_size += size
-                result.append(str(p))
+                # Preserve the #anchor so _assemble_agent_prompt can extract sections
+                entry = f"{p}#{section_anchor}" if section_anchor else str(p)
+                result.append(entry)
             except OSError:
                 continue
     return result
@@ -1995,13 +2333,19 @@ def _assemble_agent_prompt(
     convention_files: list,
     variables: dict,
     task_dir: Path,
+    config: Optional[dict] = None,
 ) -> str:
     """Assemble the complete agent prompt from all components.
 
     Reads all files server-side and applies variable substitution,
     eliminating LLM file-reading overhead.
+
+    Context files may be (path, section_filter) tuples for selective
+    section inclusion. Excerpt tags are resolved to actual code.
+    Convention files support #section anchors for partial inclusion.
     """
     sections = []
+    effective_config = config or {}
 
     # 1. Agent prompt (core instructions)
     agent_content = _read_file_safe(agent_prompt_path, f"{agent} prompt")
@@ -2010,27 +2354,58 @@ def _assemble_agent_prompt(
     # 2. Context files (task.md, previous agent outputs, etc.)
     if context_files:
         sections.append("\n---\n\n## Task Context\n")
-        for cf in context_files:
+        for entry in context_files:
+            # Support both plain paths and (path, section_filter) tuples
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                cf, section_filter = entry
+            else:
+                cf, section_filter = entry, None
+
             filename = Path(cf).name
             content = _read_file_safe(cf, filename)
             if content and not content.startswith("<!--"):
+                # Apply section filtering if specified
+                if section_filter and isinstance(section_filter, list):
+                    content = _extract_sections(content, section_filter)
+                # Resolve <excerpt> tags to actual code
+                content = _resolve_excerpts(content, effective_config)
                 sections.append(f"### {filename}\n\n{content}\n")
 
     # 3. Convention files (for implementer, quality_guard, security_auditor)
+    #    Supports #section anchors: "path/to/file.md#Section Name"
     if convention_files:
         sections.append("\n## Mandatory Conventions (from ai-context)\n")
         for cf in convention_files:
+            # Parse optional #section anchor
+            section_anchor = None
+            if "#" in cf:
+                cf, section_anchor = cf.rsplit("#", 1)
+
             filename = Path(cf).name
             content = _read_file_safe(cf, filename)
             if content and not content.startswith("<!--"):
+                if section_anchor:
+                    content = _extract_sections(content, [section_anchor])
+                    filename = f"{filename} > {section_anchor}"
                 sections.append(f"### {filename}\n\n{content}\n")
 
-    # 4. Human guidance trail from interactions.jsonl
+    # 4. Platform context
+    platform_os = variables.get("platform_os", "")
+    if platform_os:
+        platform_section = (
+            "\n## Platform Context\n\n"
+            f"- **OS**: {variables.get('platform_os', 'unknown')} {variables.get('platform_os_version', '')}\n"
+            f"- **Shell**: {variables.get('platform_shell', 'unknown')}\n"
+            f"- **AI Host**: {variables.get('platform_ai_host', 'unknown')}\n"
+        )
+        sections.append(platform_section)
+
+    # 5. Human guidance trail from interactions.jsonl
     guidance = _read_human_guidance(task_dir)
     if guidance:
         sections.append(f"\n{guidance}")
 
-    # 5. Join and apply variable substitution
+    # 6. Join and apply variable substitution
     prompt = "\n".join(sections)
     for key, value in variables.items():
         if isinstance(value, str):
@@ -2320,6 +2695,17 @@ def crew_parse_agent_output(
         except json.JSONDecodeError:
             extracted["concerns_parse_error"] = concerns_match.group(1)
 
+    # Parse <file_count_estimate> (from planner)
+    fce_match = re.search(r'<file_count_estimate>\s*(\d+)\s*</file_count_estimate>', output_text)
+    if fce_match:
+        extracted["file_count_estimate"] = int(fce_match.group(1))
+        if task_id:
+            task_dir_fce = find_task_dir(task_id)
+            if task_dir_fce:
+                st_fce = _load_state(task_dir_fce)
+                st_fce["file_count_estimate"] = int(fce_match.group(1))
+                _save_state(task_dir_fce, st_fce)
+
     # Parse <promise> tags for BLOCKED, ESCALATE, and *_COMPLETE signals
     # Scan ALL <promise> tags; ESCALATE takes priority over BLOCKED
     promise_matches = re.findall(r'<promise>\s*(.*?)\s*</promise>', output_text, re.DOTALL)
@@ -2442,7 +2828,7 @@ def crew_get_implementation_action(
         checkpoint_action = "checkpoint_75"
 
     if checkpoint_action:
-        return {
+        result = {
             "action": "checkpoint",
             "checkpoint": checkpoint_action,
             "progress_percent": progress_percent,
@@ -2450,6 +2836,16 @@ def crew_get_implementation_action(
             "total_steps": total_steps,
             "task_id": state.get("task_id")
         }
+        if checkpoint_action == "checkpoint_50":
+            file_count_estimate = state.get("file_count_estimate")
+            if file_count_estimate is not None:
+                files_touched_count = len(state.get("files_touched", []))
+                result["scope_check"] = {
+                    "planner_estimated_files": file_count_estimate,
+                    "implementer_touched_files": files_touched_count,
+                    "message": f"Planner estimated {file_count_estimate} files, implementer touched {files_touched_count} files.",
+                }
+        return result
 
     # All steps done?
     if total_steps > 0 and len(steps_completed) >= total_steps:
@@ -2643,6 +3039,36 @@ def crew_format_completion(
     }
     if beads_warnings:
         result["beads_warnings"] = beads_warnings
+
+    # Include auto-PR info if configured
+    auto_pr_policy = config.get("worktree", {}).get("auto_pr", "never")
+    if worktree_result.get("has_worktree") and auto_pr_policy != "never":
+        wt = worktree_result.get("worktree", {})
+        branch = wt.get("branch", "")
+        base_branch = wt.get("base_branch", "main")
+        if branch:
+            pr_title = description[:70] if description else f"crew/{resolved_task_id}"
+            file_list = "\n".join(f"- {f}" for f in files_changed[:20]) if files_changed else ""
+            pr_body_parts = [
+                f"## Summary",
+                f"Completed via /crew ({mode} mode)",
+                f"",
+                f"Task: {description}",
+            ]
+            if file_list:
+                pr_body_parts.extend(["", "## Files Changed", file_list])
+            result["auto_pr"] = {
+                "policy": auto_pr_policy,
+                "command": (
+                    f"gh pr create --base {base_branch} --head {branch} "
+                    f"--title \"{pr_title}\""
+                ),
+                "title": pr_title,
+                "base_branch": base_branch,
+                "head_branch": branch,
+                "body_parts": pr_body_parts,
+            }
+
     return result
 
 
@@ -2708,11 +3134,18 @@ def _check_task_health(task_dir: Path, state: dict) -> dict[str, Any]:
                 pass
 
         if not has_output and minutes_stale > 30:
+            import platform as _platform
             stale_phase_info = {
                 "phase": current_phase,
                 "started_at": updated_at,
                 "minutes_stale": minutes_stale,
                 "has_output": has_output,
+                "spawn_attempts": state.get("phase_spawn_attempts", {}).get(current_phase, 0),
+                "platform": {
+                    "os": _platform.system(),
+                    "shell": os.environ.get("SHELL", os.environ.get("COMSPEC", "unknown")),
+                    "ai_host": state.get("ai_host", "unknown"),
+                },
             }
             recovery_suggestions.append(
                 f"Resume from {current_phase} phase (stale {minutes_stale} min, no output)"
