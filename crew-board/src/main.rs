@@ -58,6 +58,10 @@ struct Cli {
     /// AI host for --quick/--resume-latest (claude/copilot/gemini/opencode/shell).
     #[arg(long = "host", value_name = "HOST")]
     host: Option<String>,
+
+    /// Force embedded PTY mode even when --quick would default to headless.
+    #[arg(long = "embed")]
+    embed: bool,
 }
 
 fn parse_host_arg(s: &Option<String>) -> launcher::AiHost {
@@ -216,9 +220,10 @@ fn main() -> Result<()> {
         }
     }
 
-    // Handle --quick: create worktree and launch
+    // Handle --quick: create worktree and launch (headless by default, --embed overrides)
     if let Some(ref description) = cli.quick {
         let host = parse_host_arg(&cli.host);
+        let use_headless = !cli.embed; // --quick defaults to headless unless --embed
         if !app.repos.is_empty() {
             let repo_path = app.repos[0].path.clone();
             match worktree::create_worktree(&repo_path, description, host, true) {
@@ -227,10 +232,17 @@ fn main() -> Result<()> {
                     let task_id = result.task_id.clone();
                     let work_dir = result.worktree_abs.clone();
                     let color_idx = Some(result.color_scheme_index);
-                    let (command, args) = launcher::embed_cmd_args(host, &task_id);
-                    app.spawn_terminal(
-                        &task_id, host.label(), &command, &args, &work_dir, color_idx,
-                    );
+                    if use_headless {
+                        let label = format!("{} (headless)", host.label());
+                        app.spawn_headless_terminal(
+                            &task_id, &label, host, &work_dir, color_idx, None,
+                        );
+                    } else {
+                        let (command, args) = launcher::embed_cmd_args(host, &task_id);
+                        app.spawn_terminal(
+                            &task_id, host.label(), &command, &args, &work_dir, color_idx,
+                        );
+                    }
                     app.active_view = app::ActiveView::Terminals;
                     app.refresh();
                 }

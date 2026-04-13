@@ -164,6 +164,7 @@ fn draw_settings(
         (popup.pull, "Pull latest before creating"),
         (popup.launch_after, "Launch terminal after creation"),
         (popup.headless, "Headless (no PTY)"),
+        (popup.no_checkpoints, "No checkpoints (auto-headless)"),
     ];
 
     let items: Vec<ListItem> = settings
@@ -206,6 +207,7 @@ fn draw_confirm(
     let pull_str = if popup.pull { "Yes" } else { "No" };
     let launch_str = if popup.launch_after { "Yes" } else { "No" };
     let headless_str = if popup.headless { "Yes" } else { "No" };
+    let no_checkpoints_str = if popup.no_checkpoints { "Yes" } else { "No" };
 
     let label_style = Style::default().fg(Color::DarkGray);
     let value_style = Style::default().fg(Color::White);
@@ -256,6 +258,10 @@ fn draw_confirm(
         Line::from(vec![
             Span::styled("  Headless:   ", label_style),
             Span::styled(headless_str, value_style),
+        ]),
+        Line::from(vec![
+            Span::styled("  No checks:  ", label_style),
+            Span::styled(no_checkpoints_str, value_style),
         ]),
         Line::from(""),
         Line::from(Span::styled(

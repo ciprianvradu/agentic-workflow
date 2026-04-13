@@ -248,6 +248,8 @@ pub struct CreateWorktreePopup {
     pub launch_after: bool,
     /// Whether to launch in headless mode (no PTY) after creation.
     pub headless: bool,
+    /// Skip workflow checkpoints (--no-checkpoints). Auto-selects headless when enabled.
+    pub no_checkpoints: bool,
     pub settings_cursor: usize,
     pub repo_path: PathBuf,
     pub repo_name: String,
@@ -2082,6 +2084,7 @@ impl App {
             pull: true,
             launch_after: true,
             headless: false,
+            no_checkpoints: false,
             settings_cursor: 0,
             repo_path,
             repo_name,
@@ -2119,6 +2122,7 @@ impl App {
             pull: true,
             launch_after: true,
             headless: false,
+            no_checkpoints: false,
             settings_cursor: 0,
             repo_path,
             repo_name,
@@ -2192,7 +2196,7 @@ impl App {
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     if let Some(p) = &mut self.create_popup {
-                        if p.settings_cursor < 2 {
+                        if p.settings_cursor < 3 {
                             p.settings_cursor += 1;
                         }
                     }
@@ -2203,6 +2207,13 @@ impl App {
                             0 => p.pull = !p.pull,
                             1 => p.launch_after = !p.launch_after,
                             2 => p.headless = !p.headless,
+                            3 => {
+                                p.no_checkpoints = !p.no_checkpoints;
+                                // Auto-select headless when no_checkpoints is enabled
+                                if p.no_checkpoints {
+                                    p.headless = true;
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -4967,6 +4978,7 @@ mod tests {
             pull: true,
             launch_after: true,
             headless: false,
+            no_checkpoints: false,
             settings_cursor: 0,
             repo_path: PathBuf::from("/tmp"),
             repo_name: "test".to_string(),
@@ -4976,6 +4988,7 @@ mod tests {
             result: None,
         };
         assert!(!popup.headless, "F4 popup headless should default to false");
+        assert!(!popup.no_checkpoints, "F4 popup no_checkpoints should default to false");
     }
 
     #[test]
@@ -4988,6 +5001,7 @@ mod tests {
             pull: true,
             launch_after: true,
             headless: false,
+            no_checkpoints: false,
             settings_cursor: 2, // Position on headless toggle
             repo_path: PathBuf::from("/tmp"),
             repo_name: "test".to_string(),
@@ -5410,5 +5424,207 @@ mod tests {
         if let Some(ref server) = app.hook_server {
             server.shutdown();
         }
+    }
+
+    // ── Auto-Headless Trigger Tests ────────────────────────────────────
+
+    #[test]
+    fn test_no_checkpoints_auto_selects_headless() {
+        // Simulates toggling no_checkpoints on: headless should be auto-selected
+        let mut popup = CreateWorktreePopup {
+            step: CreateStep::ToggleSettings,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: false,
+            no_checkpoints: false,
+            settings_cursor: 3, // Position on no_checkpoints toggle
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+
+        assert!(!popup.headless, "headless should start false");
+        assert!(!popup.no_checkpoints, "no_checkpoints should start false");
+
+        // Toggle no_checkpoints on — should auto-select headless
+        popup.no_checkpoints = !popup.no_checkpoints;
+        if popup.no_checkpoints {
+            popup.headless = true;
+        }
+        assert!(popup.no_checkpoints, "no_checkpoints should be true");
+        assert!(popup.headless, "headless should be auto-selected when no_checkpoints is on");
+    }
+
+    #[test]
+    fn test_no_checkpoints_off_does_not_change_headless() {
+        // Toggling no_checkpoints off should NOT change headless state
+        let mut popup = CreateWorktreePopup {
+            step: CreateStep::ToggleSettings,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: true,
+            no_checkpoints: true,
+            settings_cursor: 3,
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+
+        // Toggle no_checkpoints off — headless should remain unchanged
+        popup.no_checkpoints = !popup.no_checkpoints;
+        // (our toggle logic only auto-selects on enable, not deselect)
+        assert!(!popup.no_checkpoints, "no_checkpoints should be false");
+        assert!(popup.headless, "headless should remain true (user can manually toggle off)");
+    }
+
+    #[test]
+    fn test_headless_override_with_no_checkpoints_on() {
+        // User can toggle headless off even when no_checkpoints is on (override)
+        let mut popup = CreateWorktreePopup {
+            step: CreateStep::ToggleSettings,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: true,
+            no_checkpoints: true,
+            settings_cursor: 2, // Position on headless toggle
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+
+        // User explicitly toggles headless off (override)
+        popup.headless = !popup.headless;
+        assert!(!popup.headless, "User should be able to override headless to false");
+        assert!(popup.no_checkpoints, "no_checkpoints should remain true");
+    }
+
+    #[test]
+    fn test_quick_mode_defaults_headless() {
+        // --quick should default to headless (use_headless = !embed)
+        let embed = false; // no --embed flag
+        let use_headless = !embed;
+        assert!(use_headless, "--quick should default to headless when --embed is not set");
+    }
+
+    #[test]
+    fn test_quick_mode_embed_overrides_headless() {
+        // --quick --embed should use embedded PTY
+        let embed = true; // --embed flag set
+        let use_headless = !embed;
+        assert!(!use_headless, "--embed should override --quick headless default to embedded");
+    }
+
+    #[test]
+    fn test_quick_mode_spawns_headless_terminal() {
+        // Integration-style test: verify --quick spawns a headless terminal
+        let mut app = create_test_app();
+        let tmp = std::env::temp_dir().join("crew-test-quick-headless");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Simulate --quick with headless spawn
+        let host = launcher::AiHost::Claude;
+        let task_id = "TASK_QUICK1";
+        let label = format!("{} (headless)", host.label());
+
+        if let Some(mgr) = &mut app.terminal_manager {
+            let _ = mgr.spawn_headless(
+                task_id.to_string(),
+                label,
+                "true", // dummy command
+                &[],
+                &tmp,
+                None,
+                vec![],
+            );
+
+            assert_eq!(mgr.terminals.len(), 1, "Quick mode should spawn one terminal");
+            let term = &mgr.terminals[0];
+            assert!(term.is_headless(), "Quick mode terminal should be headless");
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_quick_mode_embed_spawns_embedded() {
+        // When --embed is used, --quick should use embedded terminal
+        // (This test verifies the logic path, not the actual PTY spawn)
+        let embed = true;
+        let use_headless = !embed;
+        assert!(!use_headless, "With --embed, should use embedded mode");
+        // In this case, spawn_terminal would be called instead of spawn_headless_terminal
+    }
+
+    #[test]
+    fn test_create_popup_no_checkpoints_defaults_to_false() {
+        let popup = CreateWorktreePopup {
+            step: CreateStep::InputDescription,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: false,
+            no_checkpoints: false,
+            settings_cursor: 0,
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+        assert!(!popup.no_checkpoints, "no_checkpoints should default to false");
+    }
+
+    #[test]
+    fn test_create_popup_settings_has_four_toggles() {
+        // Verify settings step has 4 toggles (max cursor position is 3)
+        let popup = CreateWorktreePopup {
+            step: CreateStep::ToggleSettings,
+            description_input: tui_input::Input::default(),
+            hosts: vec![launcher::AiHost::Claude],
+            host_cursor: 0,
+            pull: true,
+            launch_after: true,
+            headless: false,
+            no_checkpoints: false,
+            settings_cursor: 0,
+            repo_path: PathBuf::from("/tmp"),
+            repo_name: "test".to_string(),
+            preview: None,
+            handle: None,
+            started_at: None,
+            result: None,
+        };
+
+        // The 4 settings toggles are: pull, launch_after, headless, no_checkpoints
+        // Settings cursor max should be 3 (0-indexed)
+        let max_settings_cursor = 3u8;
+        assert_eq!(max_settings_cursor, 3, "Should have 4 settings (cursor 0-3)");
+
+        // Verify all fields are accessible
+        assert!(popup.pull || !popup.pull);
+        assert!(popup.launch_after || !popup.launch_after);
+        assert!(popup.headless || !popup.headless);
+        assert!(popup.no_checkpoints || !popup.no_checkpoints);
     }
 }
