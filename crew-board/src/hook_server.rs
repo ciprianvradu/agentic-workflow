@@ -247,6 +247,16 @@ impl HookServer {
         }
     }
 
+    /// Check if a terminal's token is currently registered.
+    #[allow(dead_code)]
+    pub fn is_token_registered(&self, terminal_id: &str) -> bool {
+        if let Ok(map) = self.tokens.read() {
+            map.contains_key(terminal_id)
+        } else {
+            false
+        }
+    }
+
     /// Shut down the server thread.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::Relaxed);

@@ -250,13 +250,20 @@ fn main() -> Result<()> {
         server.shutdown();
     }
 
-    // Cleanup embedded terminals before restoring (also removes settings.local.json)
+    // Cleanup all terminals before restoring — removes hook settings files,
+    // deregisters tokens, and kills running headless processes.
+    // Cleanup is idempotent: missing files are silently ignored.
     if let Some(mgr) = &mut app.terminal_manager {
         // Clean up hook settings files for all terminals
         for term in &mgr.terminals {
+            // Claude: settings.local.json via hook_settings_cwd
             if let Some(ref cwd) = term.hook_settings_cwd {
                 let settings_path = cwd.join(".claude").join("settings.local.json");
                 let _ = std::fs::remove_file(&settings_path);
+            }
+            // Gemini, Copilot, OpenCode, etc.: files listed in hook_cleanup_paths
+            for path in &term.hook_cleanup_paths {
+                let _ = std::fs::remove_file(path);
             }
         }
         mgr.cleanup_all();

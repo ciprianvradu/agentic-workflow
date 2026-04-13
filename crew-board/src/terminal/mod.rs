@@ -121,7 +121,6 @@ pub struct EmbeddedTerminal {
     /// The cwd that was written to .claude/settings.local.json (for cleanup).
     pub hook_settings_cwd: Option<PathBuf>,
     /// Additional hook config files to clean up on terminal dismiss (for non-Claude hosts).
-    #[allow(dead_code)]
     pub hook_cleanup_paths: Vec<PathBuf>,
     /// Per-terminal auto-accept toggle. When true, permission prompts for this
     /// terminal are automatically approved (overrides global permission_profile).

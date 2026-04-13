@@ -3915,6 +3915,15 @@ impl App {
     }
 
     /// Dismiss (remove) the currently focused terminal.
+    ///
+    /// Cleans up hook settings files for the terminal:
+    /// - Claude: removes `.claude/settings.local.json` (via `hook_settings_cwd`)
+    /// - Gemini: removes `.gemini/settings.json` + `.gemini/crew-hook.sh` (via `hook_cleanup_paths`)
+    /// - Other hosts: removes any files listed in `hook_cleanup_paths`
+    ///
+    /// Also deregisters the hook server auth token and kills headless child
+    /// processes that are still running. Cleanup is idempotent: missing files
+    /// are silently ignored.
     pub fn terminal_dismiss_focused(&mut self) {
         if let Some(mgr) = &mut self.terminal_manager {
             // Kill headless child if still running, collect id + cleanup info
@@ -3924,16 +3933,24 @@ impl App {
                     let _ = hs.child.kill();
                     let _ = hs.child.wait();
                 }
-                Some((term.id.clone(), term.hook_settings_cwd.clone()))
+                Some((
+                    term.id.clone(),
+                    term.hook_settings_cwd.clone(),
+                    term.hook_cleanup_paths.clone(),
+                ))
             } else {
                 None
             };
 
-            if let Some((id, hook_cwd)) = dismiss_info {
-                // Clean up hook settings file
+            if let Some((id, hook_cwd, cleanup_paths)) = dismiss_info {
+                // Clean up hook settings files (Claude settings.local.json via hook_settings_cwd)
                 if let Some(ref cwd) = hook_cwd {
                     let settings_path = cwd.join(".claude").join("settings.local.json");
                     let _ = std::fs::remove_file(&settings_path);
+                }
+                // Clean up additional hook config files (Gemini, Copilot, OpenCode, etc.)
+                for path in &cleanup_paths {
+                    let _ = std::fs::remove_file(path);
                 }
                 // Deregister hook token
                 if let Some(ref server) = self.hook_server {
@@ -3945,23 +3962,36 @@ impl App {
     }
 
     /// Dismiss all exited terminals at once.
+    ///
+    /// Cleans up hook settings files for all exited terminals:
+    /// - Claude: removes `.claude/settings.local.json` (via `hook_settings_cwd`)
+    /// - Gemini: removes `.gemini/settings.json` + `.gemini/crew-hook.sh` (via `hook_cleanup_paths`)
+    /// - Other hosts: removes any files listed in `hook_cleanup_paths`
+    ///
+    /// Also deregisters hook server auth tokens. Cleanup is idempotent:
+    /// missing files are silently ignored.
     pub fn terminal_dismiss_all_exited(&mut self) {
         if let Some(mgr) = &mut self.terminal_manager {
             // Collect cleanup info before removal
-            let to_cleanup: Vec<(String, Option<PathBuf>)> = mgr
+            let to_cleanup: Vec<(String, Option<PathBuf>, Vec<PathBuf>)> = mgr
                 .terminals
                 .iter()
                 .filter(|t| matches!(t.status, TerminalStatus::Exited(_)))
-                .map(|t| (t.id.clone(), t.hook_settings_cwd.clone()))
+                .map(|t| (t.id.clone(), t.hook_settings_cwd.clone(), t.hook_cleanup_paths.clone()))
                 .collect();
 
             mgr.dismiss_all_exited();
 
             // Clean up hook settings files and deregister tokens
-            for (id, hook_cwd) in to_cleanup {
+            for (id, hook_cwd, cleanup_paths) in to_cleanup {
+                // Claude settings.local.json via hook_settings_cwd
                 if let Some(ref cwd) = hook_cwd {
                     let settings_path = cwd.join(".claude").join("settings.local.json");
                     let _ = std::fs::remove_file(&settings_path);
+                }
+                // Additional hook config files (Gemini, Copilot, OpenCode, etc.)
+                for path in &cleanup_paths {
+                    let _ = std::fs::remove_file(path);
                 }
                 if let Some(ref server) = self.hook_server {
                     server.deregister_token(&id);
@@ -5051,5 +5081,334 @@ mod tests {
         // popup_down again
         app.popup_down();
         assert!(app.launch_popup.as_ref().unwrap().headless);
+    }
+
+    // ── Headless settings cleanup tests ──────────────────────────────
+
+    /// Helper: spawn a headless terminal using `true` (available in PATH),
+    /// generate hook config files, and wire up hook_settings_cwd and
+    /// hook_cleanup_paths so cleanup tests don't depend on claude/gemini
+    /// being installed.
+    fn spawn_headless_with_hook_files(
+        app: &mut App,
+        task_id: &str,
+        label: &str,
+        host: launcher::AiHost,
+        cwd: &std::path::Path,
+    ) {
+        // Generate hook config (writes files, registers token)
+        let (env_vars, hook_settings_cwd, cleanup_paths) =
+            app.generate_headless_hook_config(task_id, host, cwd);
+
+        // Spawn using "true" so it works in any CI environment
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.spawn_headless(
+                task_id.to_string(),
+                label.to_string(),
+                "true",
+                &[],
+                cwd,
+                None,
+                env_vars,
+            ).expect("spawn 'true' should succeed");
+
+            // Wire up hook settings on the terminal (mimics spawn_headless_terminal)
+            if let Some(term) = mgr.terminals.last_mut() {
+                if let Some(ref settings_cwd) = hook_settings_cwd {
+                    term.hook_settings_cwd = Some(settings_cwd.clone());
+                }
+                term.hook_cleanup_paths = cleanup_paths;
+            }
+        }
+    }
+
+    #[test]
+    fn test_headless_dismiss_claude_cleanup() {
+        // VAL-HC-080: settings.local.json removed on headless Claude dismiss
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-dismiss-claude");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        spawn_headless_with_hook_files(&mut app, "TASK_DC1", "Claude Dismiss", launcher::AiHost::Claude, &tmp);
+
+        // Verify the settings file was created
+        let settings_path = tmp.join(".claude").join("settings.local.json");
+        assert!(settings_path.exists(), "settings.local.json should exist after spawn");
+
+        // Verify token is registered
+        assert!(
+            app.hook_server.as_ref().unwrap().is_token_registered("TASK_DC1"),
+            "Token should be registered after spawn"
+        );
+
+        // Wait for "true" to exit, then poll
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.poll_status();
+        }
+
+        // Dismiss the terminal
+        app.terminal_dismiss_focused();
+
+        // Verify settings.local.json was removed
+        assert!(!settings_path.exists(), "settings.local.json should be removed after dismiss");
+
+        // Verify token was deregistered
+        assert!(
+            !app.hook_server.as_ref().unwrap().is_token_registered("TASK_DC1"),
+            "Token should be deregistered after dismiss"
+        );
+
+        // Verify terminal was removed
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().terminals.len(),
+            0,
+            "Terminal should be removed after dismiss"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_dismiss_gemini_cleanup() {
+        // VAL-HC-081: .gemini/settings.json and crew-hook.sh removed on dismiss
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-dismiss-gemini");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        spawn_headless_with_hook_files(&mut app, "TASK_DG1", "Gemini Dismiss", launcher::AiHost::Gemini, &tmp);
+
+        // Verify both Gemini config files were created
+        let script_path = tmp.join(".gemini").join("crew-hook.sh");
+        let settings_path = tmp.join(".gemini").join("settings.json");
+        assert!(script_path.exists(), "crew-hook.sh should exist after spawn");
+        assert!(settings_path.exists(), "settings.json should exist after spawn");
+
+        // Verify token is registered
+        assert!(
+            app.hook_server.as_ref().unwrap().is_token_registered("TASK_DG1"),
+            "Token should be registered after spawn"
+        );
+
+        // Wait for exit, then poll
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.poll_status();
+        }
+
+        // Dismiss the terminal
+        app.terminal_dismiss_focused();
+
+        // Verify both files were removed
+        assert!(!script_path.exists(), "crew-hook.sh should be removed after dismiss");
+        assert!(!settings_path.exists(), "settings.json should be removed after dismiss");
+
+        // Verify token was deregistered
+        assert!(
+            !app.hook_server.as_ref().unwrap().is_token_registered("TASK_DG1"),
+            "Token should be deregistered after dismiss"
+        );
+
+        // Verify terminal was removed
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().terminals.len(),
+            0,
+            "Terminal should be removed after dismiss"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_dismiss_all_exited_cleanup() {
+        // VAL-HC-073 + VAL-HC-082: dismiss-all cleans up all headless hook files
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp_claude = std::env::temp_dir().join("crew-test-dismiss-all-claude");
+        let tmp_gemini = std::env::temp_dir().join("crew-test-dismiss-all-gemini");
+        let _ = std::fs::create_dir_all(&tmp_claude);
+        let _ = std::fs::create_dir_all(&tmp_gemini);
+
+        spawn_headless_with_hook_files(&mut app, "TASK_DA_C", "Claude All", launcher::AiHost::Claude, &tmp_claude);
+        spawn_headless_with_hook_files(&mut app, "TASK_DA_G", "Gemini All", launcher::AiHost::Gemini, &tmp_gemini);
+
+        // Verify files created
+        let claude_settings = tmp_claude.join(".claude").join("settings.local.json");
+        let gemini_script = tmp_gemini.join(".gemini").join("crew-hook.sh");
+        let gemini_settings = tmp_gemini.join(".gemini").join("settings.json");
+        assert!(claude_settings.exists(), "Claude settings should exist");
+        assert!(gemini_script.exists(), "Gemini script should exist");
+        assert!(gemini_settings.exists(), "Gemini settings should exist");
+
+        // Wait for exit, then poll
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.poll_status();
+        }
+
+        // Dismiss all exited
+        app.terminal_dismiss_all_exited();
+
+        // Verify all files removed
+        assert!(!claude_settings.exists(), "Claude settings should be removed");
+        assert!(!gemini_script.exists(), "Gemini script should be removed");
+        assert!(!gemini_settings.exists(), "Gemini settings should be removed");
+
+        // Verify tokens deregistered
+        assert!(
+            !app.hook_server.as_ref().unwrap().is_token_registered("TASK_DA_C"),
+            "Claude token should be deregistered"
+        );
+        assert!(
+            !app.hook_server.as_ref().unwrap().is_token_registered("TASK_DA_G"),
+            "Gemini token should be deregistered"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp_claude);
+        let _ = std::fs::remove_dir_all(&tmp_gemini);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_cleanup_idempotent() {
+        // VAL-HC-083: Cleanup is idempotent — missing files don't cause errors
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-idempotent-cleanup");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        spawn_headless_with_hook_files(&mut app, "TASK_IC1", "Idempotent", launcher::AiHost::Claude, &tmp);
+
+        // Manually delete the settings file BEFORE dismiss
+        let settings_path = tmp.join(".claude").join("settings.local.json");
+        assert!(settings_path.exists());
+        let _ = std::fs::remove_file(&settings_path);
+        assert!(!settings_path.exists(), "Settings should be manually deleted");
+
+        // Wait for exit, then poll
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.poll_status();
+        }
+
+        // Dismiss should NOT panic or error even though file is already gone
+        app.terminal_dismiss_focused();
+
+        // Terminal should still be properly removed
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().terminals.len(),
+            0,
+            "Terminal should be removed even when settings file was already deleted"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_cleanup_idempotent_gemini() {
+        // VAL-HC-083: Cleanup is idempotent for Gemini files too
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-idempotent-gemini");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        spawn_headless_with_hook_files(&mut app, "TASK_IG1", "Idempotent Gemini", launcher::AiHost::Gemini, &tmp);
+
+        // Manually delete both Gemini files before dismiss
+        let script_path = tmp.join(".gemini").join("crew-hook.sh");
+        let settings_path = tmp.join(".gemini").join("settings.json");
+        assert!(script_path.exists());
+        assert!(settings_path.exists());
+        let _ = std::fs::remove_file(&script_path);
+        let _ = std::fs::remove_file(&settings_path);
+
+        // Wait for exit, then poll
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.poll_status();
+        }
+
+        // Dismiss should NOT panic or error
+        app.terminal_dismiss_focused();
+
+        assert_eq!(
+            app.terminal_manager.as_ref().unwrap().terminals.len(),
+            0,
+            "Terminal should be removed even when Gemini files were already deleted"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_app_exit_cleanup() {
+        // VAL-HC-082: App exit cleans up all headless hook files
+        // Simulates the main.rs cleanup loop by directly testing the cleanup logic
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp_c = std::env::temp_dir().join("crew-test-app-exit-claude");
+        let tmp_g = std::env::temp_dir().join("crew-test-app-exit-gemini");
+        let _ = std::fs::create_dir_all(&tmp_c);
+        let _ = std::fs::create_dir_all(&tmp_g);
+
+        spawn_headless_with_hook_files(&mut app, "TASK_AE_C", "Claude", launcher::AiHost::Claude, &tmp_c);
+        spawn_headless_with_hook_files(&mut app, "TASK_AE_G", "Gemini", launcher::AiHost::Gemini, &tmp_g);
+
+        // Verify files exist
+        let claude_settings = tmp_c.join(".claude").join("settings.local.json");
+        let gemini_script = tmp_g.join(".gemini").join("crew-hook.sh");
+        let gemini_settings = tmp_g.join(".gemini").join("settings.json");
+        assert!(claude_settings.exists(), "Claude settings should exist");
+        assert!(gemini_script.exists(), "Gemini script should exist");
+        assert!(gemini_settings.exists(), "Gemini settings should exist");
+
+        // Simulate the main.rs app exit cleanup loop
+        if let Some(mgr) = &mut app.terminal_manager {
+            for term in &mgr.terminals {
+                // Claude: settings.local.json via hook_settings_cwd
+                if let Some(ref cwd) = term.hook_settings_cwd {
+                    let settings_path = cwd.join(".claude").join("settings.local.json");
+                    let _ = std::fs::remove_file(&settings_path);
+                }
+                // Gemini, Copilot, OpenCode, etc.: files listed in hook_cleanup_paths
+                for path in &term.hook_cleanup_paths {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            mgr.cleanup_all();
+        }
+
+        // Verify all files cleaned up
+        assert!(!claude_settings.exists(), "Claude settings should be removed on app exit");
+        assert!(!gemini_script.exists(), "Gemini script should be removed on app exit");
+        assert!(!gemini_settings.exists(), "Gemini settings should be removed on app exit");
+
+        let _ = std::fs::remove_dir_all(&tmp_c);
+        let _ = std::fs::remove_dir_all(&tmp_g);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
     }
 }
