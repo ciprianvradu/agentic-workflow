@@ -612,37 +612,59 @@ fn draw_single_terminal(
         .borrow_mut()
         .push((_term_index, inner));
 
-    // Resize PTY + parser to match actual render area (handles spawn, resize, layout changes)
-    widget::resize_if_needed(&term.parser, &term.master, inner.height, inner.width);
+    // Kind-aware rendering: embedded terminals get PTY resize + output,
+    // headless terminals get a placeholder status panel.
+    if let (Some(parser), Some(master)) = (term.parser(), term.master()) {
+        // Resize PTY + parser to match actual render area (handles spawn, resize, layout changes)
+        widget::resize_if_needed(parser, master, inner.height, inner.width);
 
-    // Build selection range if this terminal has an active/completed selection
-    let sel_range = app.text_selection.as_ref().and_then(|sel| {
-        if sel.terminal_idx == _term_index {
-            Some(widget::SelectionRange {
-                start_row: sel.start_row,
-                start_col: sel.start_col,
-                end_row: sel.end_row,
-                end_col: sel.end_col,
-            })
-        } else {
-            None
-        }
-    });
+        // Build selection range if this terminal has an active/completed selection
+        let sel_range = app.text_selection.as_ref().and_then(|sel| {
+            if sel.terminal_idx == _term_index {
+                Some(widget::SelectionRange {
+                    start_row: sel.start_row,
+                    start_col: sel.start_col,
+                    end_row: sel.end_row,
+                    end_col: sel.end_col,
+                })
+            } else {
+                None
+            }
+        });
 
-    // Render the vt100 screen into the inner area
-    let show_cursor = is_terminal_focused && !is_scrollback;
-    widget::draw_terminal(
-        frame,
-        inner,
-        &term.parser,
-        show_cursor,
-        term.scroll_offset,
-        sel_range.as_ref(),
-    );
+        // Render the vt100 screen into the inner area
+        let show_cursor = is_terminal_focused && !is_scrollback;
+        widget::draw_terminal(
+            frame,
+            inner,
+            parser,
+            show_cursor,
+            term.scroll_offset,
+            sel_range.as_ref(),
+        );
+    } else {
+        // Headless terminal — render a status placeholder
+        let status_text = match &term.status {
+            terminal::TerminalStatus::Running => "Headless terminal — running (no interactive output)",
+            terminal::TerminalStatus::Exited(code) => {
+                if *code == 0 {
+                    "Headless terminal — exited successfully"
+                } else {
+                    "Headless terminal — exited with error"
+                }
+            }
+            terminal::TerminalStatus::NeedsAttention(_) => "Headless terminal — needs attention",
+        };
+        let msg = Paragraph::new(status_text)
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(msg, inner);
+    }
 
-    // Draw scroll indicator when scrolled back (any mode)
-    if term.scroll_offset > 0 && inner.height > 0 {
-        let scrollback_total = widget::scrollback_available(&term.parser);
+    // Draw scroll indicator when scrolled back (any mode, embedded only)
+    if term.scroll_offset > 0 && inner.height > 0 && term.is_embedded() {
+        let scrollback_total = term.parser()
+            .map(|p| widget::scrollback_available(p))
+            .unwrap_or(0);
         if scrollback_total > 0 {
             let indicator = if is_scrollback {
                 format!(

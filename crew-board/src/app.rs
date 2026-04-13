@@ -3535,10 +3535,21 @@ impl App {
     /// Dismiss (remove) the currently focused terminal.
     pub fn terminal_dismiss_focused(&mut self) {
         if let Some(mgr) = &mut self.terminal_manager {
-            if let Some(term) = mgr.focused_terminal() {
-                let id = term.id.clone();
+            // Kill headless child if still running, collect id + cleanup info
+            let dismiss_info = if let Some(term) = mgr.focused_terminal_mut() {
+                // Kill headless child process if still running
+                if let crate::terminal::TerminalKind::Headless(ref mut hs) = term.kind {
+                    let _ = hs.child.kill();
+                    let _ = hs.child.wait();
+                }
+                Some((term.id.clone(), term.hook_settings_cwd.clone()))
+            } else {
+                None
+            };
+
+            if let Some((id, hook_cwd)) = dismiss_info {
                 // Clean up hook settings file
-                if let Some(ref cwd) = term.hook_settings_cwd {
+                if let Some(ref cwd) = hook_cwd {
                     let settings_path = cwd.join(".claude").join("settings.local.json");
                     let _ = std::fs::remove_file(&settings_path);
                 }
@@ -3591,12 +3602,15 @@ impl App {
     // ── Scroll-Back ──────────────────────────────────────────────────
 
     /// Scroll the focused terminal up by N lines.
+    /// No-op for headless terminals (no scrollback buffer).
     pub fn terminal_scroll_up(&mut self, lines: usize) {
         if let Some(mgr) = &mut self.terminal_manager {
             if let Some(term) = mgr.focused_terminal_mut() {
-                let max_scrollback =
-                    crate::terminal::widget::scrollback_available(&term.parser);
-                term.scroll_offset = (term.scroll_offset + lines).min(max_scrollback);
+                if let Some(parser) = term.parser() {
+                    let max_scrollback =
+                        crate::terminal::widget::scrollback_available(parser);
+                    term.scroll_offset = (term.scroll_offset + lines).min(max_scrollback);
+                }
             }
         }
     }
@@ -3628,12 +3642,15 @@ impl App {
     }
 
     /// Scroll to the top of the scrollback buffer.
+    /// No-op for headless terminals.
     pub fn terminal_scroll_to_top(&mut self) {
         if let Some(mgr) = &mut self.terminal_manager {
             if let Some(term) = mgr.focused_terminal_mut() {
-                let max_scrollback =
-                    crate::terminal::widget::scrollback_available(&term.parser);
-                term.scroll_offset = max_scrollback;
+                if let Some(parser) = term.parser() {
+                    let max_scrollback =
+                        crate::terminal::widget::scrollback_available(parser);
+                    term.scroll_offset = max_scrollback;
+                }
             }
         }
     }
@@ -3664,11 +3681,12 @@ impl App {
         self.terminal_search_match_idx = 0;
 
         // Get parser handle (clone the Arc to avoid borrow conflict)
-        let parser_handle = self
+        // Returns None for headless terminals (no scrollback to search).
+        let parser_handle: Option<std::sync::Arc<std::sync::Mutex<vt100::Parser>>> = self
             .terminal_manager
             .as_ref()
             .and_then(|m| m.focused_terminal())
-            .map(|t| t.parser.clone());
+            .and_then(|t| t.parser().cloned());
 
         let parser_handle = match parser_handle {
             Some(p) => p,
@@ -3835,7 +3853,13 @@ impl App {
             None => return,
         };
 
-        let p = term.parser.lock().unwrap();
+        // Headless terminals have no parser/screen — nothing to copy
+        let parser = match term.parser() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let p = parser.lock().unwrap();
         let screen = p.screen();
 
         // Normalize: ensure start <= end in reading order
