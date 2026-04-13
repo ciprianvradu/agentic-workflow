@@ -97,6 +97,8 @@ from agentic_workflow_server.state_tools import (
     _build_resume_prompt,
     _find_recyclable_worktree,
     _is_wsl,
+    _is_native_windows,
+    _symlink_command,
     list_tasks,
     # Interaction logging
     workflow_log_interaction,
@@ -2506,6 +2508,305 @@ class TestFixPathsCommands:
         else:
             # Recycling fell back to fresh — fix_paths depends on WSL detection
             assert "fix_paths_commands" in result
+
+
+class TestCrossPlatformWorktree:
+    """Test cross-platform worktree command generation (POSIX vs PowerShell)."""
+
+    def test_posix_worktree_uses_ln_symlink(self, clean_tasks_dir):
+        """Linux/WSL worktree setup commands use POSIX ln -sfn for symlinks."""
+        from unittest.mock import patch
+        workflow_initialize(task_id="TASK_TEST_XP_001")
+        with patch("agentic_workflow_server.state_tools._is_native_windows", return_value=False):
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_001")
+        assert result["success"] is True
+        setup = result["setup_commands"]
+        # First setup command is the .tasks/ symlink
+        assert any("ln -sfn" in cmd for cmd in setup), \
+            f"Expected POSIX ln -sfn in setup commands, got: {setup}"
+
+    def test_posix_worktree_uses_shlex_escaping(self, clean_tasks_dir):
+        """Linux worktree commands use shlex escaping (forward slashes, quote chars)."""
+        from unittest.mock import patch
+        workflow_initialize(task_id="TASK_TEST_XP_002")
+        with patch("agentic_workflow_server.state_tools._is_native_windows", return_value=False):
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_002")
+        assert result["success"] is True
+        git_cmds = result["git_commands"]
+        # Git commands should use forward slashes, not backslashes
+        for cmd in git_cmds:
+            assert "\\" not in cmd, f"POSIX command should not contain backslashes: {cmd}"
+
+    def test_posix_worktree_uses_forward_slashes(self, clean_tasks_dir):
+        """Linux worktree paths use forward slashes."""
+        from unittest.mock import patch
+        workflow_initialize(task_id="TASK_TEST_XP_003")
+        with patch("agentic_workflow_server.state_tools._is_native_windows", return_value=False):
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_003")
+        assert result["success"] is True
+        wt_path = result["worktree"]["path"]
+        assert "/" in wt_path
+        assert "\\" not in wt_path
+
+    def test_windows_worktree_uses_powershell_symlinks(self, clean_tasks_dir):
+        """Native Windows worktree setup uses New-Item SymbolicLink for symlinks."""
+        from unittest.mock import patch
+        workflow_initialize(task_id="TASK_TEST_XP_004")
+        with patch("agentic_workflow_server.state_tools._is_native_windows", return_value=True):
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_004")
+        assert result["success"] is True
+        setup = result["setup_commands"]
+        # Should use PowerShell New-Item -ItemType SymbolicLink instead of ln -sfn
+        symlink_cmds = [cmd for cmd in setup if "SymbolicLink" in cmd or "ln -sfn" in cmd]
+        assert len(symlink_cmds) > 0, f"Expected symlink command, got: {setup}"
+        assert any("New-Item" in cmd and "SymbolicLink" in cmd for cmd in symlink_cmds), \
+            f"Expected PowerShell New-Item SymbolicLink, got: {symlink_cmds}"
+
+    def test_windows_worktree_no_ln_command(self, clean_tasks_dir):
+        """Native Windows worktree should NOT use POSIX ln command."""
+        from unittest.mock import patch
+        workflow_initialize(task_id="TASK_TEST_XP_005")
+        with patch("agentic_workflow_server.state_tools._is_native_windows", return_value=True):
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_005")
+        assert result["success"] is True
+        setup = result["setup_commands"]
+        for cmd in setup:
+            # Ensure no POSIX ln commands
+            assert not cmd.startswith("ln "), f"Windows should not use ln command: {cmd}"
+
+    def test_wsl_worktree_uses_posix_commands(self, clean_tasks_dir):
+        """WSL environment uses POSIX commands even though it could be on Windows host."""
+        from unittest.mock import patch
+        workflow_initialize(task_id="TASK_TEST_XP_006")
+        with patch("agentic_workflow_server.state_tools._is_wsl", return_value=True), \
+             patch("agentic_workflow_server.state_tools._is_native_windows", return_value=False), \
+             patch("agentic_workflow_server.state_tools.Path") as mock_path:
+            mock_cwd = mock_path.cwd.return_value
+            mock_cwd.name = "repo"
+            mock_cwd.resolve.return_value = type("P", (), {"__str__": lambda s: "/home/user/repo"})()
+            mock_cwd.__truediv__ = lambda s, k: clean_tasks_dir.parent / k if k == ".tasks" else type("P", (), {"__str__": lambda s2: f"/home/user/repo/{k}"})()
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_006", base_path="/home/user/worktrees")
+        assert result["success"] is True
+        setup = result["setup_commands"]
+        # WSL should use POSIX ln -sfn, not PowerShell
+        assert any("ln -sfn" in cmd for cmd in setup), \
+            f"WSL should use POSIX ln -sfn, got: {setup}"
+
+    def test_windows_worktree_recycled_uses_powershell(self, clean_tasks_dir):
+        """Recycled worktree on native Windows uses PowerShell symlinks."""
+        from unittest.mock import patch
+        import os
+
+        # Create and mark a worktree as recyclable
+        workflow_initialize(task_id="TASK_TEST_XP_007")
+        workflow_create_worktree(task_id="TASK_TEST_XP_007")
+        state_dir = clean_tasks_dir / "TASK_TEST_XP_007"
+        state = json.load(open(state_dir / "state.json"))
+        wt_rel = state["worktree"]["path"]
+        wt_abs = os.path.normpath(os.path.join(str(clean_tasks_dir.parent), wt_rel))
+        os.makedirs(wt_abs, exist_ok=True)
+        state["worktree"]["status"] = "recyclable"
+        with open(state_dir / "state.json", "w") as f:
+            json.dump(state, f, indent=2)
+
+        # Recycle on Windows
+        workflow_initialize(task_id="TASK_TEST_XP_008")
+        with patch("agentic_workflow_server.state_tools._is_native_windows", return_value=True):
+            result = workflow_create_worktree(task_id="TASK_TEST_XP_008", recycle=True)
+        assert result["success"] is True
+        if "recycled_from" in result:
+            setup = result["setup_commands"]
+            # Recycled on Windows should also use PowerShell
+            symlink_cmds = [c for c in setup if "ln -sfn" in c or "SymbolicLink" in c]
+            if symlink_cmds:
+                assert any("New-Item" in c for c in symlink_cmds), \
+                    f"Windows recycled should use PowerShell: {symlink_cmds}"
+
+
+class TestEnvironmentAutoDetection:
+    """Test environment auto-detection (_is_wsl, platform.system)."""
+
+    def test_is_wsl_detects_proc_version(self):
+        """_is_wsl checks /proc/version for 'microsoft'."""
+        from unittest.mock import mock_open, patch
+        m = mock_open(read_data="Linux version 5.15.90.1-microsoft-standard-WSL2")
+        with patch("builtins.open", m):
+            assert _is_wsl() is True
+
+    def test_is_wsl_false_for_regular_linux(self):
+        """_is_wsl returns False for regular Linux."""
+        from unittest.mock import mock_open, patch
+        m = mock_open(read_data="Linux version 5.15.0-generic (buildd@lgw01)")
+        with patch("builtins.open", m):
+            assert _is_wsl() is False
+
+    def test_is_wsl_handles_missing_proc_version(self):
+        """_is_wsl returns False if /proc/version doesn't exist."""
+        from unittest.mock import patch
+        with patch("builtins.open", side_effect=FileNotFoundError()):
+            assert _is_wsl() is False
+
+    def test_is_wsl_handles_permission_error(self):
+        """_is_wsl returns False if /proc/version can't be read."""
+        from unittest.mock import patch
+        with patch("builtins.open", side_effect=PermissionError()):
+            assert _is_wsl() is False
+
+    def test_is_wsl_case_insensitive(self):
+        """_is_wsl detection is case-insensitive."""
+        from unittest.mock import mock_open, patch
+        m = mock_open(read_data="Linux version 5.15.90.1-Microsoft-Standard-WSL2")
+        with patch("builtins.open", m):
+            assert _is_wsl() is True
+
+    def test_platform_system_linux(self):
+        """platform.system() returns 'Linux' on Linux."""
+        import platform
+        from unittest.mock import patch
+        with patch.object(platform, 'system', return_value='Linux'):
+            assert platform.system() == 'Linux'
+
+    def test_platform_system_windows(self):
+        """platform.system() returns 'Windows' on Windows."""
+        import platform
+        from unittest.mock import patch
+        with patch.object(platform, 'system', return_value='Windows'):
+            assert platform.system() == 'Windows'
+
+
+class TestLaunchCommandsAllHosts:
+    """Test launch commands for every supported host x terminal_env combination."""
+
+    ALL_HOSTS = ["claude", "gemini", "copilot", "opencode", "devin", "droid"]
+    ALL_TERMINAL_ENVS = ["tmux", "windows_terminal", "macos", "linux_generic"]
+
+    def _setup_worktree_task(self, clean_tasks_dir, task_id):
+        workflow_initialize(task_id=task_id)
+        workflow_create_worktree(task_id=task_id)
+
+    @pytest.mark.parametrize("ai_host", ALL_HOSTS)
+    def test_tmux_launch_per_host(self, clean_tasks_dir, ai_host):
+        """Each host generates valid tmux launch commands."""
+        tid = f"TASK_TEST_LCHX_{ai_host}_TMUX"
+        self._setup_worktree_task(clean_tasks_dir, tid)
+        result = workflow_get_launch_command(
+            task_id=tid,
+            terminal_env="tmux",
+            ai_host=ai_host,
+            main_repo_path="/home/user/myrepo",
+        )
+        assert result["success"] is True
+        assert len(result["launch_commands"]) == 2  # new-window + set-option
+        assert "tmux new-window" in result["launch_commands"][0]
+        assert tid.lower().replace("_", "-") or tid in result["launch_commands"][0]
+        assert result["warnings"] == []
+
+    @pytest.mark.parametrize("ai_host", ALL_HOSTS)
+    def test_windows_terminal_launch_per_host(self, clean_tasks_dir, ai_host):
+        """Each host generates valid Windows Terminal launch commands."""
+        tid = f"TASK_TEST_LCHX_{ai_host}_WT"
+        self._setup_worktree_task(clean_tasks_dir, tid)
+        result = workflow_get_launch_command(
+            task_id=tid,
+            terminal_env="windows_terminal",
+            ai_host=ai_host,
+            main_repo_path="/home/user/myrepo",
+        )
+        assert result["success"] is True
+        assert len(result["launch_commands"]) == 1
+        cmd = result["launch_commands"][0]
+        assert "wt.exe" in cmd
+        assert "wsl.exe --cd" in cmd
+        assert "bash -lic" in cmd
+
+    @pytest.mark.parametrize("ai_host", ALL_HOSTS)
+    def test_macos_launch_per_host(self, clean_tasks_dir, ai_host):
+        """Each host generates valid macOS launch commands."""
+        tid = f"TASK_TEST_LCHX_{ai_host}_MAC"
+        self._setup_worktree_task(clean_tasks_dir, tid)
+        result = workflow_get_launch_command(
+            task_id=tid,
+            terminal_env="macos",
+            ai_host=ai_host,
+            main_repo_path="/home/user/myrepo",
+        )
+        assert result["success"] is True
+        assert len(result["launch_commands"]) == 1
+        assert "osascript" in result["launch_commands"][0]
+        assert "Terminal" in result["launch_commands"][0]
+
+    @pytest.mark.parametrize("ai_host", ALL_HOSTS)
+    def test_linux_generic_per_host(self, clean_tasks_dir, ai_host):
+        """Each host on linux_generic returns warning (cannot open terminal)."""
+        tid = f"TASK_TEST_LCHX_{ai_host}_LIN"
+        self._setup_worktree_task(clean_tasks_dir, tid)
+        result = workflow_get_launch_command(
+            task_id=tid,
+            terminal_env="linux_generic",
+            ai_host=ai_host,
+            main_repo_path="/home/user/myrepo",
+        )
+        assert result["success"] is True
+        assert result["launch_commands"] == []
+        assert len(result["warnings"]) == 1
+
+    @pytest.mark.parametrize("ai_host", ALL_HOSTS)
+    def test_resume_prompt_per_host(self, clean_tasks_dir, ai_host):
+        """Each host gets correct resume command syntax in resume_prompt."""
+        tid = f"TASK_TEST_LCHX_{ai_host}_RP"
+        self._setup_worktree_task(clean_tasks_dir, tid)
+        result = workflow_get_launch_command(
+            task_id=tid,
+            terminal_env="tmux",
+            ai_host=ai_host,
+            main_repo_path="/home/user/myrepo",
+        )
+        prompt = result["resume_prompt"]
+        assert tid in prompt
+
+        if ai_host == "claude":
+            assert "/crew resume " in prompt
+        elif ai_host in ("gemini", "copilot"):
+            assert "@crew-resume " in prompt
+        elif ai_host in ("opencode", "devin", "droid"):
+            assert "/crew-resume " in prompt
+
+    def test_devin_host_uses_double_dash(self, clean_tasks_dir):
+        """Devin host uses -- separator for prompt argument."""
+        self._setup_worktree_task(clean_tasks_dir, "TASK_TEST_LCHX_DEV_DD")
+        result = workflow_get_launch_command(
+            task_id="TASK_TEST_LCHX_DEV_DD",
+            terminal_env="tmux",
+            ai_host="devin",
+            main_repo_path="/home/user/myrepo",
+        )
+        assert result["success"] is True
+        cmd = result["launch_commands"][0]
+        assert "devin --" in cmd
+
+    def test_droid_host_launch(self, clean_tasks_dir):
+        """Droid host generates valid launch command."""
+        self._setup_worktree_task(clean_tasks_dir, "TASK_TEST_LCHX_DROID_001")
+        result = workflow_get_launch_command(
+            task_id="TASK_TEST_LCHX_DROID_001",
+            terminal_env="tmux",
+            ai_host="droid",
+            main_repo_path="/home/user/myrepo",
+        )
+        assert result["success"] is True
+        cmd = result["launch_commands"][0]
+        assert "droid" in cmd
+
+    def test_droid_resume_prompt_slash_syntax(self, clean_tasks_dir):
+        """Droid host uses /crew-resume syntax."""
+        self._setup_worktree_task(clean_tasks_dir, "TASK_TEST_LCHX_DROID_002")
+        result = workflow_get_launch_command(
+            task_id="TASK_TEST_LCHX_DROID_002",
+            terminal_env="tmux",
+            ai_host="droid",
+            main_repo_path="/home/user/myrepo",
+        )
+        assert "/crew-resume TASK_TEST_LCHX_DROID_002" in result["resume_prompt"]
 
 
 class TestInteractionLogging:

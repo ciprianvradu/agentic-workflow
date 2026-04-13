@@ -9,6 +9,7 @@ to ensure data integrity during concurrent access.
 
 import json
 import os
+import platform
 import re
 import shlex
 import subprocess
@@ -115,6 +116,30 @@ def _is_wsl() -> bool:
             return "microsoft" in f.read().lower()
     except (FileNotFoundError, PermissionError):
         return False
+
+
+def _is_native_windows() -> bool:
+    """Detect if running on native Windows (not WSL)."""
+    return platform.system() == "Windows" and not _is_wsl()
+
+
+def _symlink_command(target: str, link: str) -> str:
+    """Generate a platform-appropriate symlink command.
+
+    On native Windows, uses PowerShell New-Item -ItemType SymbolicLink.
+    On Linux/WSL/macOS, uses POSIX ln -sfn.
+    """
+    if _is_native_windows():
+        # PowerShell: New-Item -ItemType SymbolicLink -Path <link> -Target <target> -Force
+        # Use backslash paths for PowerShell
+        ps_target = target.replace("/", "\\")
+        ps_link = link.replace("/", "\\")
+        return (
+            f"powershell -Command \"New-Item -ItemType SymbolicLink "
+            f"-Path '{ps_link}' -Target '{ps_target}' -Force\""
+        )
+    else:
+        return f"ln -sfn {shlex.quote(target)} {shlex.quote(link)}"
 
 
 def _win_path_to_wsl(win_path: str) -> str:
@@ -4201,7 +4226,10 @@ def workflow_create_worktree(
         worktree_abs = os.path.normpath(os.path.join(main_repo_abs, worktree_path))
 
         setup_commands = [
-            f"ln -sfn {shlex.quote(os.path.join(main_repo_abs, '.tasks'))} {shlex.quote(os.path.join(worktree_abs, '.tasks'))}"
+            _symlink_command(
+                os.path.join(main_repo_abs, '.tasks'),
+                os.path.join(worktree_abs, '.tasks'),
+            )
         ]
 
         main_tasks_abs = os.path.join(main_repo_abs, ".tasks")
@@ -4264,7 +4292,10 @@ def workflow_create_worktree(
     worktree_abs = os.path.normpath(os.path.join(main_repo_abs, worktree_path))
 
     setup_commands = [
-        f"ln -sfn {shlex.quote(os.path.join(main_repo_abs, '.tasks'))} {shlex.quote(os.path.join(worktree_abs, '.tasks'))}"
+        _symlink_command(
+            os.path.join(main_repo_abs, '.tasks'),
+            os.path.join(worktree_abs, '.tasks'),
+        )
     ]
 
     main_tasks_abs = os.path.join(main_repo_abs, ".tasks")
