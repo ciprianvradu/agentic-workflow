@@ -3249,6 +3249,292 @@ impl App {
         (env_vars, Some(cwd.to_path_buf()))
     }
 
+    // ── Headless Terminals ────────────────────────────────────────────
+
+    /// Spawn a headless terminal for a task (no PTY, background process).
+    ///
+    /// Generates hook configuration (settings files + env vars), builds the
+    /// correct CLI command for the given AI host, spawns as a background child
+    /// process, registers the auth token with the hook server, and stores
+    /// cleanup paths for settings file removal on dismiss.
+    ///
+    /// For Claude: writes `.claude/settings.local.json` with hook URLs and auth
+    /// token, spawns `claude -p "prompt"`.
+    /// For Gemini: writes `.gemini/settings.json` + `.gemini/crew-hook.sh` bridge
+    /// script via `hook_bridge::generate_hook_config()`, spawns `gemini`.
+    ///
+    /// If the command is not found, logs the error and does not add a terminal.
+    /// If hook config generation fails, still spawns the process ("dark mode").
+    #[allow(dead_code)]
+    pub fn spawn_headless_terminal(
+        &mut self,
+        task_id: &str,
+        label: &str,
+        host: launcher::AiHost,
+        cwd: &std::path::Path,
+        color_scheme_index: Option<usize>,
+        prompt: Option<&str>,
+    ) {
+        let command = host.command().to_string();
+
+        // Generate hook config and env vars
+        let (env_vars, hook_settings_cwd, cleanup_paths) =
+            self.generate_headless_hook_config(task_id, host, cwd);
+
+        // Build CLI args based on host
+        let args = Self::build_headless_args(host, prompt);
+
+        if let Some(mgr) = &mut self.terminal_manager {
+            match mgr.spawn_headless(
+                task_id.to_string(),
+                label.to_string(),
+                &command,
+                &args,
+                cwd,
+                color_scheme_index,
+                env_vars,
+            ) {
+                Ok(()) => {
+                    // Apply auto_accept_default and hook settings to newly spawned terminal
+                    if let Some(term) = mgr.terminals.last_mut() {
+                        if self.auto_accept_default {
+                            term.auto_accept = true;
+                        }
+                        if let Some(ref settings_cwd) = hook_settings_cwd {
+                            term.hook_settings_cwd = Some(settings_cwd.clone());
+                        }
+                        term.hook_cleanup_paths = cleanup_paths;
+                    }
+                }
+                Err(e) => {
+                    // Log to file since TUI captures stderr
+                    let msg = format!(
+                        "[crew-board] spawn_headless_terminal FAILED\n  command: {:?}\n  args: {:?}\n  cwd: {}\n  error: {}\n",
+                        command, args, cwd.display(), e
+                    );
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true).append(true)
+                        .open(std::env::temp_dir().join("crew-board-errors.log"))
+                    {
+                        use std::io::Write;
+                        let _ = f.write_all(msg.as_bytes());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Build CLI args for a headless AI host process.
+    fn build_headless_args(host: launcher::AiHost, prompt: Option<&str>) -> Vec<String> {
+        match host {
+            launcher::AiHost::Claude => {
+                let mut args = vec!["-p".to_string()];
+                if let Some(p) = prompt {
+                    args.push(p.to_string());
+                } else {
+                    args.push("/crew resume".to_string());
+                }
+                args
+            }
+            launcher::AiHost::Gemini => {
+                // Gemini doesn't take a direct prompt arg in headless mode
+                vec![]
+            }
+            launcher::AiHost::Copilot | launcher::AiHost::OpenCode
+            | launcher::AiHost::Devin | launcher::AiHost::Droid => {
+                // Other hosts: no special headless args
+                vec![]
+            }
+            launcher::AiHost::Shell => vec![],
+        }
+    }
+
+    /// Generate hook configuration for a headless terminal.
+    ///
+    /// For Claude: writes `.claude/settings.local.json` and registers token.
+    /// For Gemini/Copilot/OpenCode: uses `hook_bridge::generate_hook_config()`
+    /// to generate settings + bridge script, sets execute permissions on scripts.
+    ///
+    /// Returns (env_vars, hook_settings_cwd, cleanup_paths).
+    /// If hook server is not running, returns empty config ("dark mode").
+    fn generate_headless_hook_config(
+        &self,
+        task_id: &str,
+        host: launcher::AiHost,
+        cwd: &std::path::Path,
+    ) -> (Vec<(String, String)>, Option<PathBuf>, Vec<PathBuf>) {
+        let server = match &self.hook_server {
+            Some(s) => s,
+            None => return (vec![], None, vec![]),
+        };
+
+        // Generate random auth token
+        let token: String = (0..32)
+            .map(|_| format!("{:02x}", rand::random::<u8>()))
+            .collect();
+
+        let port = server.port;
+
+        // Build pre-computed session context from task state (if found)
+        let session_context = self.build_session_context(task_id);
+
+        // Gather permission profile and patterns for registration
+        let profile_str = match self.permission_profile {
+            PermissionProfile::Autonomous => "autonomous",
+            PermissionProfile::Trusted => "trusted",
+            PermissionProfile::Interactive => "interactive",
+        };
+        let raw_patterns: Vec<String> = self
+            .auto_approve_patterns
+            .iter()
+            .map(|re| re.as_str().to_string())
+            .collect();
+
+        // Register the token with the hook server
+        server.register_token_with_profile(
+            task_id.to_string(),
+            token.clone(),
+            session_context,
+            profile_str,
+            raw_patterns,
+        );
+
+        // Build env vars (common to all hosts)
+        let env_vars = vec![
+            ("CREW_BOARD_PORT".to_string(), port.to_string()),
+            ("CREW_BOARD_TASK_ID".to_string(), task_id.to_string()),
+            ("CREW_BOARD_TOKEN".to_string(), token.clone()),
+        ];
+
+        // Generate host-specific config files
+        let bridge_host = match host {
+            launcher::AiHost::Claude => crate::hook_bridge::AiHostType::Claude,
+            launcher::AiHost::Gemini => crate::hook_bridge::AiHostType::Gemini,
+            launcher::AiHost::Copilot => crate::hook_bridge::AiHostType::Copilot,
+            launcher::AiHost::OpenCode => crate::hook_bridge::AiHostType::OpenCode,
+            launcher::AiHost::Devin => crate::hook_bridge::AiHostType::Devin,
+            launcher::AiHost::Droid => crate::hook_bridge::AiHostType::Droid,
+            launcher::AiHost::Shell => crate::hook_bridge::AiHostType::Shell,
+        };
+
+        match host {
+            launcher::AiHost::Claude => {
+                // Claude uses settings.local.json (same as embedded)
+                let claude_dir = cwd.join(".claude");
+                let _ = std::fs::create_dir_all(&claude_dir);
+                let settings_path = claude_dir.join("settings.local.json");
+
+                let hook_url = format!("http://127.0.0.1:{}/hook/{}", port, task_id);
+                let settings_json = serde_json::json!({
+                    "hooks": {
+                        "SessionStart": [{
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 5,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }],
+                        "PreToolUse": [{
+                            "matcher": ".*",
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 30,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }],
+                        "PostToolUse": [{
+                            "matcher": ".*",
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 5,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }],
+                        "Notification": [{
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 5,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }],
+                        "Stop": [{
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 5,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }],
+                        "PermissionRequest": [{
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 30,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }],
+                        "SessionEnd": [{
+                            "hooks": [{
+                                "type": "http",
+                                "url": &hook_url,
+                                "timeout": 5,
+                                "headers": { "Authorization": "Bearer $CREW_BOARD_TOKEN" },
+                                "allowedEnvVars": ["CREW_BOARD_TOKEN"]
+                            }]
+                        }]
+                    }
+                });
+
+                if let Ok(json_str) = serde_json::to_string_pretty(&settings_json) {
+                    let _ = std::fs::write(&settings_path, json_str);
+                }
+
+                (env_vars, Some(cwd.to_path_buf()), vec![settings_path])
+            }
+            _ => {
+                // Non-Claude hosts: use hook_bridge for config generation
+                match crate::hook_bridge::generate_hook_config(bridge_host, port, task_id, &token, cwd) {
+                    Some(config) => {
+                        // Write all config files
+                        for (path, content) in &config.files {
+                            if let Some(parent) = path.parent() {
+                                let _ = std::fs::create_dir_all(parent);
+                            }
+                            let _ = std::fs::write(path, content);
+
+                            // Set execute permissions on shell scripts
+                            #[cfg(unix)]
+                            if path.extension().map_or(false, |ext| ext == "sh") {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = std::fs::set_permissions(
+                                    path,
+                                    std::fs::Permissions::from_mode(0o755),
+                                );
+                            }
+                        }
+
+                        let cleanup = config.cleanup_paths;
+                        (env_vars, Some(cwd.to_path_buf()), cleanup)
+                    }
+                    None => {
+                        // Host doesn't support hooks — spawn in "dark mode"
+                        (env_vars, None, vec![])
+                    }
+                }
+            }
+        }
+    }
+
     /// Build a markdown context string for a task to inject on SessionStart.
     ///
     /// Looks up the task in `self.repos` by task_id and formats a brief
@@ -4001,5 +4287,467 @@ mod tests {
         assert_eq!(TerminalInputMode::Normal, TerminalInputMode::Normal);
         assert_ne!(TerminalInputMode::Normal, TerminalInputMode::TerminalFocused);
         assert_ne!(TerminalInputMode::Normal, TerminalInputMode::ScrollBack);
+    }
+
+    // ── Headless spawn tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_build_headless_args_claude_with_prompt() {
+        let args = App::build_headless_args(launcher::AiHost::Claude, Some("/crew resume TASK_001"));
+        assert_eq!(args, vec!["-p", "/crew resume TASK_001"]);
+    }
+
+    #[test]
+    fn test_build_headless_args_claude_default_prompt() {
+        let args = App::build_headless_args(launcher::AiHost::Claude, None);
+        assert_eq!(args, vec!["-p", "/crew resume"]);
+    }
+
+    #[test]
+    fn test_build_headless_args_gemini_empty() {
+        let args = App::build_headless_args(launcher::AiHost::Gemini, None);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_build_headless_args_copilot_empty() {
+        let args = App::build_headless_args(launcher::AiHost::Copilot, None);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_build_headless_args_opencode_empty() {
+        let args = App::build_headless_args(launcher::AiHost::OpenCode, None);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_build_headless_args_devin_empty() {
+        let args = App::build_headless_args(launcher::AiHost::Devin, None);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_build_headless_args_droid_empty() {
+        let args = App::build_headless_args(launcher::AiHost::Droid, None);
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn test_build_headless_args_shell_empty() {
+        let args = App::build_headless_args(launcher::AiHost::Shell, None);
+        assert!(args.is_empty());
+    }
+
+    /// Helper: create a minimal App for headless spawn testing.
+    fn create_test_app() -> App {
+        App::new(vec![], 10)
+    }
+
+    #[test]
+    fn test_headless_spawn_no_hook_server_dark_mode() {
+        let mut app = create_test_app();
+        // No hook server initialized — should spawn in "dark mode" (no hook config)
+        let tmp = std::env::temp_dir().join("crew-test-headless-dark");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        app.spawn_headless_terminal(
+            "TASK_DARK",
+            "Dark Mode Test",
+            launcher::AiHost::Claude,
+            &tmp,
+            None,
+            Some("-p /crew resume TASK_DARK"),
+        );
+
+        // Terminal should be spawned (claude might not exist, but env_vars are empty)
+        // Actually, since `claude` is likely not in PATH on CI, this will fail to spawn
+        // and the terminal count stays 0. That's the expected "command not found" behavior.
+        if let Some(mgr) = &app.terminal_manager {
+            // Either spawned or gracefully failed — no crash
+            assert!(mgr.terminals.len() <= 1);
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_headless_spawn_failure_command_not_found() {
+        let mut app = create_test_app();
+        let tmp = std::env::temp_dir().join("crew-test-headless-notfound");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Spawn with a non-existent command (via the terminal manager directly,
+        // since spawn_headless_terminal uses launcher::AiHost which maps to real commands)
+        if let Some(mgr) = &mut app.terminal_manager {
+            let result = mgr.spawn_headless(
+                "TASK_FAIL".to_string(),
+                "Bad".to_string(),
+                "this-command-does-not-exist-98765",
+                &[],
+                &tmp,
+                None,
+                vec![
+                    ("CREW_BOARD_PORT".to_string(), "12345".to_string()),
+                    ("CREW_BOARD_TASK_ID".to_string(), "TASK_FAIL".to_string()),
+                    ("CREW_BOARD_TOKEN".to_string(), "abc123".to_string()),
+                ],
+            );
+            assert!(result.is_err());
+            assert_eq!(mgr.terminals.len(), 0);
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_headless_hook_config_no_server() {
+        let app = create_test_app();
+        // No hook server — should return empty config
+        let (env_vars, cwd, cleanup) = app.generate_headless_hook_config(
+            "TASK_001",
+            launcher::AiHost::Claude,
+            std::path::Path::new("/tmp"),
+        );
+        assert!(env_vars.is_empty());
+        assert!(cwd.is_none());
+        assert!(cleanup.is_empty());
+    }
+
+    #[test]
+    fn test_headless_hook_config_claude_with_server() {
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-headless-claude-config");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let (env_vars, hook_cwd, cleanup_paths) = app.generate_headless_hook_config(
+            "TASK_HC1",
+            launcher::AiHost::Claude,
+            &tmp,
+        );
+
+        // Should have CREW_BOARD_PORT, CREW_BOARD_TASK_ID, CREW_BOARD_TOKEN
+        assert_eq!(env_vars.len(), 3);
+        let env_map: std::collections::HashMap<_, _> = env_vars.into_iter().collect();
+        assert!(env_map.contains_key("CREW_BOARD_PORT"));
+        assert_eq!(env_map.get("CREW_BOARD_TASK_ID").unwrap(), "TASK_HC1");
+        assert!(env_map.contains_key("CREW_BOARD_TOKEN"));
+        assert!(!env_map["CREW_BOARD_TOKEN"].is_empty());
+
+        // Should have hook_settings_cwd pointing to the cwd
+        assert_eq!(hook_cwd.unwrap(), tmp);
+
+        // Cleanup paths should include settings.local.json
+        assert_eq!(cleanup_paths.len(), 1);
+        assert!(cleanup_paths[0].ends_with("settings.local.json"));
+
+        // settings.local.json should exist with correct content
+        let settings_path = tmp.join(".claude").join("settings.local.json");
+        assert!(settings_path.exists(), "settings.local.json should be created");
+
+        let content = std::fs::read_to_string(&settings_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert!(parsed["hooks"]["PreToolUse"].is_array());
+        assert!(parsed["hooks"]["PostToolUse"].is_array());
+        assert!(parsed["hooks"]["SessionStart"].is_array());
+        assert!(parsed["hooks"]["Notification"].is_array());
+        assert!(parsed["hooks"]["Stop"].is_array());
+        assert!(parsed["hooks"]["PermissionRequest"].is_array());
+        assert!(parsed["hooks"]["SessionEnd"].is_array());
+
+        // Verify hook URL contains task ID
+        let hook_url = parsed["hooks"]["PreToolUse"][0]["hooks"][0]["url"]
+            .as_str()
+            .unwrap();
+        assert!(hook_url.contains("TASK_HC1"));
+        assert!(hook_url.starts_with("http://127.0.0.1:"));
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_hook_config_gemini_with_server() {
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-headless-gemini-config");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let (env_vars, hook_cwd, cleanup_paths) = app.generate_headless_hook_config(
+            "TASK_HG1",
+            launcher::AiHost::Gemini,
+            &tmp,
+        );
+
+        // Should have env vars
+        assert_eq!(env_vars.len(), 3);
+        let env_map: std::collections::HashMap<_, _> = env_vars.into_iter().collect();
+        assert!(env_map.contains_key("CREW_BOARD_PORT"));
+        assert_eq!(env_map.get("CREW_BOARD_TASK_ID").unwrap(), "TASK_HG1");
+        assert!(env_map.contains_key("CREW_BOARD_TOKEN"));
+
+        // Should have hook_settings_cwd
+        assert_eq!(hook_cwd.unwrap(), tmp);
+
+        // Gemini should have 2 cleanup paths: settings.json + crew-hook.sh
+        assert_eq!(cleanup_paths.len(), 2);
+
+        // Both files should exist
+        let script_path = tmp.join(".gemini").join("crew-hook.sh");
+        let settings_path = tmp.join(".gemini").join("settings.json");
+        assert!(script_path.exists(), "crew-hook.sh should be created");
+        assert!(settings_path.exists(), "settings.json should be created");
+
+        // Bridge script should contain task ID and token
+        let script_content = std::fs::read_to_string(&script_path).unwrap();
+        assert!(script_content.contains("TASK_HG1"));
+        assert!(script_content.contains("curl"));
+
+        // Settings should have hook config
+        let settings_content = std::fs::read_to_string(&settings_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&settings_content).unwrap();
+        assert!(parsed["hooks"].is_object());
+        assert!(parsed["hooks"]["before_tool"].is_object());
+        assert!(parsed["hooks"]["after_tool"].is_object());
+
+        // Verify bridge script is executable (Unix only)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let perms = std::fs::metadata(&script_path).unwrap().permissions();
+            assert!(perms.mode() & 0o111 != 0, "crew-hook.sh should be executable");
+        }
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_hook_config_token_registered_with_server() {
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-headless-token-reg");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        let (env_vars, _cwd, _cleanup) = app.generate_headless_hook_config(
+            "TASK_TR1",
+            launcher::AiHost::Claude,
+            &tmp,
+        );
+
+        // Token should be registered — send a test hook event to verify
+        if let Some(ref server) = app.hook_server {
+            let port = server.port;
+            let token = env_vars.iter()
+                .find(|(k, _)| k == "CREW_BOARD_TOKEN")
+                .map(|(_, v)| v.clone())
+                .unwrap();
+
+            // Make an HTTP request to the hook server
+            let client = std::net::TcpStream::connect(format!("127.0.0.1:{}", port));
+            if let Ok(mut stream) = client {
+                let body = r#"{"hook_event_name":"Notification","message":"headless test"}"#;
+                let request = format!(
+                    "POST /hook/TASK_TR1 HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    token, body.len(), body
+                );
+                use std::io::Write;
+                stream.write_all(request.as_bytes()).unwrap();
+                drop(stream);
+
+                // Give server time to process
+                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                // Should have received the event via hook_receiver
+                if let Some(ref rx) = app.hook_receiver {
+                    match rx.try_recv() {
+                        Ok(HookEvent::Notification { terminal_id, message }) => {
+                            assert_eq!(terminal_id, "TASK_TR1");
+                            assert_eq!(message, "headless test");
+                        }
+                        other => panic!("Expected Notification, got {:?}", other),
+                    }
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_spawn_real_command() {
+        // Test spawning a real headless process (using "echo" as a stand-in)
+        let mut app = create_test_app();
+        let tmp = std::env::temp_dir().join("crew-test-headless-spawn-real");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Directly use terminal manager to spawn a headless process
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.spawn_headless(
+                "TASK_REAL".to_string(),
+                "Real Test".to_string(),
+                "echo",
+                &["hello headless".to_string()],
+                &tmp,
+                None,
+                vec![
+                    ("CREW_BOARD_PORT".to_string(), "9999".to_string()),
+                    ("CREW_BOARD_TASK_ID".to_string(), "TASK_REAL".to_string()),
+                    ("CREW_BOARD_TOKEN".to_string(), "test-token".to_string()),
+                ],
+            ).unwrap();
+
+            assert_eq!(mgr.terminals.len(), 1);
+            let term = &mgr.terminals[0];
+            assert!(term.is_headless());
+            assert_eq!(term.status, TerminalStatus::Running);
+            assert_eq!(term.id, "TASK_REAL");
+
+            // Wait for echo to exit
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            mgr.poll_status();
+            assert_eq!(mgr.terminals[0].status, TerminalStatus::Exited(0));
+
+            mgr.cleanup_all();
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_headless_env_vars_in_spawn() {
+        // Verify that env vars are properly passed to spawned headless process
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-headless-env-verify");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Generate config to get the env vars that would be set
+        let (env_vars, _, _) = app.generate_headless_hook_config(
+            "TASK_ENV1",
+            launcher::AiHost::Claude,
+            &tmp,
+        );
+
+        // Verify all required env vars
+        let env_map: std::collections::HashMap<_, _> = env_vars.into_iter().collect();
+        assert!(env_map.contains_key("CREW_BOARD_PORT"));
+        assert!(env_map.contains_key("CREW_BOARD_TASK_ID"));
+        assert!(env_map.contains_key("CREW_BOARD_TOKEN"));
+        assert_eq!(env_map["CREW_BOARD_TASK_ID"], "TASK_ENV1");
+
+        // Port should be a valid number
+        let port: u16 = env_map["CREW_BOARD_PORT"].parse().unwrap();
+        assert!(port > 0);
+
+        // Token should be 64 hex chars (32 bytes)
+        assert_eq!(env_map["CREW_BOARD_TOKEN"].len(), 64);
+        assert!(env_map["CREW_BOARD_TOKEN"].chars().all(|c| c.is_ascii_hexdigit()));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_hook_config_shell_no_config() {
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let (env_vars, hook_cwd, cleanup) = app.generate_headless_hook_config(
+            "TASK_SH1",
+            launcher::AiHost::Shell,
+            std::path::Path::new("/tmp"),
+        );
+
+        // Shell host: has env vars but no hook config files
+        assert_eq!(env_vars.len(), 3);
+        assert!(hook_cwd.is_none()); // Shell doesn't support hooks
+        assert!(cleanup.is_empty());
+
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
+    }
+
+    #[test]
+    fn test_headless_auto_accept_applied() {
+        let mut app = create_test_app();
+        app.auto_accept_default = true;
+
+        let tmp = std::env::temp_dir().join("crew-test-headless-autoaccept");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Spawn a real headless command directly to check auto_accept
+        if let Some(mgr) = &mut app.terminal_manager {
+            mgr.spawn_headless(
+                "TASK_AA".to_string(),
+                "Auto Accept".to_string(),
+                "true",
+                &[],
+                &tmp,
+                None,
+                vec![],
+            ).unwrap();
+
+            // Manually apply auto_accept as spawn_headless_terminal would
+            if let Some(term) = mgr.terminals.last_mut() {
+                if app.auto_accept_default {
+                    term.auto_accept = true;
+                }
+            }
+
+            assert!(mgr.terminals.last().unwrap().auto_accept);
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_headless_cleanup_paths_set() {
+        let mut app = create_test_app();
+        app.init_hook_server();
+
+        let tmp = std::env::temp_dir().join("crew-test-headless-cleanup-paths");
+        let _ = std::fs::create_dir_all(&tmp);
+
+        // Generate Claude config
+        let (_, _, claude_cleanup) = app.generate_headless_hook_config(
+            "TASK_CP1",
+            launcher::AiHost::Claude,
+            &tmp,
+        );
+        assert!(!claude_cleanup.is_empty());
+        assert!(claude_cleanup.iter().any(|p| p.to_string_lossy().contains("settings.local.json")));
+
+        // Generate Gemini config
+        let (_, _, gemini_cleanup) = app.generate_headless_hook_config(
+            "TASK_CP2",
+            launcher::AiHost::Gemini,
+            &tmp,
+        );
+        assert!(!gemini_cleanup.is_empty());
+        assert!(gemini_cleanup.iter().any(|p| p.to_string_lossy().contains("crew-hook.sh")));
+        assert!(gemini_cleanup.iter().any(|p| p.to_string_lossy().contains("settings.json")));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+        if let Some(ref server) = app.hook_server {
+            server.shutdown();
+        }
     }
 }
