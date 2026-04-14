@@ -858,7 +858,9 @@ def workflow_get_state(task_id: Optional[str] = None) -> dict[str, Any]:
     completed = set(_normalize_phase(p) for p in state.get("phases_completed", []))
     if state.get("phase"):
         completed.add(_normalize_phase(state["phase"]))
-    missing = [p for p in REQUIRED_PHASES if p not in completed]
+    mode_phases = state.get("workflow_mode", {}).get("phases")
+    required = [_normalize_phase(p) for p in mode_phases] if mode_phases else REQUIRED_PHASES
+    missing = [p for p in required if p not in completed]
     is_complete = len(missing) == 0
 
     return {
@@ -970,7 +972,9 @@ def workflow_complete_phase(task_id: Optional[str] = None) -> dict[str, Any]:
 
     completed = set(_normalize_phase(p) for p in state.get("phases_completed", []))
     completed.add(_normalize_phase(current))
-    missing = [p for p in REQUIRED_PHASES if p not in completed]
+    mode_phases = state.get("workflow_mode", {}).get("phases")
+    required = [_normalize_phase(p) for p in mode_phases] if mode_phases else REQUIRED_PHASES
+    missing = [p for p in required if p not in completed]
 
     return {
         "success": True,
