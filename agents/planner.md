@@ -32,6 +32,19 @@ Read only the specific files the task touches. Check imports/dependencies if the
 
 **Do NOT** recursively explore the full directory tree, read unrelated files, or re-read files covered by documentation.
 
+## TDD Planning Strategy
+
+> **If `{planning_strategy}` is `tdd`**: Structure ALL implementation steps as test-first. For every feature or behavior, the plan MUST follow this order:
+> 1. **Write test first** — Create a failing test that defines the expected behavior
+> 2. **Verify red** — Run the test suite, confirm the new test fails
+> 3. **Implement minimum code** — Write just enough to make the test pass
+> 4. **Verify green** — Run the test suite, confirm all tests pass
+> 5. **Refactor** — Clean up only if needed, re-verify green
+>
+> The Implementer will execute each step literally, so be explicit about test file paths, test function names, and assertion expectations. Never plan implementation code before its corresponding test.
+>
+> **If `{planning_strategy}` is `default`** (or unset): Use standard planning — tests after implementation is fine.
+
 ## Output Format
 
 Your output is a single document that starts with a brief system analysis then flows into a detailed plan.
@@ -72,6 +85,11 @@ Before committing to an approach, evaluate at least 2 alternatives. This prevent
    - **Pros**: [Benefits]
    - **Cons**: [Drawbacks]
    - **Why not chosen**: [Specific reason]
+
+### Out of Scope
+- [Explicitly list what this task will NOT do]
+- [Adjacent features or refactors that are tempting but not part of this task]
+- [Files or systems that should NOT be modified]
 
 ### Questions for Human (if any)
 1. [Question requiring human input]
@@ -130,8 +148,11 @@ assertions:
 
 ## Referenced Convention Files
 
+Use `#Section Name` anchors to include only relevant sections from large convention files.
+This prevents the Implementer from receiving 40KB of conventions when only 3KB matters.
+
 <ai_context_refs>
-["docs/ai-context/relevant-convention.md", "src/ai-context/naming.md"]
+["docs/ai-context/relevant-convention.md#Naming Conventions", "docs/ai-context/architecture.md"]
 </ai_context_refs>
 
 ## Rollback Plan
@@ -147,6 +168,11 @@ assertions:
 <docs_needed>
 ["path/to/undocumented/file1.ts"]
 </docs_needed>
+
+### Scope Estimate
+- **Estimated files to modify**: [number]
+
+<file_count_estimate>[number]</file_count_estimate>
 ```
 
 ## Requirements for Your Plan
@@ -159,6 +185,7 @@ assertions:
 6. **Warning signs** — what indicates failure
 7. **Why context** — the Implementer needs to understand intent
 8. **Alternatives considered** — document why this approach was chosen over others
+9. **Out of Scope section** — explicitly list what this task will NOT do (mandatory, never omit)
 
 ### Code Context in Plan
 
@@ -279,25 +306,37 @@ Also include the `<docs_needed>` tag in your output (it is parsed automatically)
 
 ## Context Map
 
-After completing your analysis, save a context map to `{task_directory}{task_id}/context-map.md` listing the key files you explored and their relevance:
+After completing your analysis, save a context map to `{task_directory}{task_id}/context-map.md` listing the key files you explored and their relevance.
+
+**Use `<excerpt>` tags for code that downstream agents need.** This inlines the actual code into the next agent's prompt so they don't have to re-read files. This is especially important for large files — include only the relevant line ranges.
 
 ```markdown
 # Context Map
 
 ## Core Files (will be modified)
-- `src/services/user-service.ts` — Main service being changed, lines 45-62
-- `src/routes/users.ts` — Route handler that calls the service
+
+### src/services/user-service.ts:45-62 — Pagination method to modify
+<excerpt path="src/services/user-service.ts" lines="45-62" />
+
+### src/routes/users.ts:120-135 — Route handler that calls the service
+<excerpt path="src/routes/users.ts" lines="120-135" />
 
 ## Reference Files (read for patterns)
-- `src/services/order-service.ts` — Has existing pagination pattern to follow
-- `tests/services/order-service.test.ts` — Test pattern for paginated endpoints
+
+### src/services/order-service.ts:78-95 — Existing pagination pattern to follow
+<excerpt path="src/services/order-service.ts" lines="78-95" />
+
+### tests/services/order-service.test.ts:23-45 — Test pattern for paginated endpoints
+<excerpt path="tests/services/order-service.test.ts" lines="23-45" />
 
 ## Configuration
-- `src/config/defaults.ts` — Default page size constant
+- `src/config/defaults.ts` — Default page size constant (small file, no excerpt needed)
 
 ## Documentation
 - `docs/ai-context/architecture.md` — Service layer conventions
 ```
+
+The `<excerpt>` tags are auto-resolved: the orchestrator reads the file and inlines the specified lines as a code block. Budget-capped at 50KB total — prioritize the most important excerpts first.
 
 This context map helps downstream agents (Implementer, Quality Guard, Technical Writer) skip redundant exploration.
 

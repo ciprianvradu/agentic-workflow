@@ -1178,7 +1178,7 @@ def main():
     # -----------------------------------------------------------------------
     paths_fixed = False
     if wsl and worktree_abs.startswith("/mnt/"):
-        fix_script = os.path.join(main_repo_abs, "scripts", "fix-worktree-paths.py")
+        fix_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fix-worktree-paths.py")
         if os.path.isfile(fix_script):
             run_cmd(["python3", fix_script, task_id], dry_run, cwd=main_repo_abs, warn_only=True)
             paths_fixed = True

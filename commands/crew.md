@@ -60,6 +60,18 @@ Loop on `result.next` from the orchestrator. **If `next.instructions` exists, fo
 1. Run: `python3 {__scripts_dir__}/crew_orchestrator.py agent-done --task-id <id> --agent <next.agent> --output-file <next.output_file>`
 2. Continue with `result.next`
 
+#### phase_stuck
+
+A phase has repeatedly failed to produce output (circuit breaker triggered after max attempts).
+
+1. Show the stuck phase: `result.phase` and attempt count: `result.attempts` / `result.max_attempts`
+2. Show `result.message` to explain what happened
+3. If `result.recovery_diagnostic` exists, show `result.recovery_diagnostic.likely_cause` and `result.recovery_diagnostic.suggestion`
+4. Ask user (AskUserQuestion): **Retry** / **Skip this phase** / **Abort workflow**
+   - **Retry**: Run `python3 {__scripts_dir__}/crew_orchestrator.py checkpoint-done --task-id <id> --decision approve --notes "Manual retry of stuck phase"`. Reset spawn attempts by updating state, then continue with `result.next`.
+   - **Skip**: Run `python3 {__scripts_dir__}/crew_orchestrator.py checkpoint-done --task-id <id> --decision skip --notes "Skipped stuck phase: <result.phase>"`. Continue with `result.next`.
+   - **Abort**: Stop the workflow. Show the phase and attempt count, then exit.
+
 #### agent_blocked
 
 The agent reported it cannot proceed. The phase is NOT completed.
@@ -100,7 +112,10 @@ Run: `python3 {__scripts_dir__}/crew_orchestrator.py impl-action --task-id <id> 
 1. Run: `python3 {__scripts_dir__}/crew_orchestrator.py complete --task-id <id> [--files <files>]`
 2. Show cost summary, suggest commit message
 3. Handle worktree/beads/Jira actions from result
-4. If `complete_with_async_docs`: spawn Technical Writer in background with `result.async_docs.assembled_prompt`
+4. If `result.auto_pr` exists:
+   - If `result.auto_pr.policy` is `"auto"`: Push branch and run `result.auto_pr.command` with the PR body automatically
+   - If `result.auto_pr.policy` is `"prompt"`: Ask user if they want to create a PR, show the title and base branch
+5. If `complete_with_async_docs`: spawn Technical Writer in background with `result.async_docs.assembled_prompt`
 
 ### LLM Triage (only when needed)
 

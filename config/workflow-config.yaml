@@ -58,6 +58,7 @@ max_iterations:
   planning: 3                  # Architect -> Developer -> Reviewer -> Skeptic cycles
   implementation: 5            # Retries per major step
   quality_guard: 2              # Adjustment attempts before suggesting restart
+  phase_spawn_attempts: 3
 
 # Model configuration per workflow mode
 # Claude: opus, sonnet, haiku  |  Gemini: gemini-2.0-flash  |  Copilot: uses provider default  |  OpenCode: uses configured provider
@@ -162,10 +163,37 @@ workflow_modes:
         - remove dead code
         - one-line
         - trivial
+        - add config option
+        - add flag
+        - add env var
+        - add environment variable
+        - update readme
+        - update docs
+        - update documentation
+        - fix error message
+        - fix log message
+        - fix warning
+        - add log
+        - add logging
+        - move file
+        - rename file
+        - extract function
+        - extract method
+        - inline
+        - remove unused
+        - cleanup
+        - clean up
+        - fix path
+        - fix url
+        - update url
       patterns:
         - "^fix (a |the )?broken test"
         - "^change .+ from .+ to"
         - "^set .+ to"
+        - "^add .+ to (config|settings|env)"
+        - "^(update|change|fix) (the )?(readme|docs|changelog)"
+        - "^move .+ (to|from|into)"
+        - "^rename .+ to"
       max_files_affected: 3
       no_tests_required: true
 
@@ -386,6 +414,12 @@ gemini_research:
     gemini_unavailable: fallback    # fallback | warn | fail
     gemini_timeout: 120             # Seconds before timing out Gemini analysis
 
+# Planning Strategy
+# Controls how the Planner structures implementation steps
+planning_strategy: default          # default | tdd
+                                    # tdd: test-first (write test → red → implement → green → refactor)
+                                    # Override per-task with --tdd flag
+
 # Loop Mode (Ralph Wiggum-style autonomous iteration)
 # When enabled, agents loop until completion instead of stopping after one attempt
 loop_mode:
@@ -458,6 +492,17 @@ resilience:
   recovery:
     reset_on_success: true          # Reset consecutive errors after success
     clear_cooldown_on_success: true # Clear cooldown immediately on success
+
+# Context Passing Optimization
+# Controls how context is assembled and passed between agents
+context:
+  # Max bytes for auto-resolved <excerpt> tags in context-map.md
+  # Excerpts beyond this budget show a "truncated" notice
+  max_excerpt_bytes: 51200        # 50KB
+
+  # Section filtering: trim planner.md to only relevant ## sections
+  # when passing to downstream agents (implementer, quality_guard, etc.)
+  section_filtering: true         # true | false — disable to pass full outputs
 
 # Context Management
 # Tools for managing context pressure during long workflows
@@ -730,6 +775,7 @@ worktree:
   base_path: "../{repo_name}-worktrees"
   branch_prefix: "crew/"
   cleanup_on_complete: prompt  # prompt | auto | never
+  auto_pr: prompt              # prompt | auto | never — create PR via `gh pr create` on workflow completion
   auto_launch: prompt          # prompt | auto | never
   terminal_launch_mode: auto   # auto | window | tab — auto uses platform default (tmux->window, WT->tab, macOS->window)
   ai_host: auto                # auto | claude | gemini | copilot | opencode | devin

@@ -103,6 +103,14 @@ Add deviation note:
   - **DEVIATION**: [What was changed and why]
 ```
 
+## Scope Discipline
+
+When executing a REVISE pass (re-running after reviewer/architect feedback):
+- **Stay within the original plan's scope** — only fix the issues raised in the review
+- **Do NOT add features, refactor unrelated code, or "improve" things not mentioned in the feedback**
+- **Do NOT expand to files not in the original plan** unless the review explicitly requires it
+- If the fix requires touching new files, flag it as a concern before proceeding
+
 ## Checkpoint Protocol
 
 When progress reaches a checkpoint (25%, 50%, 75%):

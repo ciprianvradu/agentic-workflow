@@ -156,6 +156,26 @@ This is what `install.sh` and `install-copilot.ps1` call under the hood.
 /crew "Add user authentication with JWT"
 ```
 
+### Parallel work with git worktrees
+Run multiple tasks simultaneously in isolated branches:
+```bash
+# Terminal 1
+/crew-worktree "Add user profiles"
+
+# Terminal 2
+/crew-worktree "Refactor payment processing"
+
+# Terminal 3
+/crew-worktree "Fix search performance"
+```
+Each creates an isolated git worktree with its own branch. Run `/crew resume` from each worktree to start the workflow. Use the crew-board TUI for a dashboard view of all parallel agents.
+
+### Test-driven development (TDD mode)
+```bash
+/crew --tdd "Add rate limiting to API endpoints"
+```
+The `--tdd` flag tells the Planner to structure every step as: write test → verify red → implement → verify green. Implies `--loop-mode --verify tests`.
+
 ### Loop mode (autonomous until tests pass)
 ```bash
 /crew --loop-mode --verify tests "Fix all failing tests"
@@ -175,16 +195,6 @@ Migrate all API endpoints to v2:
 - Add backward compatibility
 - Update all tests
 ```
-
-### Parallel work with git worktrees
-```bash
-# Claude Code
-/crew-worktree "Add user profiles"
-
-# Copilot CLI / Gemini CLI
-@crew-worktree "Add user profiles"
-```
-Creates an isolated worktree — then run `/crew resume TASK_XXX` from there.
 
 ### With beads issue tracking
 ```bash
@@ -1036,6 +1046,48 @@ See the `/examples` directory:
 - `fix-tests.md` - Loop mode example for autonomous test fixing
 - `implement-caching.md` - Multi-requirement feature implementation
 
+## Reliability & Recovery
+
+The crew workflow has multiple layers of resilience built in. Here's how to use them.
+
+### State Persistence
+Every workflow persists its state to `.tasks/TASK_XXX/`:
+- **`state.json`** — Phase progress, concerns, human decisions, implementation status
+- **`RESUME.md`** — Auto-generated snapshot after each phase (human-readable crash recovery)
+- **`interactions.jsonl`** — Append-only log of all human guidance and agent outputs
+- **`{phase}.md`** — Each agent's output (e.g., `planner.md`, `architect.md`, `implementer.md`)
+
+### Circuit Breaker
+If a phase fails to produce output, the framework tracks spawn attempts. After 3 attempts (configurable via `max_iterations.phase_spawn_attempts`), it stops retrying and asks you to **Retry / Skip / Abort**. You'll also see diagnostic info about why the phase likely failed.
+
+### Stale Phase Detection
+On resume, the framework checks if any phase has been active for >30 minutes without output. If detected, it warns you and suggests re-running the stale phase.
+
+### Model Resilience
+If a model hits rate limits or errors:
+- **Exponential backoff**: 1min → 5min → 25min between retries
+- **Fallback chain**: Opus 4.6 → Opus 4 → Sonnet 4 → Gemini (configurable)
+- **Cooldown tracking**: Models with errors are temporarily excluded
+- Check status: the MCP tool `workflow_get_resilience_status()` shows all models' health
+
+### Session Crash Recovery
+If your session crashes mid-workflow:
+1. Run `/crew resume` — auto-detects the most recent incomplete task
+2. The framework validates all prior phase outputs exist
+3. Missing outputs are flagged with recovery suggestions
+4. The workflow picks up from where it left off
+
+### Concurrent Session Isolation
+A `FileLock` prevents two sessions from working on the same task simultaneously. If a lock is stale (previous session crashed), the next session detects and handles it.
+
+### Error Pattern Learning
+The framework remembers error → solution mappings across tasks. When the same error occurs again, it suggests the solution that worked before (`workflow_match_error()`).
+
+### Diagnostic Commands
+- **`/crew status`** — List all tasks and their current phase
+- **`/crew resume`** — Resume the most recent incomplete task with health checks
+- **`/crew-status`** — Detailed task status with phase-by-phase breakdown
+
 ## Troubleshooting
 
 ### Workflow stuck in loop
@@ -1043,6 +1095,15 @@ Check `.tasks/TASK_XXX/errors.log` for repeated errors. The workflow escalates a
 ```bash
 /crew-resume TASK_XXX
 ```
+
+### Phase stuck (circuit breaker)
+If you see "phase_stuck" — the phase failed 3+ times. Options:
+- **Retry**: Give it another chance (maybe a transient issue)
+- **Skip**: Move to the next phase (useful if the stuck phase is optional)
+- **Abort**: Stop the workflow entirely
+
+### Session crashed before phase completed
+The framework now tracks first-phase failures. On resume, you'll see a diagnostic explaining what likely happened (rate limit, context overflow, etc.) and the recovery suggestion.
 
 ### Gemini analysis timeout
 Increase the timeout in config:

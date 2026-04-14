@@ -164,7 +164,8 @@ DEFAULT_CONFIG = {
     "max_iterations": {
         "planning": 3,
         "implementation": 5,
-        "quality_guard": 2
+        "quality_guard": 2,
+        "phase_spawn_attempts": 3
     },
     "models": {
         "default": "opus",

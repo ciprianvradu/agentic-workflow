@@ -95,6 +95,11 @@ class TestCrewParseArgs:
         result = crew_parse_args('--verify tests "Fix tests"')
         assert result["options"]["verify"] == "tests"
 
+    def test_task_with_tdd(self):
+        result = crew_parse_args('--tdd "Add rate limiting"')
+        assert result["options"]["tdd"] is True
+        assert result["task_description"] == "Add rate limiting"
+
     def test_task_with_no_checkpoints(self):
         result = crew_parse_args('--no-checkpoints "Overnight task"')
         assert result["options"]["no_checkpoints"] is True
@@ -303,6 +308,13 @@ class TestCrewApplyConfigOverrides:
         assert result["overrides"]["auto_actions"]["git_add"] is True
         assert result["overrides"]["auto_actions"]["git_commit"] is True
         assert result["overrides"]["auto_actions"]["git_push"] is False
+
+    def test_tdd_enables_loop_mode_and_tests(self):
+        result = crew_apply_config_overrides({"tdd": True})
+        assert result["overrides"]["loop_mode"]["enabled"] is True
+        assert result["overrides"]["loop_mode"]["verification"]["method"] == "tests"
+        assert result["overrides"]["planning_strategy"] == "tdd"
+        assert any("planning_strategy = tdd" in a for a in result["applied"])
 
     def test_profile_standard_sets_permission_profile_key(self):
         result = crew_apply_config_overrides({"profile": "standard"})
@@ -2385,3 +2397,272 @@ class TestAgentTimeoutInSpawnInstructions:
 
         assert result.get("action") == "spawn_agent"
         assert "timeout_seconds" not in result
+
+
+# ============================================================================
+# Context optimization tests (excerpts, section filtering, convention anchors)
+# ============================================================================
+
+class TestExtractSections:
+    """Tests for _extract_sections helper."""
+
+    def test_extract_specific_sections(self):
+        from agentic_workflow_server.orchestration_tools import _extract_sections
+
+        content = """# Task: Test
+
+## System Analysis
+
+Some analysis here.
+
+## Implementation Plan
+
+Step 1: Do something.
+Step 2: Do another thing.
+
+## Alternatives Considered
+
+Alternative A: blah
+
+## Assertions
+
+- assert: file_exists
+"""
+        result = _extract_sections(content, ["Implementation Plan", "Assertions"])
+        assert "## Implementation Plan" in result
+        assert "Step 1: Do something." in result
+        assert "## Assertions" in result
+        assert "## System Analysis" not in result
+        assert "## Alternatives Considered" not in result
+
+    def test_extract_preserves_preamble(self):
+        from agentic_workflow_server.orchestration_tools import _extract_sections
+
+        content = """# Task: My Task
+
+Some intro text.
+
+## Section A
+
+Content A.
+
+## Section B
+
+Content B.
+"""
+        result = _extract_sections(content, ["Section B"])
+        assert "# Task: My Task" in result
+        assert "## Section B" in result
+        assert "Content B." in result
+        assert "## Section A" not in result
+
+    def test_extract_case_insensitive(self):
+        from agentic_workflow_server.orchestration_tools import _extract_sections
+
+        content = "## implementation plan\n\nSome content.\n\n## Other\n\nOther content."
+        result = _extract_sections(content, ["Implementation Plan"])
+        assert "implementation plan" in result
+        assert "Some content." in result
+        assert "## Other" not in result
+
+    def test_extract_empty_filter_returns_preamble_only(self):
+        from agentic_workflow_server.orchestration_tools import _extract_sections
+
+        content = "Preamble.\n\n## Section A\n\nContent A."
+        result = _extract_sections(content, [])
+        assert "Preamble." in result
+        assert "## Section A" not in result
+
+
+class TestResolveExcerpts:
+    """Tests for _resolve_excerpts helper."""
+
+    def test_resolve_excerpt_tag(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _resolve_excerpts, _REPO_ROOT
+        from unittest.mock import patch
+
+        # Create a test file
+        test_file = tmp_path / "test.py"
+        test_file.write_text("line1\nline2\nline3\nline4\nline5\n")
+
+        content = f'<excerpt path="{test_file}" lines="2-4" />'
+        result = _resolve_excerpts(content, {})
+        assert "line2" in result
+        assert "line3" in result
+        assert "line4" in result
+        assert "line1" not in result
+        assert "line5" not in result
+        assert "```python" in result
+
+    def test_resolve_excerpt_missing_file(self):
+        from agentic_workflow_server.orchestration_tools import _resolve_excerpts
+
+        content = '<excerpt path="/nonexistent/file.py" lines="1-10" />'
+        result = _resolve_excerpts(content, {})
+        assert "not found" in result
+
+    def test_resolve_excerpt_budget_cap(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _resolve_excerpts
+
+        test_file = tmp_path / "big.txt"
+        test_file.write_text("x" * 1000 + "\n")
+
+        content = f'<excerpt path="{test_file}" lines="1-1" />'
+        # Set a tiny budget
+        result = _resolve_excerpts(content, {"context": {"max_excerpt_bytes": 100}})
+        assert "truncated" in result or "x" in result
+
+    def test_resolve_multiple_excerpts(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _resolve_excerpts
+
+        f1 = tmp_path / "a.py"
+        f1.write_text("alpha\nbeta\ngamma\n")
+        f2 = tmp_path / "b.py"
+        f2.write_text("one\ntwo\nthree\n")
+
+        content = f'<excerpt path="{f1}" lines="1-2" />\n<excerpt path="{f2}" lines="2-3" />'
+        result = _resolve_excerpts(content, {})
+        assert "alpha" in result
+        assert "beta" in result
+        assert "two" in result
+        assert "three" in result
+
+    def test_no_excerpt_tags_passthrough(self):
+        from agentic_workflow_server.orchestration_tools import _resolve_excerpts
+
+        content = "Just regular markdown with no tags."
+        result = _resolve_excerpts(content, {})
+        assert result == content
+
+
+class TestConventionFileAnchors:
+    """Tests for #section anchors in convention file paths."""
+
+    def test_anchor_extracts_section(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _assemble_agent_prompt
+
+        # Create a convention file with multiple sections
+        conv_file = tmp_path / "conventions.md"
+        conv_file.write_text(
+            "# Conventions\n\n"
+            "## Naming\n\nUse camelCase.\n\n"
+            "## Error Handling\n\nAlways catch exceptions.\n\n"
+            "## Testing\n\nWrite unit tests.\n"
+        )
+
+        # Create a minimal agent prompt
+        agent_file = tmp_path / "agent.md"
+        agent_file.write_text("You are a test agent.")
+
+        result = _assemble_agent_prompt(
+            agent="implementer",
+            agent_prompt_path=str(agent_file),
+            context_files=[],
+            convention_files=[f"{conv_file}#Testing"],
+            variables={},
+            task_dir=tmp_path,
+        )
+
+        assert "Write unit tests." in result
+        assert "## Naming" not in result
+        assert "Use camelCase." not in result
+
+    def test_no_anchor_includes_full_file(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _assemble_agent_prompt
+
+        conv_file = tmp_path / "conventions.md"
+        conv_file.write_text("## Section A\n\nContent A.\n\n## Section B\n\nContent B.\n")
+
+        agent_file = tmp_path / "agent.md"
+        agent_file.write_text("You are a test agent.")
+
+        result = _assemble_agent_prompt(
+            agent="implementer",
+            agent_prompt_path=str(agent_file),
+            context_files=[],
+            convention_files=[str(conv_file)],
+            variables={},
+            task_dir=tmp_path,
+        )
+
+        assert "Content A." in result
+        assert "Content B." in result
+
+
+class TestSectionFilteredContextFiles:
+    """Tests for section-filtered context passing."""
+
+    def test_implementer_gets_filtered_planner(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _get_context_files
+
+        task_dir = tmp_path / "TASK_TEST"
+        task_dir.mkdir()
+
+        # Create required files
+        (task_dir / "task.md").write_text("Test task")
+        (task_dir / "planner.md").write_text(
+            "## System Analysis\n\nAnalysis.\n\n"
+            "## Implementation Plan\n\nPlan steps.\n\n"
+            "## Alternatives Considered\n\nAlts.\n"
+        )
+        (task_dir / "context-map.md").write_text("# Context Map\n")
+
+        state = {"phases_completed": ["planner"], "phase": "implementer"}
+        files = _get_context_files("implementer", state, task_dir)
+
+        # Find the planner.md entry
+        planner_entry = None
+        for path, sections in files:
+            if "planner.md" in path:
+                planner_entry = (path, sections)
+                break
+
+        assert planner_entry is not None
+        # Implementer should get filtered sections
+        assert planner_entry[1] is not None
+        assert "Implementation Plan" in planner_entry[1]
+        assert "System Analysis" not in planner_entry[1]
+        assert "Alternatives Considered" not in planner_entry[1]
+
+    def test_architect_gets_full_planner(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _get_context_files
+
+        task_dir = tmp_path / "TASK_TEST2"
+        task_dir.mkdir()
+        (task_dir / "task.md").write_text("Test task")
+        (task_dir / "planner.md").write_text("## System Analysis\n\nContent.\n")
+
+        state = {"phases_completed": ["planner"], "phase": "architect"}
+        files = _get_context_files("architect", state, task_dir)
+
+        planner_entry = None
+        for path, sections in files:
+            if "planner.md" in path:
+                planner_entry = (path, sections)
+                break
+
+        assert planner_entry is not None
+        # Architect should get full (None = no filtering)
+        assert planner_entry[1] is None
+
+    def test_section_filtering_disabled_by_config(self, tmp_path):
+        from agentic_workflow_server.orchestration_tools import _get_context_files
+
+        task_dir = tmp_path / "TASK_TEST3"
+        task_dir.mkdir()
+        (task_dir / "task.md").write_text("Test task")
+        (task_dir / "planner.md").write_text("## Stuff\n\nContent.\n")
+
+        state = {"phases_completed": ["planner"], "phase": "implementer"}
+        config = {"context": {"section_filtering": False}}
+        files = _get_context_files("implementer", state, task_dir, config)
+
+        planner_entry = None
+        for path, sections in files:
+            if "planner.md" in path:
+                planner_entry = (path, sections)
+                break
+
+        assert planner_entry is not None
+        # Filtering disabled = None (full file)
+        assert planner_entry[1] is None
