@@ -254,6 +254,119 @@ class TestWorkflowTransitions:
         assert result["success"] is True
         assert result["iteration"] == 2  # Incremented
 
+    def test_loopback_from_architect_to_planner(self, clean_tasks_dir):
+        """Architect with has_revise_signal can loop back to planner."""
+        workflow_initialize(task_id="TASK_TEST_012b")
+        workflow_transition("planner", task_id="TASK_TEST_012b")
+        workflow_transition("architect", task_id="TASK_TEST_012b")
+
+        # Set revise signal (as the orchestrator would when architect emits REVISE)
+        task_dir = find_task_dir("TASK_TEST_012b")
+        state = _load_state(task_dir)
+        state["has_revise_signal"] = True
+        _save_state(task_dir, state)
+
+        result = workflow_transition("planner", task_id="TASK_TEST_012b")
+        assert result["success"] is True
+        assert result["iteration"] == 2
+
+    def test_loopback_from_skeptic_to_planner(self, clean_tasks_dir):
+        """Skeptic with concerns can loop back to planner."""
+        workflow_initialize(task_id="TASK_TEST_012c")
+        workflow_transition("planner", task_id="TASK_TEST_012c")
+        workflow_transition("architect", task_id="TASK_TEST_012c")
+        workflow_transition("reviewer", task_id="TASK_TEST_012c")
+
+        # Skeptic adds a concern
+        workflow_add_concern(
+            source="skeptic",
+            description="Design has scalability issues",
+            severity="high",
+            task_id="TASK_TEST_012c",
+        )
+
+        # Advance to skeptic (complete reviewer first)
+        workflow_complete_phase(task_id="TASK_TEST_012c")
+        # Manually set phase to skeptic for this test
+        task_dir = find_task_dir("TASK_TEST_012c")
+        state = _load_state(task_dir)
+        state["phase"] = "skeptic"
+        state["phases_completed"].append("skeptic")
+        _save_state(task_dir, state)
+
+        result = workflow_transition("planner", task_id="TASK_TEST_012c")
+        assert result["success"] is True
+
+    def test_loopback_blocked_without_signal(self, clean_tasks_dir):
+        """Loopback to planner requires a revise signal — not free-form."""
+        workflow_initialize(task_id="TASK_TEST_012d")
+        workflow_transition("planner", task_id="TASK_TEST_012d")
+        workflow_transition("architect", task_id="TASK_TEST_012d")
+
+        # No review_issues, no concerns, no has_revise_signal
+        result = workflow_transition("planner", task_id="TASK_TEST_012d")
+        assert result["success"] is False
+        assert "already completed" in result["error"]
+
+    def test_forward_skip_over_completed_phases(self, clean_tasks_dir):
+        """Forward skip works when intermediate phases are already completed."""
+        workflow_initialize(task_id="TASK_TEST_012e")
+
+        # Set thorough mode with all phases
+        task_dir = find_task_dir("TASK_TEST_012e")
+        state = _load_state(task_dir)
+        state["workflow_mode"] = {
+            "effective": "thorough",
+            "phases": ["planner", "architect", "design_challenger",
+                       "reviewer", "skeptic", "implementer",
+                       "quality_guard", "security_auditor", "technical_writer"],
+        }
+        _save_state(task_dir, state)
+
+        workflow_transition("planner", task_id="TASK_TEST_012e")
+        workflow_transition("architect", task_id="TASK_TEST_012e")
+        workflow_transition("design_challenger", task_id="TASK_TEST_012e")
+        workflow_transition("reviewer", task_id="TASK_TEST_012e")
+
+        # Complete the intermediate phases
+        task_dir = find_task_dir("TASK_TEST_012e")
+        state = _load_state(task_dir)
+        state["phases_completed"].extend(["design_challenger", "reviewer"])
+        _save_state(task_dir, state)
+
+        # Skip over completed design_challenger + reviewer to skeptic
+        # (but we're at reviewer, so just go to skeptic — next in line)
+        workflow_transition("skeptic", task_id="TASK_TEST_012e")
+
+        # Now complete skeptic and try to skip to implementer
+        state = _load_state(task_dir)
+        state["phases_completed"].append("skeptic")
+        state["phase"] = "skeptic"
+        _save_state(task_dir, state)
+
+        result = workflow_transition("implementer", task_id="TASK_TEST_012e")
+        assert result["success"] is True
+
+    def test_forward_skip_blocked_over_incomplete(self, clean_tasks_dir):
+        """Forward skip is still blocked when intermediate phases are not completed."""
+        workflow_initialize(task_id="TASK_TEST_012f")
+
+        # Set thorough mode
+        task_dir = find_task_dir("TASK_TEST_012f")
+        state = _load_state(task_dir)
+        state["workflow_mode"] = {
+            "effective": "thorough",
+            "phases": ["planner", "architect", "reviewer", "implementer"],
+        }
+        _save_state(task_dir, state)
+
+        workflow_transition("planner", task_id="TASK_TEST_012f")
+
+        # Try to skip from planner to implementer (reviewer not completed)
+        result = workflow_transition("implementer", task_id="TASK_TEST_012f")
+        assert result["success"] is False
+        assert "Cannot skip" in result["error"]
+
 
 class TestDiscoveries:
     """Test memory preservation with discoveries."""

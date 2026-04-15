@@ -40,6 +40,12 @@ REQUIRED_PHASES = [
     "technical_writer"
 ]
 
+LOOPBACK_SOURCES = {
+    "reviewer", "implementer",
+    "architect", "skeptic", "design_challenger",
+    "quality_guard", "security_auditor",
+}
+
 
 def normalize_phase(phase: str) -> str:
     return phase.strip().lower().replace("-", "_")
@@ -171,8 +177,10 @@ class WorkflowState:
             return True, "Re-running current phase"
 
         if to_phase in self.phases_completed:
-            if to_phase == "developer" and self.review_issues:
-                return True, "Looping back to developer due to review issues"
+            current_norm = normalize_phase(current) if current else None
+            if to_phase in ("developer", "planner") and current_norm in LOOPBACK_SOURCES:
+                if self.review_issues or self._state.get("concerns") or self._state.get("has_revise_signal"):
+                    return True, f"Looping back to {to_phase} from {current} (revise signal present)"
             return False, f"Phase {to_phase} already completed"
 
         # Check forward transition using mode-aware phase order
@@ -187,8 +195,9 @@ class WorkflowState:
             # Current phase not in mode pipeline (e.g. optional agent ran) — allow forward
             return True, f"Forward transition to {to_phase} after out-of-pipeline phase"
 
-        if to_phase == "developer" and current in ("reviewer", "skeptic"):
-            return True, f"Valid loop-back from {current} to developer"
+        current_norm = normalize_phase(current) if current else None
+        if to_phase in ("developer", "planner") and current_norm in LOOPBACK_SOURCES:
+            return True, f"Valid loop-back from {current} to {to_phase}"
 
         return False, f"Cannot skip from {current} to {to_phase}"
 

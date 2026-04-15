@@ -650,6 +650,12 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
         revise_agent = "reviewer"
     elif agent == "architect" and verdict == "REVISE":
         revise_agent = "architect"
+    elif agent == "skeptic" and extracted.get("verdict", "").upper() == "HOLD":
+        revise_agent = "skeptic"
+    elif agent == "design_challenger" and extracted.get("design_verdict", "").upper() in (
+        "REVISE", "ALTERNATIVE_PROPOSED",
+    ):
+        revise_agent = "design_challenger"
 
     task_dir = find_task_dir(task_id)
 
@@ -717,8 +723,8 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
     # 4b. Auto-generate RESUME.md snapshot
     _generate_resume_md(task_id)
 
-    # 5. Handle REVISE loopback — if architect or reviewer recommends REVISE,
-    #    route back to planner instead of advancing
+    # 5. Handle REVISE loopback — if any review/challenge agent recommends
+    #    REVISE/HOLD, route back to planner instead of advancing
     if revise_agent:
         # Remove the revising agent from phases_completed so it runs again after planner
         if task_dir:
@@ -729,11 +735,18 @@ def cmd_agent_done(args: argparse.Namespace) -> None:
                 if p.lower().replace("-", "_") != revise_agent.lower().replace("-", "_")
             ]
             state["phases_completed"] = phases_completed
+            state["has_revise_signal"] = True
             _save_state(task_dir, state)
         # Route back to planner (or developer for in-flight legacy tasks)
         mode_phases = state.get("workflow_mode", {}).get("phases", []) if task_dir else []
         revise_target = "planner" if "planner" in mode_phases else "developer"
-        workflow_transition(to_phase=revise_target, task_id=task_id)
+        transition_revise = workflow_transition(to_phase=revise_target, task_id=task_id)
+        if not transition_revise.get("success"):
+            print(
+                f"Warning: REVISE transition to {revise_target} failed: "
+                f"{transition_revise.get('error')}",
+                file=sys.stderr,
+            )
         next_action = crew_get_next_phase(task_id=task_id)
     else:
         # 5b. Normal forward progression
@@ -890,9 +903,19 @@ def cmd_checkpoint_done(args: argparse.Namespace) -> None:
 
     # 3. Handle revise — transition back to planner (or developer for legacy tasks)
     if decision == "revise":
+        if task_dir:
+            state = _load_state(task_dir)
+            state["has_revise_signal"] = True
+            _save_state(task_dir, state)
         mode_phases = state.get("workflow_mode", {}).get("phases", []) if task_dir else []
         revise_target = "planner" if "planner" in mode_phases else "developer"
-        workflow_transition(to_phase=revise_target, task_id=task_id)
+        transition_revise = workflow_transition(to_phase=revise_target, task_id=task_id)
+        if not transition_revise.get("success"):
+            print(
+                f"Warning: checkpoint REVISE transition to {revise_target} failed: "
+                f"{transition_revise.get('error')}",
+                file=sys.stderr,
+            )
 
     # 4. Handle restart — transition back to planner (or architect for legacy tasks)
     if decision == "restart":

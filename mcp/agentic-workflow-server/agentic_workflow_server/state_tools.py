@@ -47,6 +47,14 @@ REQUIRED_PHASES = [
     "technical_writer"
 ]
 
+# Phases that are allowed to trigger a loopback to planner when a revise
+# signal is present (review_issues, concerns, or has_revise_signal).
+LOOPBACK_SOURCES = {
+    "reviewer", "implementer",
+    "architect", "skeptic", "design_challenger",
+    "quality_guard", "security_auditor",
+}
+
 
 def _get_crew_config(task_id: Optional[str] = None) -> dict:
     """Get the resolved crew definition from config, with full fallback chain.
@@ -700,8 +708,11 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
         return True, "Re-running current phase"
 
     if to_phase in phases_completed:
-        if to_phase == "planner" and state.get("review_issues"):
-            return True, "Looping back to planner due to review issues"
+        # Allow loopback to planner from any review/verification phase
+        # when a revise signal is present.
+        if to_phase == "planner" and current in LOOPBACK_SOURCES:
+            if state.get("review_issues") or state.get("concerns") or state.get("has_revise_signal"):
+                return True, f"Looping back to planner from {current} (revise signal present)"
         return False, f"Phase {to_phase} already completed"
 
     # Use mode_phases as the ordering if available, else fall back to PHASE_ORDER
@@ -715,11 +726,12 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
             return True, f"Valid forward transition from {current} to {to_phase}"
 
         # Allow forward skips when intermediate phases are not in the mode
+        # OR have already been completed (e.g. parallel review phases).
         if to_idx > current_idx:
             if mode_phases:
                 skipped = [ordering[i] for i in range(current_idx + 1, to_idx)]
-                if all(p not in mode_phases for p in skipped):
-                    return True, f"Valid forward skip from {current} to {to_phase} (skipped phases not in mode)"
+                if all(p not in mode_phases or p in phases_completed for p in skipped):
+                    return True, f"Valid forward skip from {current} to {to_phase} (skipped phases not in mode or completed)"
     elif current not in ordering and to_phase in ordering:
         # Current phase is custom/unknown, allow transition to any mode phase
         return True, f"Transition from custom phase {current} to {to_phase}"
@@ -732,7 +744,7 @@ def _can_transition(state: dict, to_phase: str) -> tuple[bool, str]:
         if to_phase in valid_phases:
             return True, f"Transition from standard phase {current} to custom phase {to_phase}"
 
-    if to_phase == "planner" and current in ("reviewer", "implementer"):
+    if to_phase == "planner" and current in LOOPBACK_SOURCES:
         return True, f"Valid loop-back from {current} to planner"
 
     # Find the next valid phase to suggest
@@ -829,9 +841,10 @@ def workflow_transition(
     if old_phase and old_phase != to_phase and old_phase not in state["phases_completed"]:
         state["phases_completed"].append(old_phase)
 
-    if to_phase == "planner" and old_phase in ("reviewer", "implementer"):
+    if to_phase == "planner" and old_phase and _normalize_phase(old_phase) in LOOPBACK_SOURCES:
         state["iteration"] = state.get("iteration", 1) + 1
         state["review_issues"] = []
+        state.pop("has_revise_signal", None)
 
     state["phase"] = to_phase
     _save_state(task_dir, state)
