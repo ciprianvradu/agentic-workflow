@@ -3621,7 +3621,7 @@ impl App {
 
                             // Set execute permissions on shell scripts
                             #[cfg(unix)]
-                            if path.extension().map_or(false, |ext| ext == "sh") {
+                            if path.extension().is_some_and(|ext| ext == "sh") {
                                 use std::os::unix::fs::PermissionsExt;
                                 let _ = std::fs::set_permissions(
                                     path,
@@ -5597,8 +5597,9 @@ mod tests {
 
     #[test]
     fn test_create_popup_settings_has_four_toggles() {
-        // Verify settings step has 4 toggles (max cursor position is 3)
-        let popup = CreateWorktreePopup {
+        // Struct construction verifies the 4 toggle fields exist at compile time.
+        // The settings_cursor upper bound (3) is enforced in create_popup_handle_key().
+        let _popup = CreateWorktreePopup {
             step: CreateStep::ToggleSettings,
             description_input: tui_input::Input::default(),
             hosts: vec![launcher::AiHost::Claude],
@@ -5615,17 +5616,6 @@ mod tests {
             started_at: None,
             result: None,
         };
-
-        // The 4 settings toggles are: pull, launch_after, headless, no_checkpoints
-        // Settings cursor max should be 3 (0-indexed)
-        let max_settings_cursor = 3u8;
-        assert_eq!(max_settings_cursor, 3, "Should have 4 settings (cursor 0-3)");
-
-        // Verify all fields are accessible
-        assert!(popup.pull || !popup.pull);
-        assert!(popup.launch_after || !popup.launch_after);
-        assert!(popup.headless || !popup.headless);
-        assert!(popup.no_checkpoints || !popup.no_checkpoints);
     }
 
     // ── Cross-Area Integration Tests (VAL-CROSS-001..004) ──────────

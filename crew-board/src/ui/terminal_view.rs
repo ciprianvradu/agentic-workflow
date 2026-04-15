@@ -738,7 +738,7 @@ fn draw_single_terminal(
     // Draw scroll indicator when scrolled back (any mode, embedded only)
     if term.scroll_offset > 0 && inner.height > 0 && term.is_embedded() {
         let scrollback_total = term.parser()
-            .map(|p| widget::scrollback_available(p))
+            .map(widget::scrollback_available)
             .unwrap_or(0);
         if scrollback_total > 0 {
             let indicator = if is_scrollback {
