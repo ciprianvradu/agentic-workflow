@@ -1135,17 +1135,15 @@ impl App {
             None => return,
         };
         match self.terminal_layout {
-            TerminalLayout::Tiled2 => {
-                if pos + 1 < indices.len() {
+            TerminalLayout::Tiled2
+                if pos + 1 < indices.len() => {
                     mgr.focused = indices[pos + 1];
                 }
-            }
-            TerminalLayout::Tiled4 => {
+            TerminalLayout::Tiled4
                 // 2x2: within row, right = pos + 1 (only if in left column)
-                if pos % 2 == 0 && pos + 1 < indices.len() {
+                if pos % 2 == 0 && pos + 1 < indices.len() => {
                     mgr.focused = indices[pos + 1];
                 }
-            }
             _ => {}
         }
     }
@@ -1169,16 +1167,14 @@ impl App {
             None => return,
         };
         match self.terminal_layout {
-            TerminalLayout::Tiled2 => {
-                if pos > 0 {
+            TerminalLayout::Tiled2
+                if pos > 0 => {
                     mgr.focused = indices[pos - 1];
                 }
-            }
-            TerminalLayout::Tiled4 => {
-                if pos % 2 == 1 {
+            TerminalLayout::Tiled4
+                if pos % 2 == 1 => {
                     mgr.focused = indices[pos - 1];
                 }
-            }
             _ => {}
         }
     }
@@ -1202,17 +1198,15 @@ impl App {
             None => return,
         };
         match self.terminal_layout {
-            TerminalLayout::Tiled4 => {
+            TerminalLayout::Tiled4
                 // 2x2: down = same column, next row (pos + 2)
-                if pos + 2 < indices.len() {
+                if pos + 2 < indices.len() => {
                     mgr.focused = indices[pos + 2];
                 }
-            }
-            TerminalLayout::Stacked => {
-                if pos + 1 < indices.len() {
+            TerminalLayout::Stacked
+                if pos + 1 < indices.len() => {
                     mgr.focused = indices[pos + 1];
                 }
-            }
             _ => {}
         }
     }
@@ -1236,16 +1230,14 @@ impl App {
             None => return,
         };
         match self.terminal_layout {
-            TerminalLayout::Tiled4 => {
-                if pos >= 2 {
+            TerminalLayout::Tiled4
+                if pos >= 2 => {
                     mgr.focused = indices[pos - 2];
                 }
-            }
-            TerminalLayout::Stacked => {
-                if pos > 0 {
+            TerminalLayout::Stacked
+                if pos > 0 => {
                     mgr.focused = indices[pos - 1];
                 }
-            }
             _ => {}
         }
     }
@@ -3028,16 +3020,14 @@ impl App {
             KeyCode::Esc => {
                 self.permission_popup = None;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if popup.cursor > 0 {
+            KeyCode::Up | KeyCode::Char('k')
+                if popup.cursor > 0 => {
                     popup.cursor -= 1;
                 }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if popup.cursor + 1 < popup.entries.len() {
+            KeyCode::Down | KeyCode::Char('j')
+                if popup.cursor + 1 < popup.entries.len() => {
                     popup.cursor += 1;
                 }
-            }
             KeyCode::Char('a') => {
                 // Approve the selected entry
                 let entry_opt = popup.entries.get(popup.cursor).cloned();
@@ -4308,14 +4298,13 @@ impl App {
         let clicked_index = offset + visual_row;
 
         match self.active_view {
-            ActiveView::Tasks => {
-                if clicked_index < self.tree_rows.len() && clicked_index != self.tree_cursor {
+            ActiveView::Tasks
+                if clicked_index < self.tree_rows.len() && clicked_index != self.tree_cursor => {
                     self.tree_cursor = clicked_index;
                     self.detail_scroll = 0;
                     self.detail_mode = DetailMode::Overview;
                     self.ensure_artifacts();
                 }
-            }
             ActiveView::BeadsIssues => {
                 if let Some(repo) = self.current_repo() {
                     if clicked_index < repo.issues.len() {

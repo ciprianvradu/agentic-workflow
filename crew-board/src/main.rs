@@ -875,11 +875,10 @@ fn run_app(
                             KeyCode::Tab => app.toggle_focus(),
                             KeyCode::Char('q') | KeyCode::F(10) => app.quit_confirm = true,
                             // Delete/d: clean up worktree for current task (Tasks view only)
-                            KeyCode::Delete | KeyCode::Char('d') => {
-                                if app.active_view == ActiveView::Tasks {
+                            KeyCode::Delete | KeyCode::Char('d')
+                                if app.active_view == ActiveView::Tasks => {
                                     app.open_single_task_cleanup();
                                 }
-                            }
                             _ => {}
                         }
                     }
@@ -964,11 +963,10 @@ fn run_app(
                                     ActiveView::ActivityFeed => {
                                         app.activity_filter.timeline_mode = !app.activity_filter.timeline_mode;
                                     }
-                                    ActiveView::Terminals => {
-                                        if app.terminal_manager.as_ref().is_some_and(|m| !m.terminals.is_empty()) {
+                                    ActiveView::Terminals
+                                        if app.terminal_manager.as_ref().is_some_and(|m| !m.terminals.is_empty()) => {
                                             app.terminal_input_mode = TerminalInputMode::ScrollBack;
                                         }
-                                    }
                                     _ => {}
                                 }
                                 app.flash_modifier_bar(ModifierBarState::Ctrl);
@@ -1027,11 +1025,10 @@ fn run_app(
                         (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.should_quit = true,
 
                         // Esc: back out progressively, never quit
-                        (_, KeyCode::Esc) => {
-                            if app.focus_pane == FocusPane::Right {
+                        (_, KeyCode::Esc)
+                            if app.focus_pane == FocusPane::Right => {
                                 app.focus_pane = FocusPane::Left;
                             }
-                        }
 
                         // Help
                         (_, KeyCode::F(1)) => {
@@ -1111,32 +1108,27 @@ fn run_app(
                                 app.tree_toggle();
                             }
                         }
-                        (_, KeyCode::Char(' ')) => {
-                            if app.active_view != ActiveView::Terminals {
+                        (_, KeyCode::Char(' '))
+                            if app.active_view != ActiveView::Terminals => {
                                 app.tree_toggle();
                             }
-                        }
                         // Alt+Arrow: tile navigation in Terminals view (must come before plain arrows)
-                        (KeyModifiers::ALT, KeyCode::Left) => {
-                            if app.active_view == ActiveView::Terminals {
+                        (KeyModifiers::ALT, KeyCode::Left)
+                            if app.active_view == ActiveView::Terminals => {
                                 app.terminal_tile_focus_left();
                             }
-                        }
-                        (KeyModifiers::ALT, KeyCode::Right) => {
-                            if app.active_view == ActiveView::Terminals {
+                        (KeyModifiers::ALT, KeyCode::Right)
+                            if app.active_view == ActiveView::Terminals => {
                                 app.terminal_tile_focus_right();
                             }
-                        }
-                        (KeyModifiers::ALT, KeyCode::Up) => {
-                            if app.active_view == ActiveView::Terminals {
+                        (KeyModifiers::ALT, KeyCode::Up)
+                            if app.active_view == ActiveView::Terminals => {
                                 app.terminal_tile_focus_up();
                             }
-                        }
-                        (KeyModifiers::ALT, KeyCode::Down) => {
-                            if app.active_view == ActiveView::Terminals {
+                        (KeyModifiers::ALT, KeyCode::Down)
+                            if app.active_view == ActiveView::Terminals => {
                                 app.terminal_tile_focus_down();
                             }
-                        }
 
                         (_, KeyCode::Right) => {
                             if app.active_view == ActiveView::Terminals {
@@ -1145,11 +1137,10 @@ fn run_app(
                                 app.tree_expand();
                             }
                         }
-                        (_, KeyCode::Left) => {
-                            if app.active_view != ActiveView::Terminals {
+                        (_, KeyCode::Left)
+                            if app.active_view != ActiveView::Terminals => {
                                 app.tree_collapse();
                             }
-                        }
 
                         // Item navigation
                         (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
@@ -1192,56 +1183,51 @@ fn run_app(
                             }
                         }
                         // F12: enter terminal focus (Terminals view only, embedded terminals only)
-                        (_, KeyCode::F(12)) => {
+                        (_, KeyCode::F(12))
                             if app.active_view == ActiveView::Terminals
                                 && app
                                     .terminal_manager
                                     .as_ref()
                                     .and_then(|m| m.focused_terminal())
                                     .is_some_and(|t| t.is_embedded())
-                            {
+                            => {
                                 app.terminal_input_mode = TerminalInputMode::TerminalFocused;
                             }
-                        }
 
                         // Scroll-back mode ([ in Terminals view Normal mode, embedded only)
-                        (_, KeyCode::Char('[')) => {
+                        (_, KeyCode::Char('['))
                             if app.active_view == ActiveView::Terminals
                                 && app
                                     .terminal_manager
                                     .as_ref()
                                     .and_then(|m| m.focused_terminal())
                                     .is_some_and(|t| t.is_embedded())
-                            {
+                            => {
                                 app.terminal_input_mode = TerminalInputMode::ScrollBack;
                             }
-                        }
 
                         // Cycle views
                         (_, KeyCode::Char('`')) => app.next_view(),
 
                         // Dismiss ALL exited terminals at once (Shift+D)
-                        (_, KeyCode::Char('D')) => {
-                            if app.active_view == ActiveView::Terminals {
+                        (_, KeyCode::Char('D'))
+                            if app.active_view == ActiveView::Terminals => {
                                 app.terminal_dismiss_all_exited();
                             }
-                        }
 
                         // d: clean up worktree for current task (Tasks view only)
-                        (_, KeyCode::Char('d')) => {
-                            if app.active_view == ActiveView::Tasks {
+                        (_, KeyCode::Char('d'))
+                            if app.active_view == ActiveView::Tasks => {
                                 app.open_single_task_cleanup();
                             }
-                        }
 
                         // f: cycle task filter (Tasks view, left pane focused)
-                        (_, KeyCode::Char('f')) => {
+                        (_, KeyCode::Char('f'))
                             if app.active_view == ActiveView::Tasks
                                 && app.focus_pane == FocusPane::Left
-                            {
+                            => {
                                 app.cycle_task_filter();
                             }
-                        }
 
                         // Delete: Tasks view=cleanup worktree, Terminals view=dismiss exited
                         (_, KeyCode::Delete) => {
