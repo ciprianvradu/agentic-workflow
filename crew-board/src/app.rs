@@ -433,6 +433,22 @@ pub struct App {
     /// Vec of (terminal_index, inner_rect).
     pub terminal_panel_rects: RefCell<Vec<(usize, Rect)>>,
 
+    // ── Mouse hit-test rects (set during draw, read during mouse events) ──
+    /// Left/right pane rects for dual-pane views (Tasks, Issues).
+    pub pane_rects: RefCell<Option<(Rect, Rect)>>,
+    /// Content area rect for single-pane views (Config, Cost, Activity).
+    pub content_rect: RefCell<Option<Rect>>,
+    /// Inner rect of the tree/issue list (excluding borders).
+    pub list_inner_rect: RefCell<Option<Rect>>,
+    /// Scroll offset captured from ratatui ListState after render.
+    pub list_scroll_offset: Cell<usize>,
+    /// Per-doc-entry line offsets in DocList: (line_offset, artifact_index).
+    pub doc_list_item_offsets: RefCell<Vec<(usize, usize)>>,
+    /// Clickable view tab rects in the status bar.
+    pub view_tab_rects: RefCell<Vec<(Rect, ActiveView)>>,
+    /// Maps each visual line in the terminal list to a terminal index.
+    pub terminal_list_line_map: RefCell<Vec<usize>>,
+
     // Bell settings (loaded from settings.toml)
     /// Trigger a terminal bell (\x07) when a crew needs attention.
     pub system_bell: bool,
@@ -753,6 +769,13 @@ impl App {
             kitty_protocol_enabled: false,
             text_selection: None,
             terminal_panel_rects: RefCell::new(Vec::new()),
+            pane_rects: RefCell::new(None),
+            content_rect: RefCell::new(None),
+            list_inner_rect: RefCell::new(None),
+            list_scroll_offset: Cell::new(0),
+            doc_list_item_offsets: RefCell::new(Vec::new()),
+            view_tab_rects: RefCell::new(Vec::new()),
+            terminal_list_line_map: RefCell::new(Vec::new()),
             system_bell: false,
             visual_bell: true,
             log_directory: None,
@@ -4186,37 +4209,190 @@ impl App {
         }
     }
 
-    // ── Mouse handling for terminal text selection ────────────────
+    // ── Mouse handling ─────────────────────────────────────────────
 
-    /// Start a text selection at the given screen coordinates.
+    /// Returns true if any popup is currently open (mouse events should be ignored).
+    fn popup_is_open(&self) -> bool {
+        self.show_help || self.show_splash || self.search_popup.is_some()
+            || self.create_popup.is_some() || self.cleanup_popup.is_some()
+            || self.launch_popup.is_some() || self.permission_popup.is_some()
+            || self.stats_popup.is_some() || self.quit_confirm
+    }
+
+    /// Handle mouse click at the given screen coordinates.
     pub fn mouse_start_selection(&mut self, col: u16, row: u16) {
-        if self.active_view != ActiveView::Terminals {
+        // ── Terminals view: existing text selection logic ──
+        if self.active_view == ActiveView::Terminals {
+            let rects = self.terminal_panel_rects.borrow();
+            for &(term_idx, rect) in rects.iter() {
+                if col >= rect.x
+                    && col < rect.x + rect.width
+                    && row >= rect.y
+                    && row < rect.y + rect.height
+                {
+                    let local_col = col - rect.x;
+                    let local_row = row - rect.y;
+                    self.text_selection = Some(TextSelection {
+                        terminal_idx: term_idx,
+                        panel_rect: rect,
+                        start_col: local_col,
+                        start_row: local_row,
+                        end_col: local_col,
+                        end_row: local_row,
+                        active: true,
+                    });
+                    return;
+                }
+            }
             self.text_selection = None;
+            // Fall through to status bar check below
+        } else {
+            self.text_selection = None;
+        }
+
+        // Don't handle clicks while a popup is open
+        if self.popup_is_open() {
             return;
         }
-        let rects = self.terminal_panel_rects.borrow();
-        for &(term_idx, rect) in rects.iter() {
-            if col >= rect.x
-                && col < rect.x + rect.width
-                && row >= rect.y
-                && row < rect.y + rect.height
-            {
-                let local_col = col - rect.x;
-                let local_row = row - rect.y;
-                self.text_selection = Some(TextSelection {
-                    terminal_idx: term_idx,
-                    panel_rect: rect,
-                    start_col: local_col,
-                    start_row: local_row,
-                    end_col: local_col,
-                    end_row: local_row,
-                    active: true,
-                });
+
+        // ── Status bar: click view tab to switch views ──
+        let clicked_view = {
+            let tabs = self.view_tab_rects.borrow();
+            tabs.iter().find_map(|&(rect, view)| {
+                if Self::point_in_rect(col, row, rect) { Some(view) } else { None }
+            })
+        };
+        if let Some(view) = clicked_view {
+            self.set_view(view);
+            return;
+        }
+
+        // ── Dual-pane views: click to focus pane + select item ──
+        let panes = *self.pane_rects.borrow();
+        if let Some((left, right)) = panes {
+            if Self::point_in_rect(col, row, left) {
+                self.focus_pane = FocusPane::Left;
+                self.handle_left_pane_click(row);
                 return;
             }
+            if Self::point_in_rect(col, row, right) {
+                self.focus_pane = FocusPane::Right;
+                self.handle_right_pane_click(row);
+            }
         }
-        // Click outside any terminal panel — clear selection
-        self.text_selection = None;
+    }
+
+    fn point_in_rect(col: u16, row: u16, rect: Rect) -> bool {
+        col >= rect.x && col < rect.x + rect.width
+            && row >= rect.y && row < rect.y + rect.height
+    }
+
+    /// Click on a row in the left pane (tree list or issue list).
+    fn handle_left_pane_click(&mut self, row: u16) {
+        // Terminal view uses a line-map instead of ListState offset
+        if self.active_view == ActiveView::Terminals {
+            self.handle_terminal_list_click(row);
+            return;
+        }
+
+        let inner = match *self.list_inner_rect.borrow() {
+            Some(r) => r,
+            None => return,
+        };
+        // Drop the borrow immediately since inner is Copy
+        if row < inner.y || row >= inner.y + inner.height {
+            return;
+        }
+        let visual_row = (row - inner.y) as usize;
+        let offset = self.list_scroll_offset.get();
+        let clicked_index = offset + visual_row;
+
+        match self.active_view {
+            ActiveView::Tasks => {
+                if clicked_index < self.tree_rows.len() && clicked_index != self.tree_cursor {
+                    self.tree_cursor = clicked_index;
+                    self.detail_scroll = 0;
+                    self.detail_mode = DetailMode::Overview;
+                    self.ensure_artifacts();
+                }
+            }
+            ActiveView::BeadsIssues => {
+                if let Some(repo) = self.current_repo() {
+                    if clicked_index < repo.issues.len() {
+                        self.selected_issue = clicked_index;
+                        self.detail_scroll = 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Click on a row in the terminal list (left pane of Terminals view).
+    fn handle_terminal_list_click(&mut self, row: u16) {
+        let inner = match *self.list_inner_rect.borrow() {
+            Some(r) => r,
+            None => return,
+        };
+        if row < inner.y || row >= inner.y + inner.height {
+            return;
+        }
+        let visual_row = (row - inner.y) as usize;
+        let line_map = self.terminal_list_line_map.borrow();
+        if visual_row < line_map.len() {
+            let term_idx = line_map[visual_row];
+            if let Some(mgr) = &mut self.terminal_manager {
+                if term_idx < mgr.terminals.len() {
+                    mgr.focused = term_idx;
+                    self.terminal_input_mode = TerminalInputMode::Normal;
+                }
+            }
+        }
+    }
+
+    /// Click in the right pane — selects/opens documents in DocList mode.
+    fn handle_right_pane_click(&mut self, row: u16) {
+        if let DetailMode::DocList { cursor } = self.detail_mode {
+            let panes = *self.pane_rects.borrow();
+            let pane_rect = match panes {
+                Some((_, right)) => right,
+                None => return,
+            };
+
+            let inner_y = pane_rect.y + 1; // account for border
+            if row < inner_y {
+                return;
+            }
+            let visual_line = (row - inner_y) as usize;
+            let content_line = visual_line + self.detail_scroll as usize;
+
+            // Copy offsets out of RefCell to avoid borrow conflict
+            let offsets: Vec<(usize, usize)> = self.doc_list_item_offsets.borrow().clone();
+            if offsets.is_empty() {
+                return;
+            }
+
+            let mut clicked_artifact = None;
+            for (i, &(start, artifact_idx)) in offsets.iter().enumerate() {
+                let end = if i + 1 < offsets.len() {
+                    offsets[i + 1].0
+                } else {
+                    usize::MAX
+                };
+                if content_line >= start && content_line < end {
+                    clicked_artifact = Some(artifact_idx);
+                    break;
+                }
+            }
+
+            if let Some(idx) = clicked_artifact {
+                if idx == cursor {
+                    self.detail_open_doc();
+                } else {
+                    self.detail_mode = DetailMode::DocList { cursor: idx };
+                }
+            }
+        }
     }
 
     /// Extend the text selection to the given screen coordinates, clamped to panel bounds.
@@ -4340,41 +4516,84 @@ impl App {
         let _ = stdout.flush();
     }
 
-    /// Handle mouse scroll within terminal panels for scrollback.
+    /// Handle mouse scroll at the given screen coordinates.
     pub fn mouse_scroll(&mut self, col: u16, row: u16, up: bool) {
-        if self.active_view != ActiveView::Terminals {
+        // ── Terminals view: existing scrollback logic ──
+        if self.active_view == ActiveView::Terminals {
+            let rects = self.terminal_panel_rects.borrow();
+            for &(term_idx, rect) in rects.iter() {
+                if col >= rect.x
+                    && col < rect.x + rect.width
+                    && row >= rect.y
+                    && row < rect.y + rect.height
+                {
+                    drop(rects);
+                    if let Some(mgr) = &mut self.terminal_manager {
+                        mgr.focused = term_idx;
+                    }
+                    let is_embedded = self.terminal_manager
+                        .as_ref()
+                        .and_then(|m| m.focused_terminal())
+                        .is_some_and(|t| t.is_embedded());
+                    if is_embedded {
+                        if up {
+                            self.terminal_scroll_up(3);
+                            if self.terminal_input_mode == TerminalInputMode::Normal
+                                || self.terminal_input_mode == TerminalInputMode::TerminalFocused
+                            {
+                                self.terminal_input_mode = TerminalInputMode::ScrollBack;
+                            }
+                        } else {
+                            self.terminal_scroll_down(3);
+                        }
+                    }
+                    return;
+                }
+            }
             return;
         }
-        let rects = self.terminal_panel_rects.borrow();
-        for &(term_idx, rect) in rects.iter() {
-            if col >= rect.x
-                && col < rect.x + rect.width
-                && row >= rect.y
-                && row < rect.y + rect.height
-            {
-                drop(rects);
-                // Focus the terminal being scrolled
-                if let Some(mgr) = &mut self.terminal_manager {
-                    mgr.focused = term_idx;
-                }
-                // Only enable scroll-back for embedded terminals (headless has no PTY output)
-                let is_embedded = self.terminal_manager
-                    .as_ref()
-                    .and_then(|m| m.focused_terminal())
-                    .is_some_and(|t| t.is_embedded());
-                if is_embedded {
-                    if up {
-                        self.terminal_scroll_up(3);
-                        if self.terminal_input_mode == TerminalInputMode::Normal
-                            || self.terminal_input_mode == TerminalInputMode::TerminalFocused
-                        {
-                            self.terminal_input_mode = TerminalInputMode::ScrollBack;
-                        }
-                    } else {
-                        self.terminal_scroll_down(3);
-                    }
+
+        if self.popup_is_open() {
+            return;
+        }
+
+        // ── Dual-pane views: scroll the pane under the cursor ──
+        let panes = *self.pane_rects.borrow();
+        if let Some((left, right)) = panes {
+            if Self::point_in_rect(col, row, left) {
+                for _ in 0..3 {
+                    if up { self.prev_item(); } else { self.next_item(); }
                 }
                 return;
+            }
+            if Self::point_in_rect(col, row, right) {
+                for _ in 0..3 {
+                    if up { self.scroll_detail_up(); } else { self.scroll_detail_down(); }
+                }
+                return;
+            }
+        }
+
+        // ── Single-pane views: scroll content ──
+        let content = *self.content_rect.borrow();
+        if let Some(rect) = content {
+            if Self::point_in_rect(col, row, rect) {
+                match self.active_view {
+                    ActiveView::Config | ActiveView::CostSummary => {
+                        for _ in 0..3 {
+                            if up { self.scroll_detail_up(); } else { self.scroll_detail_down(); }
+                        }
+                    }
+                    ActiveView::ActivityFeed => {
+                        self.activity_filter.auto_scroll = false;
+                        if up {
+                            self.activity_scroll = self.activity_scroll.saturating_sub(3);
+                        } else {
+                            self.activity_scroll = self.activity_scroll.saturating_add(3);
+                        }
+                    }
+                    _ => {}
+                }
             }
         }
     }

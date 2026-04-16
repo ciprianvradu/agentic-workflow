@@ -46,49 +46,78 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
         .map(|m| m.exited_count())
         .unwrap_or(0);
 
-    // Active view label with position (replaces tab bar — Shift+F1-F5 switches views)
-    let (view_label, view_num) = match app.active_view {
-        ActiveView::Tasks => ("Tasks", 1),
-        ActiveView::BeadsIssues => ("Issues", 2),
-        ActiveView::Config => ("Config", 3),
-        ActiveView::CostSummary => ("Cost", 4),
-        ActiveView::Terminals => ("Terms", 5),
-        ActiveView::ActivityFeed => ("Activity", 6),
-    };
-    // Terminal badge appended to view label when relevant
-    let badge = if app.active_view == ActiveView::Terminals {
-        if attn_count > 0 {
-            format!(" \u{25c6}{}", attn_count) // ◆N
-        } else if exited_count > 0 {
-            format!(" \u{2717}{}", exited_count) // ✗N
-        } else {
-            String::new()
+    // Clickable view tabs
+    let views: &[(ActiveView, &str)] = &[
+        (ActiveView::Tasks, "Tasks"),
+        (ActiveView::BeadsIssues, "Issues"),
+        (ActiveView::Config, "Config"),
+        (ActiveView::CostSummary, "Cost"),
+        (ActiveView::Terminals, "Terms"),
+        (ActiveView::ActivityFeed, "Actvty"),
+    ];
+
+    let mut tab_rects: Vec<(Rect, ActiveView)> = Vec::new();
+    let mut x = area.x;
+    let mut spans: Vec<Span> = Vec::new();
+
+    for &(view, label) in views {
+        let mut text = format!(" {} ", label);
+        // Append terminal badge to Terms tab
+        if view == ActiveView::Terminals {
+            if attn_count > 0 {
+                text = format!(" {}\u{25c6}{} ", label, attn_count);
+            } else if exited_count > 0 {
+                text = format!(" {}\u{2717}{} ", label, exited_count);
+            }
         }
-    } else if attn_count > 0 {
-        // Show attention badge even when not on Terminals view (cross-view flash)
-        format!("  \u{25c6}{}", attn_count)
-    } else {
-        String::new()
-    };
+        let width = text.len() as u16;
+        tab_rects.push((Rect::new(x, area.y, width, 1), view));
 
-    // Security badge
-    let sec = &app.rules_engine.stats;
-    let security_badge = if sec.denied > 0 || sec.warned > 0 {
-        format!(" D{} W{}", sec.denied, sec.warned)
-    } else {
-        String::new()
-    };
+        let style = if view == app.active_view {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        spans.push(Span::styled(text, style));
+        x += width;
+    }
 
-    // Determine if attention flash is active (alternating style)
+    *app.view_tab_rects.borrow_mut() = tab_rects;
+
+    // Attention badge (cross-view flash when not on Terminals tab)
     let flash_active = app.attention_flash_until.is_some_and(|until| {
         let elapsed_ms = (std::time::Instant::now()
             .duration_since(until.checked_sub(std::time::Duration::from_secs(2)).unwrap_or(until)))
             .as_millis();
-        // Blink: 250ms on/off cycle
         (elapsed_ms / 250).is_multiple_of(2)
     });
+    if app.active_view != ActiveView::Terminals && attn_count > 0 {
+        spans.push(Span::styled(
+            format!(" \u{25c6}{}", attn_count),
+            if flash_active {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            },
+        ));
+    }
 
-    // Active work badge: prominently colored, always visible
+    // Security badge
+    let sec = &app.rules_engine.stats;
+    if sec.denied > 0 || sec.warned > 0 {
+        spans.push(Span::styled(
+            format!(" D{} W{}", sec.denied, sec.warned),
+            Style::default().fg(Color::Red),
+        ));
+    }
+
+    // Active work badge
     let active_badge = if active_tasks > 0 {
         format!(" [{} active] ", active_tasks)
     } else {
@@ -102,58 +131,34 @@ fn draw_info_line(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
+    spans.push(Span::styled(active_badge, active_badge_style));
 
-    // Filter indicator (only shown when not All)
-    let filter_badge = match app.task_filter {
-        crate::app::TaskFilter::All => String::new(),
-        crate::app::TaskFilter::Active => " filter:Active ".to_string(),
-        crate::app::TaskFilter::ActiveAndRecentDone => " filter:Active+Recent ".to_string(),
-    };
+    // Filter indicator
+    match app.task_filter {
+        crate::app::TaskFilter::All => {}
+        crate::app::TaskFilter::Active => {
+            spans.push(Span::styled(" filter:Active ", Style::default().fg(Color::DarkGray)));
+        }
+        crate::app::TaskFilter::ActiveAndRecentDone => {
+            spans.push(Span::styled(" filter:Active+Recent ", Style::default().fg(Color::DarkGray)));
+        }
+    }
 
-    let line = Line::from(vec![
-        Span::styled(
-            format!(" {} [{}/6] ", view_label, view_num),
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(hints, styles::hint_style()));
+    spans.push(Span::styled(
+        format!(
+            "  {} repos {} tasks {} issues({} open) ({}s)",
+            app.repos.len(),
+            total_tasks,
+            total_issues,
+            open_issues,
+            elapsed,
         ),
-        Span::styled(
-            badge,
-            if flash_active && attn_count > 0 {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            },
-        ),
-        Span::styled(active_badge, active_badge_style),
-        Span::styled(
-            filter_badge,
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            security_badge,
-            Style::default().fg(Color::Red),
-        ),
-        Span::raw(" "),
-        Span::styled(hints, styles::hint_style()),
-        Span::styled(
-            format!(
-                "  {} repos {} tasks {} issues({} open) ({}s)",
-                app.repos.len(),
-                total_tasks,
-                total_issues,
-                open_issues,
-                elapsed,
-            ),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
+        Style::default().fg(Color::DarkGray),
+    ));
 
-    let paragraph = Paragraph::new(line);
+    let paragraph = Paragraph::new(Line::from(spans));
     frame.render_widget(paragraph, area);
 }
 

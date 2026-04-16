@@ -490,6 +490,8 @@ fn draw_doc_list(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
     ]));
     lines.push(Line::from(""));
 
+    let mut item_offsets: Vec<(usize, usize)> = Vec::new();
+
     if app.cached_artifacts.is_empty() {
         lines.push(Line::from(Span::styled(
             "  No documents found",
@@ -497,6 +499,7 @@ fn draw_doc_list(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
         )));
     } else {
         for (i, artifact) in app.cached_artifacts.iter().enumerate() {
+            item_offsets.push((lines.len(), i));
             let is_selected = i == cursor;
             let prefix = if is_selected { "▸ " } else { "  " };
 
@@ -567,9 +570,11 @@ fn draw_doc_list(frame: &mut Frame, app: &App, area: Rect, border_style: Style, 
         }
     }
 
+    *app.doc_list_item_offsets.borrow_mut() = item_offsets;
+
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        "↑↓ select  Enter read  Esc back",
+        "↑↓ select  Enter/click read  Esc back",
         Style::default().fg(Color::DarkGray),
     )));
 

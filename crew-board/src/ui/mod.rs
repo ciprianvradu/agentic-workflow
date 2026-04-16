@@ -28,6 +28,14 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    // Clear all mouse hit-test rects at frame start
+    *app.pane_rects.borrow_mut() = None;
+    *app.content_rect.borrow_mut() = None;
+    *app.list_inner_rect.borrow_mut() = None;
+    app.doc_list_item_offsets.borrow_mut().clear();
+    app.view_tab_rects.borrow_mut().clear();
+    app.terminal_list_line_map.borrow_mut().clear();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -150,6 +158,9 @@ fn draw_dual_pane(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(left_pct), Constraint::Percentage(100 - left_pct)])
         .split(area);
+
+    // Store pane rects for mouse click-to-focus
+    *app.pane_rects.borrow_mut() = Some((chunks[0], chunks[1]));
 
     task_list::draw(frame, app, chunks[0]);
     detail_pane::draw(frame, app, chunks[1]);

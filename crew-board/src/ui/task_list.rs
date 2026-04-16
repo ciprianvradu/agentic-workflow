@@ -46,9 +46,20 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_style(styles::selected_style())
         .highlight_symbol("▌ ");
 
-    let mut state = ListState::default();
+    let mut state = ListState::default()
+        .with_offset(app.list_scroll_offset.get());
     state.select(Some(app.tree_cursor));
     frame.render_stateful_widget(list, area, &mut state);
+
+    // Store list inner rect and scroll offset for mouse click-to-select
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    *app.list_inner_rect.borrow_mut() = Some(inner);
+    app.list_scroll_offset.set(state.offset());
 
     // Vertical scrollbar (only when content overflows)
     let visible_height = area.height.saturating_sub(2) as usize; // subtract borders

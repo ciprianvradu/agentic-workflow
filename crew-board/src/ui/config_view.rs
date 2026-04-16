@@ -9,6 +9,9 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
+    // Store content rect for mouse scroll
+    *app.content_rect.borrow_mut() = Some(area);
+
     let repo = match app.current_repo() {
         Some(r) => r,
         None => {

@@ -15,6 +15,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(left_pct), Constraint::Percentage(100 - left_pct)])
         .split(area);
 
+    // Store pane rects for mouse click-to-focus
+    *app.pane_rects.borrow_mut() = Some((chunks[0], chunks[1]));
+
     draw_issue_list(frame, app, chunks[0]);
     draw_issue_detail(frame, app, chunks[1]);
 }
@@ -84,9 +87,20 @@ fn draw_issue_list(frame: &mut Frame, app: &App, area: Rect) {
         .highlight_style(styles::selected_style())
         .highlight_symbol("▌ ");
 
-    let mut state = ListState::default();
+    let mut state = ListState::default()
+        .with_offset(app.list_scroll_offset.get());
     state.select(Some(app.selected_issue));
     frame.render_stateful_widget(list, area, &mut state);
+
+    // Store list inner rect and scroll offset for mouse click-to-select
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+    *app.list_inner_rect.borrow_mut() = Some(inner);
+    app.list_scroll_offset.set(state.offset());
 }
 
 fn draw_issue_detail(frame: &mut Frame, app: &App, area: Rect) {

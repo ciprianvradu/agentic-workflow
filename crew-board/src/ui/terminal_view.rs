@@ -62,6 +62,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
+    // Store pane rects for mouse click-to-focus
+    *app.pane_rects.borrow_mut() = Some((chunks[0], chunks[1]));
+
     draw_terminal_list(frame, app, chunks[0]);
 
     match app.terminal_layout {
@@ -103,6 +106,7 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block, area);
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut line_map: Vec<usize> = Vec::new(); // maps visual line -> terminal index
 
     for (i, term) in mgr.terminals.iter().enumerate() {
         let icon = match &term.status {
@@ -207,6 +211,7 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(label, style),
             Span::styled(format!(" {}", elapsed_str), time_style),
         ]));
+        line_map.push(i);
 
         // Second line: hook activity (if hook_state is Some with data)
         if let Some(hook_state) = &term.hook_state {
@@ -227,6 +232,7 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
                     Span::raw("  "),
                     Span::styled(label_text, activity_style),
                 ]));
+                line_map.push(i);
             } else if !hook_state.tool_counts.is_empty() {
                 // Priority 2: abbreviated tool counts, sorted by count desc, top 3
                 let mut counts: Vec<(&String, &u32)> = hook_state.tool_counts.iter().collect();
@@ -250,6 +256,7 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
                     Span::raw("  "),
                     Span::styled(summary, activity_style),
                 ]));
+                line_map.push(i);
             }
             // Priority 3: no hook data — omit second line (do nothing)
         }
@@ -257,6 +264,10 @@ fn draw_terminal_list(frame: &mut Frame, app: &App, area: Rect) {
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
+
+    // Store rects and line map for mouse click-to-select
+    *app.list_inner_rect.borrow_mut() = Some(inner);
+    *app.terminal_list_line_map.borrow_mut() = line_map;
 }
 
 /// Focused layout: one large terminal panel with crew summary line.

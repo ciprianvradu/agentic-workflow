@@ -9,6 +9,9 @@ use ratatui::{
 };
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
+    // Store content rect for mouse scroll
+    *app.content_rect.borrow_mut() = Some(area);
+
     let mut lines: Vec<Line> = Vec::new();
     let bold = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
     let header_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);

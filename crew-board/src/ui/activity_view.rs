@@ -41,6 +41,9 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
+    // Store content rect for mouse scroll (event table area)
+    *app.content_rect.borrow_mut() = Some(chunks[1]);
+
     draw_filter_bar(frame, app, chunks[0]);
     if app.activity_filter.timeline_mode {
         draw_timeline(frame, app, chunks[1]);
