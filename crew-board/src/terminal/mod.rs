@@ -696,6 +696,30 @@ impl TerminalManager {
 mod tests {
     use super::*;
 
+    fn cmd_true() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "exit".into(), "0".into()]) }
+        else { ("true", vec![]) }
+    }
+
+    fn cmd_false() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "exit".into(), "1".into()]) }
+        else { ("false", vec![]) }
+    }
+
+    fn cmd_sleep() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "timeout".into(), "/T".into(), "60".into(), "/NOBREAK".into()]) }
+        else { ("sleep", vec!["60".into()]) }
+    }
+
+    fn cmd_echo() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "echo".into(), "lots of output".into()]) }
+        else { ("echo", vec!["lots of output".into()]) }
+    }
+
+    fn test_cwd() -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+
     #[test]
     fn test_attention_reason_permission_prompt_with_context() {
         let reason = AttentionReason::PermissionPrompt {
@@ -783,12 +807,13 @@ mod tests {
     fn test_headless_spawn_and_is_headless() {
         let mut mgr = TerminalManager::new();
         // Spawn a headless terminal running "true" (exits immediately with 0)
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_H1".to_string(),
             "Headless Test".to_string(),
-            "true",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -806,12 +831,13 @@ mod tests {
     #[test]
     fn test_headless_accessors_return_none() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_H2".to_string(),
             "Test".to_string(),
-            "true",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -830,12 +856,13 @@ mod tests {
     fn test_headless_exit_detection_success() {
         let mut mgr = TerminalManager::new();
         // "true" exits with code 0
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_H3".to_string(),
             "Test".to_string(),
-            "true",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -853,12 +880,13 @@ mod tests {
     fn test_headless_exit_detection_failure() {
         let mut mgr = TerminalManager::new();
         // "false" exits with code 1
+        let (cmd, args) = cmd_false();
         mgr.spawn_headless(
             "TASK_H4".to_string(),
             "Test".to_string(),
-            "false",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -875,12 +903,13 @@ mod tests {
     fn test_headless_kill() {
         let mut mgr = TerminalManager::new();
         // "sleep 60" runs for a long time
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H5".to_string(),
             "Test".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -909,12 +938,13 @@ mod tests {
     #[test]
     fn test_headless_send_input_noop() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H6".to_string(),
             "Test".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -937,12 +967,13 @@ mod tests {
         // Headless terminals don't need resize since there's no PTY.
         // Verify that poll_status doesn't crash and terminal stays running.
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H7".to_string(),
             "Test".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -964,24 +995,26 @@ mod tests {
         let mut mgr = TerminalManager::new();
 
         // Spawn a headless terminal that exits immediately
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_H8".to_string(),
             "Exiting".to_string(),
-            "true",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
         .unwrap();
 
         // Spawn a headless terminal that stays running
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H9".to_string(),
             "Running".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1008,12 +1041,13 @@ mod tests {
     #[test]
     fn test_headless_cleanup_all_kills_running() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H10".to_string(),
             "Test".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1036,7 +1070,7 @@ mod tests {
             "Bad".to_string(),
             "this-command-does-not-exist-12345",
             &[],
-            Path::new("/tmp"),
+            &test_cwd(),
             None,
             vec![],
         );
@@ -1049,12 +1083,13 @@ mod tests {
     fn test_headless_relaunch_preserves_kind() {
         let mut mgr = TerminalManager::new();
         // Spawn a headless terminal that exits immediately
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_H11".to_string(),
             "Relaunch".to_string(),
-            "true",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1078,12 +1113,13 @@ mod tests {
 
         // Spawn 3 headless terminals rapidly
         for i in 0..3 {
+            let (cmd, args) = cmd_sleep();
             mgr.spawn_headless(
                 format!("TASK_C{}", i),
                 format!("Concurrent {}", i),
-                "sleep",
-                &["60".to_string()],
-                Path::new("/tmp"),
+                cmd,
+                &args,
+                &test_cwd(),
                 None,
                 vec![],
             )
@@ -1111,12 +1147,13 @@ mod tests {
     #[test]
     fn test_headless_poll_still_running() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H12".to_string(),
             "Test".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1135,12 +1172,13 @@ mod tests {
         // Spawn a command that produces output — should not block or crash
         // because stdout/stderr are set to Stdio::null()
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_echo();
         mgr.spawn_headless(
             "TASK_H13".to_string(),
             "Output Test".to_string(),
-            "echo",
-            &["lots of output".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1156,12 +1194,13 @@ mod tests {
     #[test]
     fn test_headless_with_env_vars() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_H14".to_string(),
             "Env Test".to_string(),
-            "true",
-            &[],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![
                 ("CREW_BOARD_PORT".to_string(), "12345".to_string()),
@@ -1185,12 +1224,13 @@ mod tests {
         let mut mgr = TerminalManager::new();
 
         // Spawn headless terminal
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_COST_H".to_string(),
             "Headless Claude".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1235,12 +1275,13 @@ mod tests {
         let mut mgr = TerminalManager::new();
 
         // Spawn one headless and the filter checks both
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_H_COST".to_string(),
             "Headless".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1259,12 +1300,13 @@ mod tests {
         });
 
         // Spawn another headless to simulate "embedded" (both are just terminals)
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_E_COST".to_string(),
             "Other Terminal".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1311,23 +1353,25 @@ mod tests {
         let mut mgr = TerminalManager::new();
 
         // Spawn mixed terminals
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_STATS_H1".to_string(),
             "Headless 1".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
         .unwrap();
 
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_STATS_H2".to_string(),
             "Headless 2".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1354,12 +1398,13 @@ mod tests {
     fn test_headless_status_panel_data() {
         let mut mgr = TerminalManager::new();
 
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_PANEL".to_string(),
             "Panel Test".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1403,12 +1448,13 @@ mod tests {
     fn test_headless_no_events_renders_safely() {
         let mut mgr = TerminalManager::new();
 
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_FRESH".to_string(),
             "Fresh".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )
@@ -1439,12 +1485,13 @@ mod tests {
     fn test_headless_empty_hook_state_placeholder() {
         let mut mgr = TerminalManager::new();
 
+        let (cmd, args) = cmd_sleep();
         mgr.spawn_headless(
             "TASK_EMPTY_HS".to_string(),
             "Empty Hook".to_string(),
-            "sleep",
-            &["60".to_string()],
-            Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         )

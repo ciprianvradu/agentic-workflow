@@ -4592,6 +4592,37 @@ impl App {
 mod tests {
     use super::*;
 
+    fn cmd_true() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "exit".into(), "0".into()]) }
+        else { ("true", vec![]) }
+    }
+
+    #[allow(dead_code)]
+    fn cmd_false() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "exit".into(), "1".into()]) }
+        else { ("false", vec![]) }
+    }
+
+    fn cmd_sleep() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "timeout".into(), "/T".into(), "60".into(), "/NOBREAK".into()]) }
+        else { ("sleep", vec!["60".into()]) }
+    }
+
+    #[allow(dead_code)]
+    fn cmd_echo() -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "echo".into(), "lots of output".into()]) }
+        else { ("echo", vec!["lots of output".into()]) }
+    }
+
+    fn cmd_echo_with(msg: &str) -> (&'static str, Vec<String>) {
+        if cfg!(windows) { ("cmd", vec!["/C".into(), "echo".into(), msg.into()]) }
+        else { ("echo", vec![msg.into()]) }
+    }
+
+    fn test_cwd() -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+
     #[test]
     fn test_permission_profile_from_str() {
         assert_eq!(
@@ -4759,7 +4790,7 @@ mod tests {
         let (env_vars, cwd, cleanup) = app.generate_headless_hook_config(
             "TASK_001",
             launcher::AiHost::Claude,
-            std::path::Path::new("/tmp"),
+            &test_cwd(),
         );
         assert!(env_vars.is_empty());
         assert!(cwd.is_none());
@@ -4947,12 +4978,13 @@ mod tests {
         let _ = std::fs::create_dir_all(&tmp);
 
         // Directly use terminal manager to spawn a headless process
+        let (cmd, args) = cmd_echo_with("hello headless");
         if let Some(mgr) = &mut app.terminal_manager {
             mgr.spawn_headless(
                 "TASK_REAL".to_string(),
                 "Real Test".to_string(),
-                "echo",
-                &["hello headless".to_string()],
+                cmd,
+                &args,
                 &tmp,
                 None,
                 vec![
@@ -5024,7 +5056,7 @@ mod tests {
         let (env_vars, hook_cwd, cleanup) = app.generate_headless_hook_config(
             "TASK_SH1",
             launcher::AiHost::Shell,
-            std::path::Path::new("/tmp"),
+            &test_cwd(),
         );
 
         // Shell host: has env vars but no hook config files
@@ -5046,12 +5078,13 @@ mod tests {
         let _ = std::fs::create_dir_all(&tmp);
 
         // Spawn a real headless command directly to check auto_accept
+        let (cmd, args) = cmd_true();
         if let Some(mgr) = &mut app.terminal_manager {
             mgr.spawn_headless(
                 "TASK_AA".to_string(),
                 "Auto Accept".to_string(),
-                "true",
-                &[],
+                cmd,
+                &args,
                 &tmp,
                 None,
                 vec![],
@@ -5231,12 +5264,13 @@ mod tests {
     #[test]
     fn test_headless_terminal_is_headless_flag() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_HF".to_string(),
             "Headless Flag".to_string(),
-            "true",
-            &[],
-            std::path::Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         ).unwrap();
@@ -5251,12 +5285,13 @@ mod tests {
     #[test]
     fn test_headless_relaunch_stays_headless() {
         let mut mgr = TerminalManager::new();
+        let (cmd, args) = cmd_true();
         mgr.spawn_headless(
             "TASK_RL".to_string(),
             "Relaunch Test".to_string(),
-            "true",
-            &[],
-            std::path::Path::new("/tmp"),
+            cmd,
+            &args,
+            &test_cwd(),
             None,
             vec![],
         ).unwrap();
@@ -5323,12 +5358,13 @@ mod tests {
             app.generate_headless_hook_config(task_id, host, cwd);
 
         // Spawn using "true" so it works in any CI environment
+        let (cmd, args) = cmd_true();
         if let Some(mgr) = &mut app.terminal_manager {
             mgr.spawn_headless(
                 task_id.to_string(),
                 label.to_string(),
-                "true",
-                &[],
+                cmd,
+                &args,
                 cwd,
                 None,
                 env_vars,
@@ -5752,12 +5788,13 @@ mod tests {
         let task_id = "TASK_QUICK1";
         let label = format!("{} (headless)", host.label());
 
+        let (cmd, args) = cmd_true();
         if let Some(mgr) = &mut app.terminal_manager {
             let _ = mgr.spawn_headless(
                 task_id.to_string(),
                 label,
-                "true", // dummy command
-                &[],
+                cmd, // dummy command
+                &args,
                 &tmp,
                 None,
                 vec![],
@@ -6149,11 +6186,12 @@ mod tests {
         let mgr = app.terminal_manager.as_mut().unwrap();
 
         for (i, label) in ["Embedded A", "Embedded B", "Headless C", "Headless D"].iter().enumerate() {
+            let (cmd, args) = cmd_sleep();
             mgr.spawn_headless(
                 format!("TASK_MIX_{}", i),
                 label.to_string(),
-                "sleep",
-                &["60".to_string()],
+                cmd,
+                &args,
                 &tmp,
                 Some(i),
                 vec![],
