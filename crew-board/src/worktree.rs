@@ -403,7 +403,7 @@ pub fn create_worktree(
     {
         // Try symlink first (needs Developer Mode or admin), fall back to NTFS junction.
         // Junctions require absolute paths but don't need elevated privileges.
-        if let Err(_) = std::os::windows::fs::symlink_dir(&rel_tasks, &wt_tasks) {
+        if std::os::windows::fs::symlink_dir(&rel_tasks, &wt_tasks).is_err() {
             Command::new("cmd")
                 .args(["/c", "mklink", "/J",
                     &wt_tasks.to_string_lossy(),
